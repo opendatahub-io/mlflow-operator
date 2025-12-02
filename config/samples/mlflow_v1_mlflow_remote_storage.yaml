@@ -1,0 +1,76 @@
+apiVersion: mlflow.opendatahub.io/v1
+kind: MLflow
+metadata:
+  name: mlflow
+spec:
+  # Example with remote storage (PostgreSQL + S3)
+  # No PVC required - all storage is remote
+
+  # Kube RBAC Proxy configuration (platform-agnostic)
+  kubeRbacProxy:
+    enabled: true
+    image:
+      image: "quay.io/opendatahub/odh-kube-auth-proxy:latest"
+      pullPolicy: IfNotPresent
+    resources:
+      requests:
+        cpu: "100m"
+        memory: "256Mi"
+      limits:
+        cpu: "100m"
+        memory: "256Mi"
+    # TLS configuration (optional, defaults shown below)
+    # tls:
+    #   secretName: mlflow-tls
+    #   upstreamCAFile: /var/run/secrets/kubernetes.io/serviceaccount/service-ca.crt
+
+  # OpenShift-specific configuration (optional)
+  # Use OpenShift service-ca-operator for automatic TLS certificate provisioning
+  openShift:
+    servingCert:
+      enabled: true
+      secretName: mlflow-tls  # Secret name where cert will be stored
+
+  # MLflow container image
+  image:
+    image: quay.io/opendatahub/mlflow:latest
+    pullPolicy: Always
+
+  # Number of replicas - can scale horizontally with remote storage
+  replicas: 2
+
+  # Compute resources
+  resources:
+    requests:
+      cpu: "500m"
+      memory: "1Gi"
+    limits:
+      cpu: "2"
+      memory: "2Gi"
+
+  # Remote database for metadata
+  backendStoreUri: "postgresql://mlflow:password@postgres.example.com:5432/mlflow"
+  # registryStoreUri defaults to backendStoreUri if not specified
+
+  # Remote S3 storage for artifacts
+  artifactsDestination: "s3://my-mlflow-bucket/artifacts"
+
+  # Enable artifact serving through MLflow REST API
+  # Clients can log/retrieve artifacts via MLflow instead of direct S3 access
+  serveArtifacts: true
+
+  # Number of gunicorn workers per pod
+  # For high-traffic deployments, scaling replicas is recommended over increasing workers
+  workers: 2
+
+  # AWS credentials for S3 access
+  envFrom:
+    - secretRef:
+        name: aws-credentials  # Contains AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY
+
+  # Environment variables
+  env:
+    - name: MLFLOW_LOGGING_LEVEL
+      value: INFO
+    - name: AWS_DEFAULT_REGION
+      value: us-east-1

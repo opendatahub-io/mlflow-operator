@@ -37,7 +37,7 @@ var (
 func getProjectImage() string {
 	img := os.Getenv("IMG")
 	if img == "" {
-		img = "example.com/mlflow-operator:v0.0.1"
+		img = "localhost/mlflow-operator:v0.0.1"
 	}
 	return img
 }

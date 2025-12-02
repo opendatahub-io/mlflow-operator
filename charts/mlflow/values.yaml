@@ -1,0 +1,145 @@
+# Default values for mlflow
+# This is a YAML-formatted file.
+# Declare variables to be passed into your templates.
+
+# Namespace where MLflow will be deployed
+namespace: mlflow
+
+# Common labels applied to all resources
+commonLabels:
+  component: mlflow
+
+# Kube RBAC proxy sidecar (platform-agnostic authentication proxy)
+kubeRbacProxy:
+  enabled: true
+  image:
+    repository: quay.io/opendatahub/odh-kube-auth-proxy
+    tag: latest
+    pullPolicy: IfNotPresent
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 100m
+      memory: 256Mi
+  tls:
+    # Secret containing TLS certificate for kube-rbac-proxy (must have tls.crt and tls.key)
+    secretName: mlflow-tls
+    # Path to CA certificate file for validating upstream MLflow server certificate
+    # Default is OpenShift service-ca location. For non-OpenShift, set to /etc/tls/upstream-ca/ca.crt
+    upstreamCAFile: /var/run/secrets/kubernetes.io/serviceaccount/service-ca.crt
+    # Secret containing upstream CA certificate (optional, for non-OpenShift deployments)
+    # Secret should contain a key "ca.crt" with the CA certificate
+    # This will be mounted at /etc/tls/upstream-ca/
+    # upstreamCASecret: mlflow-upstream-ca
+
+# OpenShift-specific configuration
+openShift:
+  # Use OpenShift service-ca-operator for automatic TLS certificate provisioning
+  servingCert:
+    enabled: true
+    secretName: mlflow-tls
+
+# MLflow deployment configuration
+replicaCount: 1
+
+image:
+  repository: quay.io/opendatahub/mlflow
+  pullPolicy: Always
+  tag: "latest"
+
+# Service account
+serviceAccount:
+  create: true
+  name: mlflow-sa
+
+# RBAC
+rbac:
+  create: true
+
+# Resources for MLflow container
+resources:
+  requests:
+    cpu: 250m
+    memory: 512Mi
+  limits:
+    cpu: "1"
+    memory: 1Gi
+
+# Persistent storage
+# Only required if using file-based or SQLite backend/registry stores or file-based artifacts.
+# Set false when using remote storage (S3, PostgreSQL, etc.)
+storage:
+  enabled: true  # Enable by default - disable for remote file-based storage
+  size: 10Gi
+  storageClassName: ""  # Use default storage class
+  accessMode: ReadWriteOnce
+
+# MLflow server configuration
+mlflow:
+  # Backend store URI (where MLflow stores experiment and run metadata)
+  # Default uses SQLite which requires storage.enabled: true
+  # For production, use remote DB: postgresql://user:pass@host:5432/mlflow
+  backendStoreUri: "sqlite:////mlflow/mlflow.db"
+  # Registry store URI (where MLflow stores model registry metadata)
+  # If empty, uses the same value as backendStoreUri
+  registryStoreUri: "sqlite:////mlflow/mlflow.db"
+  # Artifacts destination (where MLflow stores artifacts)
+  # Default uses local files which requires storage.enabled: true
+  # For production, use remote storage: s3://bucket/path or gs://bucket/path
+  artifactsDestination: "file:///mlflow/artifacts"
+  # Enable workspaces
+  enableWorkspaces: true
+  # Workspace store URI
+  workspaceStoreUri: "kubernetes://"
+  # Enable artifact serving
+  # When enabled, adds the --serve-artifacts flag to the MLflow server.
+  # This allows clients to log and retrieve artifacts through the MLflow server's REST API
+  # instead of directly accessing the artifact storage.
+  serveArtifacts: true
+  # Number of gunicorn worker processes for the MLflow server
+  # Note: This is different from pod replicas. Each pod will run this many worker processes.
+  # Defaults to 1. For high-traffic deployments, consider increasing pod replicas instead.
+  workers: 1
+  # Port for MLflow server (when using TLS)
+  port: 9443
+  # Allowed hosts (will be generated based on routes/services)
+  allowedHosts: []
+
+# Environment variables for MLflow container
+env:
+  - name: HOME
+    value: /tmp
+  - name: MLFLOW_LOGGING_LEVEL
+    value: DEBUG
+
+# Additional environment variables from secrets/configmaps
+envFrom: []
+# Example:
+# - secretRef:
+#     name: my-secret
+# - configMapRef:
+#     name: my-configmap
+
+# Security context for pod
+podSecurityContext:
+  runAsNonRoot: true
+  seccompProfile:
+    type: RuntimeDefault
+
+# Security context for containers
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: false
+
+# Service configuration
+service:
+  type: ClusterIP
+  port: 8443
+  directPort: 9443
+
+# Node selector, tolerations, and affinity
+nodeSelector: {}
+tolerations: []
+affinity: {}

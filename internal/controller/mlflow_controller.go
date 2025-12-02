@@ -18,36 +18,307 @@ package controller
 
 import (
 	"context"
+	"fmt"
+	"time"
 
+	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
+	"k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/util/retry"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	mlflowv1 "github.com/opendatahub-io/mlflow-operator/api/v1"
 )
 
+const (
+	mlflowFinalizer = "mlflow.opendatahub.io/finalizer"
+	chartPath       = "charts/mlflow"
+)
+
 // MLflowReconciler reconciles a MLflow object
 type MLflowReconciler struct {
 	client.Client
-	Scheme *runtime.Scheme
+	Scheme    *runtime.Scheme
+	Mode      string
+	ChartPath string
 }
 
 // +kubebuilder:rbac:groups=mlflow.opendatahub.io,resources=mlflows,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=mlflow.opendatahub.io,resources=mlflows/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=mlflow.opendatahub.io,resources=mlflows/finalizers,verbs=update
+// +kubebuilder:rbac:groups="",resources=namespaces,verbs=get;list;watch
+// +kubebuilder:rbac:groups="",resources=serviceaccounts,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups="",resources=persistentvolumeclaims,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterroles,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterrolebindings,verbs=get;list;watch;create;update;patch;delete
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
 func (r *MLflowReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	_ = logf.FromContext(ctx)
+	log := logf.FromContext(ctx)
+
+	// Fetch the MLflow instance
+	mlflow := &mlflowv1.MLflow{}
+	err := r.Get(ctx, req.NamespacedName, mlflow)
+	if err != nil {
+		if errors.IsNotFound(err) {
+			log.Info("MLflow resource not found. Ignoring since object must be deleted")
+			return ctrl.Result{}, nil
+		}
+		log.Error(err, "Failed to get MLflow")
+		return ctrl.Result{}, err
+	}
+
+	// Get target namespace based on mode
+	targetNamespace := GetNamespaceForMode(r.Mode)
+
+	// Handle deletion
+	if mlflow.GetDeletionTimestamp() != nil {
+		if controllerutil.ContainsFinalizer(mlflow, mlflowFinalizer) {
+			// Perform cleanup
+			if err := r.cleanupResources(ctx, mlflow, targetNamespace); err != nil {
+				log.Error(err, "Failed to cleanup resources")
+				return ctrl.Result{}, err
+			}
+
+			// Remove finalizer
+			controllerutil.RemoveFinalizer(mlflow, mlflowFinalizer)
+			if err := r.Update(ctx, mlflow); err != nil {
+				return ctrl.Result{}, err
+			}
+		}
+		return ctrl.Result{}, nil
+	}
+
+	// Add finalizer if not present
+	if !controllerutil.ContainsFinalizer(mlflow, mlflowFinalizer) {
+		controllerutil.AddFinalizer(mlflow, mlflowFinalizer)
+		if err := r.Update(ctx, mlflow); err != nil {
+			return ctrl.Result{}, err
+		}
+	}
+
+	// Render Helm chart
+	helmChartPath := r.ChartPath
+	if helmChartPath == "" {
+		helmChartPath = chartPath
+	}
+	renderer := NewHelmRenderer(helmChartPath)
+	objects, err := renderer.RenderChart(mlflow, targetNamespace)
+	if err != nil {
+		log.Error(err, "Failed to render Helm chart")
+		meta.SetStatusCondition(&mlflow.Status.Conditions, metav1.Condition{
+			Type:    "Available",
+			Status:  metav1.ConditionFalse,
+			Reason:  "RenderFailed",
+			Message: fmt.Sprintf("Failed to render Helm chart: %v", err),
+		})
+		meta.SetStatusCondition(&mlflow.Status.Conditions, metav1.Condition{
+			Type:    "Progressing",
+			Status:  metav1.ConditionFalse,
+			Reason:  "RenderFailed",
+			Message: fmt.Sprintf("Failed to render Helm chart: %v", err),
+		})
+		if statusErr := r.updateStatus(ctx, mlflow); statusErr != nil {
+			log.Error(statusErr, "Failed to update MLflow status after retries")
+		}
+		return ctrl.Result{}, err
+	}
+
+	// Apply rendered manifests
+	for _, obj := range objects {
+		// Set owner reference for namespaced resources (except namespace itself)
+		if obj.GetKind() != "Namespace" && obj.GetKind() != "ClusterRole" && obj.GetKind() != "ClusterRoleBinding" {
+			if err := controllerutil.SetControllerReference(mlflow, obj, r.Scheme); err != nil {
+				log.Error(err, "Failed to set controller reference", "object", obj.GetKind(), "name", obj.GetName())
+				// Continue with other objects
+				continue
+			}
+		}
+
+		// Apply the object
+		if err := r.applyObject(ctx, obj); err != nil {
+			log.Error(err, "Failed to apply object", "kind", obj.GetKind(), "name", obj.GetName())
+			meta.SetStatusCondition(&mlflow.Status.Conditions, metav1.Condition{
+				Type:    "Available",
+				Status:  metav1.ConditionFalse,
+				Reason:  "ApplyFailed",
+				Message: fmt.Sprintf("Failed to apply %s/%s: %v", obj.GetKind(), obj.GetName(), err),
+			})
+			meta.SetStatusCondition(&mlflow.Status.Conditions, metav1.Condition{
+				Type:    "Progressing",
+				Status:  metav1.ConditionFalse,
+				Reason:  "ApplyFailed",
+				Message: fmt.Sprintf("Failed to apply resources: %v", err),
+			})
+			if statusErr := r.updateStatus(ctx, mlflow); statusErr != nil {
+				log.Error(statusErr, "Failed to update MLflow status after retries")
+			}
+			return ctrl.Result{}, err
+		}
+	}
+
+	// Check deployment readiness
+	deployment := &appsv1.Deployment{}
+	err = r.Get(ctx, types.NamespacedName{Name: "mlflow", Namespace: targetNamespace}, deployment)
+	if err != nil {
+		if !errors.IsNotFound(err) {
+			log.Error(err, "Failed to get Deployment")
+			return ctrl.Result{RequeueAfter: 10 * time.Second}, err
+		}
+		// Deployment not created yet, requeue
+		return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
+	}
+
+	// Check if deployment is ready
+	// Get desired replica count from deployment spec
+	desiredReplicas := int32(1)
+	if deployment.Spec.Replicas != nil {
+		desiredReplicas = *deployment.Spec.Replicas
+	}
+
+	// Only mark as ready if:
+	// 1. Desired replicas > 0 (not scaled down)
+	// 2. All desired replicas are ready
+	if desiredReplicas > 0 && deployment.Status.ReadyReplicas >= desiredReplicas {
+		// Deployment is ready
+		meta.SetStatusCondition(&mlflow.Status.Conditions, metav1.Condition{
+			Type:    "Available",
+			Status:  metav1.ConditionTrue,
+			Reason:  "DeploymentReady",
+			Message: "MLflow deployment is ready and available",
+		})
+		meta.SetStatusCondition(&mlflow.Status.Conditions, metav1.Condition{
+			Type:    "Progressing",
+			Status:  metav1.ConditionFalse,
+			Reason:  "ReconcileComplete",
+			Message: "MLflow reconciliation completed successfully",
+		})
+	} else {
+		// Deployment not ready yet
+		message := fmt.Sprintf("MLflow deployment not ready: %d/%d replicas ready", deployment.Status.ReadyReplicas, desiredReplicas)
+		if desiredReplicas == 0 {
+			message = "MLflow deployment scaled to zero replicas"
+		}
+		meta.SetStatusCondition(&mlflow.Status.Conditions, metav1.Condition{
+			Type:    "Available",
+			Status:  metav1.ConditionFalse,
+			Reason:  "DeploymentNotReady",
+			Message: message,
+		})
+		// Keep requeuing until ready
+		if err := r.updateStatus(ctx, mlflow); err != nil {
+			log.Error(err, "Failed to update MLflow status after retries")
+			return ctrl.Result{}, err
+		}
+		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+	}
+
+	if err := r.updateStatus(ctx, mlflow); err != nil {
+		log.Error(err, "Failed to update MLflow status after retries")
+		return ctrl.Result{}, err
+	}
+
+	log.Info("Successfully reconciled MLflow")
 	return ctrl.Result{}, nil
+}
+
+// applyObject applies a single Kubernetes object using Server-Side Apply
+func (r *MLflowReconciler) applyObject(ctx context.Context, obj client.Object) error {
+	log := logf.FromContext(ctx)
+
+	// Special handling for PVCs - check if it exists first since specs are immutable
+	if obj.GetObjectKind().GroupVersionKind().Kind == "PersistentVolumeClaim" {
+		existing := obj.DeepCopyObject().(client.Object)
+		err := r.Get(ctx, client.ObjectKeyFromObject(obj), existing)
+		if err == nil {
+			// PVC already exists, skip to avoid immutability errors
+			log.V(1).Info("PVC already exists, skipping (PVC specs are immutable)", "name", obj.GetName(), "namespace", obj.GetNamespace())
+			return nil
+		} else if !errors.IsNotFound(err) {
+			return err
+		}
+		// PVC doesn't exist, fall through to create it via SSA
+	}
+
+	// Use Server-Side Apply - the API server handles all the merge logic
+	// This avoids unnecessary updates when only metadata changes
+	err := r.Patch(ctx, obj, client.Apply, client.ForceOwnership, client.FieldOwner("mlflow-operator"))
+	if err != nil {
+		log.Error(err, "Failed to apply object", "kind", obj.GetObjectKind().GroupVersionKind().Kind, "name", obj.GetName(), "namespace", obj.GetNamespace())
+		return err
+	}
+
+	log.V(1).Info("Applied object", "kind", obj.GetObjectKind().GroupVersionKind().Kind, "name", obj.GetName(), "namespace", obj.GetNamespace())
+	return nil
+}
+
+// cleanupResources cleans up resources when MLflow is deleted
+// nolint:unparam // error return is kept for consistency with reconciler pattern, cleanup is best-effort
+func (r *MLflowReconciler) cleanupResources(ctx context.Context, _ *mlflowv1.MLflow, namespace string) error {
+	log := logf.FromContext(ctx)
+	log.Info("Cleaning up MLflow resources", "namespace", namespace)
+
+	// Most resources will be automatically deleted via owner references
+	// Here we clean up cluster-scoped resources that don't have owner references
+
+	// Delete ClusterRole
+	clusterRole := &rbacv1.ClusterRole{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: ClusterRoleName,
+		},
+	}
+	if err := r.Delete(ctx, clusterRole); err != nil && !errors.IsNotFound(err) {
+		log.Error(err, "Failed to delete ClusterRole")
+	}
+
+	// Delete ClusterRoleBinding
+	clusterRoleBinding := &rbacv1.ClusterRoleBinding{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: ClusterRoleBindingName,
+		},
+	}
+	if err := r.Delete(ctx, clusterRoleBinding); err != nil && !errors.IsNotFound(err) {
+		log.Error(err, "Failed to delete ClusterRoleBinding")
+	}
+
+	return nil
 }
 
 // SetupWithManager sets up the controller with the Manager.
 func (r *MLflowReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&mlflowv1.MLflow{}).
-		Named("mlflow").
+		Owns(&appsv1.Deployment{}).
+		Owns(&corev1.Secret{}).
+		Owns(&corev1.Service{}).
+		Owns(&corev1.ServiceAccount{}).
+		Owns(&corev1.PersistentVolumeClaim{}).
 		Complete(r)
+}
+
+// updateStatus updates the MLflow status with retry on conflict
+func (r *MLflowReconciler) updateStatus(ctx context.Context, mlflow *mlflowv1.MLflow) error {
+	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		// Get the latest version before updating
+		latest := &mlflowv1.MLflow{}
+		if err := r.Get(ctx, types.NamespacedName{Name: mlflow.Name, Namespace: mlflow.Namespace}, latest); err != nil {
+			return err
+		}
+		// Copy the status from our in-memory version to the latest version
+		latest.Status = mlflow.Status
+		// Update the status
+		return r.Status().Update(ctx, latest)
+	})
 }

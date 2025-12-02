@@ -1,5 +1,6 @@
 # Image URL to use all building/pushing image targets
-IMG ?= controller:latest
+# Using localhost for local development and CI with kind clusters
+IMG ?= localhost/mlflow-operator:latest
 
 # Get the currently used golang install path (in GOPATH/bin, unless GOBIN is set)
 ifeq (,$(shell go env GOBIN))
@@ -63,7 +64,7 @@ test: manifests generate fmt vet setup-envtest ## Run tests.
 
 # E2E test configuration
 KIND_CLUSTER ?= mlflow
-E2E_IMG ?= example.com/mlflow-operator:v0.0.1
+E2E_IMG ?= localhost/mlflow-operator:v0.0.1
 
 .PHONY: setup-kind-cluster
 setup-kind-cluster: ## Create a Kind cluster for e2e tests if it doesn't exist
@@ -166,11 +167,11 @@ uninstall: manifests kustomize ## Uninstall CRDs from the K8s cluster specified 
 .PHONY: deploy
 deploy: manifests kustomize ## Deploy controller to the K8s cluster specified in ~/.kube/config.
 	cd config/manager && "$(KUSTOMIZE)" edit set image controller=${IMG}
-	"$(KUSTOMIZE)" build config/default | "$(KUBECTL)" apply -f -
+	"$(KUSTOMIZE)" build config/overlays/dev | "$(KUBECTL)" apply -f -
 
 .PHONY: undeploy
 undeploy: kustomize ## Undeploy controller from the K8s cluster specified in ~/.kube/config. Call with ignore-not-found=true to ignore resource not found errors during deletion.
-	"$(KUSTOMIZE)" build config/default | "$(KUBECTL)" delete --ignore-not-found=$(ignore-not-found) -f -
+	"$(KUSTOMIZE)" build config/overlays/dev | "$(KUBECTL)" delete --ignore-not-found=$(ignore-not-found) -f -
 
 ##@ Dependencies
 

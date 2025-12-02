@@ -58,6 +58,130 @@ make generate
 
 **Note**: Always regenerate manifests and code after modifying API types. CI will verify that generated code is up-to-date.
 
+## Deployment Modes
+
+The MLflow operator supports two deployment modes, configured via the `--mode` flag:
+
+### RHOAI Mode
+```bash
+--mode=rhoai
+```
+- Deploys MLflow resources to the `redhat-ods-applications` namespace
+- Use the RHOAI overlay: `config/overlays/rhoai/`
+
+### OpenDataHub Mode (default)
+```bash
+--mode=opendatahub
+```
+- Deploys MLflow resources to the `opendatahub` namespace
+- Use the OpenDataHub overlay: `config/overlays/opendatahub/`
+
+### Deploying with Different Modes
+
+Using kustomize overlays:
+
+```bash
+# Deploy with RHOAI mode
+kustomize build config/overlays/rhoai | kubectl apply -f -
+
+# Deploy with OpenDataHub mode
+kustomize build config/overlays/opendatahub | kubectl apply -f -
+```
+
+## Helm Chart
+
+The operator uses Helm charts to manage MLflow resources. The chart is located in `charts/mlflow/` and can be used standalone or via the operator.
+
+## Helm Chart and MLflowSpec parity
+
+The Helm chart’s values must maintain parity with the configuration parameters exposed through the MLflowSpec. While the MLflowSpec may introduce additional configuration fields, this should occur only in exceptional and well-justified cases.
+
+As a general principle, configuration options that are specific to OpenDataHub or Red Hat OpenShift AI deployments may remain exclusively within the MLflowSpec and do not need to be represented in the Helm chart values.
+Conversely, any configuration that is relevant to users deploying the Helm charts independently of the operator—on generic Kubernetes or OpenShift environments—must be configurable in both the Helm chart values and the MLflowSpec.
+### Standalone Deployment
+
+You can deploy MLflow directly using Helm without the operator:
+
+```bash
+cd charts/mlflow
+helm install mlflow . -n opendatahub --create-namespace
+```
+
+### Chart Structure
+
+```
+charts/mlflow/
+├── Chart.yaml                    # Chart metadata
+├── values.yaml                   # Default configuration values
+└── templates/                    # Kubernetes manifests
+    ├── namespace.yaml
+    ├── serviceaccount.yaml
+    ├── rbac.yaml
+    ├── pvc.yaml
+    ├── deployment.yaml           # Includes kube-auth-proxy sidecar on OpenShift
+    ├── service.yaml
+    ├── service-direct.yaml
+    └── route.yaml                # OpenShift only
+```
+
+### OpenShift Integration
+
+When deploying on OpenShift (`openShift.enabled: true`), the deployment includes:
+
+- **kube-rbac-proxy sidecar**: Provides RBAC-based authentication and authorization
+- **OpenShift Route**: Exposes MLflow UI with TLS termination
+- **Service CA**: Automatically provisions TLS certificates
+
+The kube-rbac-proxy sidecar sits in front of the MLflow server and validates user permissions against Kubernetes RBAC before proxying requests to the upstream MLflow server.
+
+### Customizing Values
+
+The MLflow CR spec fields map directly to Helm chart values. See example configurations:
+- `config/samples/mlflow_v1_mlflow.yaml` - Local storage (SQLite + file-based artifacts)
+- `config/samples/mlflow_v1_mlflow_remote_storage.yaml` - Remote storage (PostgreSQL + S3)
+
+### Storage Configuration
+
+MLflow has three independent storage components:
+
+1. **Backend Store** (experiment metadata): Supports `file://`, `sqlite://`, `postgresql://`, `mysql://`
+2. **Registry Store** (model registry metadata): Same schemes as backend store
+3. **Artifacts Destination** (artifacts storage): Supports `file://`, `s3://`, `gs://`, `wasbs://`, `hdfs://`
+
+The `storage` field in the MLflow CR is **optional** and only needed for file-based storage:
+
+**When to configure storage:**
+- Using `sqlite://` for backend/registry store
+- Using `file://` for artifacts destination
+- Development/testing with local storage
+
+**When storage is NOT needed:**
+- Using remote database (PostgreSQL, MySQL)
+- Using remote object storage (S3, GCS, Azure Blob)
+- Production deployments (recommended)
+
+**Examples:**
+
+Local storage (requires PVC):
+```yaml
+spec:
+  storage:
+    size: 10Gi
+  backendStoreUri: "sqlite:////mlflow/mlflow.db"
+  artifactsDestination: "file:///mlflow/artifacts"
+```
+
+Remote storage (no PVC):
+```yaml
+spec:
+  # No storage field needed
+  backendStoreUri: "postgresql://user:pass@host:5432/mlflow"
+  artifactsDestination: "s3://my-bucket/artifacts"
+  envFrom:
+    - secretRef:
+        name: aws-credentials
+```
+
 ## Testing
 
 ### Unit Tests
@@ -77,3 +201,135 @@ make test-e2e
 ```
 
 This will automatically create a Kind cluster, run the tests, and clean up the cluster afterwards.
+
+### Linting
+
+This repo using golangci-lint, to ensure linting is successful after code changes run 
+
+```bash
+golangci-lint run
+```
+
+### README.md
+
+Whenever making any changes, always ensure the content in the README.md at the root of the repo is up to date.
+
+### Sample CRs (config/samples/)
+
+The `config/samples/` directory contains example MLflow custom resource configurations that demonstrate different deployment scenarios. These samples serve as:
+- Reference documentation for users
+- Test cases for validation
+- Examples in the README
+
+**Available samples:**
+
+1. **mlflow_v1_mlflow.yaml** - Default configuration
+   - OpenShift deployment with service-ca certificates
+   - Local storage (SQLite + file-based artifacts)
+   - kube-rbac-proxy enabled with auto TLS
+
+2. **mlflow_v1_mlflow_minimal.yaml** - Minimal configuration
+   - Direct access without kube-rbac-proxy
+   - Local storage with minimal resources
+   - Suitable for development/testing only (no auth)
+
+3. **mlflow_v1_mlflow_manual_tls.yaml** - Manual TLS configuration
+   - Vanilla Kubernetes deployment
+   - Manual TLS certificate management
+   - Shows upstreamCASecret configuration
+
+4. **mlflow_v1_mlflow_remote_storage.yaml** - Remote storage
+   - PostgreSQL for metadata
+   - S3 for artifacts
+   - No PVC required (fully remote)
+   - Multi-replica deployment
+
+5. **mlflow_v1_mlflow_digest.yaml** - Digest-based images
+   - Uses SHA256 image digests for reproducibility
+   - Shows both MLflow and kube-rbac-proxy with digests
+   - Includes instructions for obtaining digests
+
+**When to update samples:**
+
+Samples MUST be updated when:
+- API fields are added, removed, or renamed in `api/v1/mlflow_types.go`
+- Default values change in the controller or Helm chart
+- New configuration features are added
+- Configuration semantics change
+
+**How to validate samples:**
+
+After updating samples, ensure:
+1. All samples are valid against the CRD:
+   ```bash
+   make manifests  # Generate CRDs first
+
+   # Validate locally (client-side only, no cluster required)
+   for sample in config/samples/mlflow_v1_*.yaml; do
+     echo "Validating $sample..."
+     cat config/crd/bases/mlflow.opendatahub.io_mlflows.yaml "$sample" | \
+       kubectl apply --dry-run=client -f -
+   done
+
+   # CI automatically validates samples on every PR
+   ```
+
+2. Helm chart can render all configurations:
+   ```bash
+   # Test each sample's configuration maps to valid Helm values
+   make test
+   ```
+
+3. Examples in README.md reference the correct sample files
+
+> **Note**: `kubectl apply --dry-run=client` performs client-side validation only and does NOT connect to any cluster or deploy anything. It's safe to use for local development.
+
+**Automated validation:**
+
+The `.github/workflows/validate-samples.yaml` workflow automatically validates samples on every PR:
+- Validates all samples against the CRD schema using `kubectl apply --dry-run=client` (client-side only, no cluster required)
+- Verifies samples are documented in AGENTS.md
+- Verifies samples are referenced in kustomization.yaml
+- Runs on changes to samples, API, or CRD definitions
+
+**Sample maintenance checklist:**
+- [ ] All samples use current API version and fields
+- [ ] Comments accurately describe what each field does
+- [ ] Deprecated fields are removed or marked as deprecated
+- [ ] New features have at least one example in samples
+- [ ] kustomization.yaml lists all available samples
+- [ ] Each sample has a clear use case and description
+
+## CI/CD Workflows
+
+The repository uses GitHub Actions for continuous integration. Key workflows:
+
+### `.github/workflows/validate-samples.yaml`
+Validates sample CRs on every PR:
+- **Purpose**: Ensures samples remain valid as API evolves
+- **Validations**:
+  - CRD schema compliance using kubeconform
+  - All samples documented in AGENTS.md
+  - All samples referenced in kustomization.yaml
+- **Triggers**: Changes to samples, API, CRD, or workflows
+- **Prevents**: Merging invalid or undocumented samples
+
+### Other Workflows
+- `verify-codegen.yml` - Validates generated code is up-to-date
+- `test.yml` - Runs unit tests
+- `lint.yml` - Runs golangci-lint
+- `test-e2e.yml` - Runs end-to-end tests
+- `verify-kustomize.yml` - Validates kustomize overlays
+
+**When modifying workflows:**
+- Follow existing patterns and naming conventions
+- Update AGENTS.md if adding new validation requirements
+- Test workflow changes in a fork before merging
+
+## Agent notes
+
+Any agent working with this repo should always ensure:
+1. **AGENTS.md** is kept up to date with any changes made to this repo
+2. **config/samples/** directory contains up-to-date example CRs that reflect current API structure
+3. **README.md** references are consistent with actual sample files
+4. **GitHub workflows** will automatically validate samples - ensure changes pass CI checks

@@ -1,0 +1,183 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mlflow
+  namespace: {{ .Values.namespace }}
+  labels:
+    app: mlflow
+    {{- with .Values.commonLabels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: mlflow
+  template:
+    metadata:
+      labels:
+        app: mlflow
+        {{- with .Values.commonLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      serviceAccountName: {{ .Values.serviceAccount.name }}
+      {{- with .Values.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      volumes:
+        {{- if .Values.storage.enabled }}
+        - name: mlflow-storage
+          persistentVolumeClaim:
+            claimName: mlflow-pvc
+        {{- end }}
+        - name: tls-secret
+          secret:
+            {{- if and .Values.openShift (and .Values.openShift.servingCert .Values.openShift.servingCert.enabled) }}
+            secretName: {{ .Values.openShift.servingCert.secretName }}
+            {{- else }}
+            secretName: {{ .Values.kubeRbacProxy.tls.secretName }}
+            {{- end }}
+            defaultMode: 420
+        {{- if and .Values.kubeRbacProxy (and .Values.kubeRbacProxy.enabled .Values.kubeRbacProxy.tls.upstreamCASecret) }}
+        # Upstream CA certificate for kube-rbac-proxy to validate MLflow server certificate
+        - name: upstream-ca
+          secret:
+            secretName: {{ .Values.kubeRbacProxy.tls.upstreamCASecret }}
+            defaultMode: 420
+        {{- end }}
+      containers:
+        - name: mlflow
+          {{- if or (hasPrefix "sha256:" .Values.image.tag) (or (hasPrefix "sha384:" .Values.image.tag) (hasPrefix "sha512:" .Values.image.tag)) }}
+          image: "{{ .Values.image.repository }}@{{ .Values.image.tag }}"
+          {{- else }}
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          {{- end }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command:
+            - mlflow
+          args:
+            - server
+            - --backend-store-uri={{ .Values.mlflow.backendStoreUri }}
+            - --registry-store-uri={{ .Values.mlflow.registryStoreUri }}
+            - --artifacts-destination={{ .Values.mlflow.artifactsDestination }}
+            {{- if .Values.mlflow.enableWorkspaces }}
+            - --app-name=kubernetes-auth
+            - --enable-workspaces
+            - --workspace-store-uri={{ .Values.mlflow.workspaceStoreUri }}
+            {{- end }}
+            - --host=0.0.0.0
+            - --port={{ .Values.mlflow.port }}
+            - --workers={{ .Values.mlflow.workers }}
+            {{- if .Values.mlflow.allowedHosts }}
+            - --allowed-hosts
+            - "{{ join "," .Values.mlflow.allowedHosts }}"
+            {{- end }}
+            {{- if .Values.mlflow.serveArtifacts }}
+            - --serve-artifacts
+            {{- end }}
+            - --uvicorn-opts
+            - "--ssl-certfile=/etc/tls/tls.crt --ssl-keyfile=/etc/tls/tls.key --log-level debug"
+            - --static-prefix=/mlflow
+          env:
+            {{- range .Values.env }}
+            - name: {{ .name }}
+              value: {{ .value | quote }}
+            {{- end }}
+          {{- if .Values.envFrom }}
+          envFrom:
+            {{- toYaml .Values.envFrom | nindent 12 }}
+          {{- end }}
+          ports:
+            - name: https-direct
+              containerPort: {{ .Values.mlflow.port }}
+          volumeMounts:
+            {{- if .Values.storage.enabled }}
+            - name: mlflow-storage
+              mountPath: /mlflow
+            {{- end }}
+            - name: tls-secret
+              mountPath: /etc/tls
+              readOnly: true
+          {{- with .Values.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+        {{- if and .Values.kubeRbacProxy .Values.kubeRbacProxy.enabled }}
+        - name: kube-rbac-proxy
+          {{- if or (hasPrefix "sha256:" .Values.kubeRbacProxy.image.tag) (or (hasPrefix "sha384:" .Values.kubeRbacProxy.image.tag) (hasPrefix "sha512:" .Values.kubeRbacProxy.image.tag)) }}
+          image: "{{ .Values.kubeRbacProxy.image.repository }}@{{ .Values.kubeRbacProxy.image.tag }}"
+          {{- else }}
+          image: "{{ .Values.kubeRbacProxy.image.repository }}:{{ .Values.kubeRbacProxy.image.tag }}"
+          {{- end }}
+          imagePullPolicy: {{ .Values.kubeRbacProxy.image.pullPolicy }}
+          args:
+            - --secure-listen-address=0.0.0.0:8443
+            - --proxy-endpoints-port=8444
+            - --upstream=https://mlflow.{{ .Values.namespace }}.svc:{{ .Values.service.directPort }}/
+            - --upstream-ca-file={{ .Values.kubeRbacProxy.tls.upstreamCAFile }}
+            - --tls-cert-file=/etc/tls/private/tls.crt
+            - --tls-private-key-file=/etc/tls/private/tls.key
+            - --auth-header-fields-enabled
+            - --ignore-paths=/healthz,/health
+          ports:
+            - name: https
+              containerPort: 8443
+            - name: proxy-metrics
+              containerPort: 8444
+          volumeMounts:
+            - name: tls-secret
+              mountPath: /etc/tls/private
+              readOnly: true
+            {{- if .Values.kubeRbacProxy.tls.upstreamCASecret }}
+            - name: upstream-ca
+              mountPath: /etc/tls/upstream-ca
+              readOnly: true
+            {{- end }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: proxy-metrics
+              scheme: HTTPS
+            initialDelaySeconds: 30
+            timeoutSeconds: 1
+            periodSeconds: 5
+            successThreshold: 1
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: proxy-metrics
+              scheme: HTTPS
+            initialDelaySeconds: 5
+            timeoutSeconds: 1
+            periodSeconds: 5
+            successThreshold: 1
+            failureThreshold: 3
+          {{- with .Values.kubeRbacProxy.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+        {{- end }}

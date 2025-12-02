@@ -19,9 +19,11 @@ package main
 import (
 	"crypto/tls"
 	"flag"
+	"fmt"
 	"os"
 	"time"
 
+	routev1 "github.com/openshift/api/route/v1"
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
 	// to ensure that exec-entrypoint and run can make use of them.
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
@@ -48,6 +50,7 @@ var (
 func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
 	utilruntime.Must(mlflowv1.AddToScheme(scheme))
+	utilruntime.Must(routev1.AddToScheme(scheme))
 	// +kubebuilder:scaffold:scheme
 }
 
@@ -58,10 +61,13 @@ func main() {
 	var enableLeaderElection bool
 	var probeAddr string
 	var secureMetrics bool
+	var mode string
 	var tlsOpts []func(*tls.Config)
 	flag.StringVar(&metricsAddr, "metrics-bind-address", "0", "The address the metrics endpoint binds to. "+
 		"Use :8443 for HTTPS or :8080 for HTTP, or leave as 0 to disable the metrics service.")
 	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8081", "The address the probe endpoint binds to.")
+	flag.StringVar(&mode, "mode", "opendatahub", "Deployment mode: 'rhoai' or 'opendatahub'. "+
+		"Determines the target namespace for MLflow resources.")
 	flag.BoolVar(&enableLeaderElection, "leader-elect", false,
 		"Enable leader election for controller manager. "+
 			"Enabling this will ensure there is only one active controller manager.")
@@ -79,13 +85,20 @@ func main() {
 
 	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
 
+	// Validate mode flag
+	if mode != controller.ModeRHOAI && mode != controller.ModeOpenDataHub {
+		setupLog.Error(fmt.Errorf("invalid mode: %s", mode), "mode must be either 'rhoai' or 'opendatahub'")
+		os.Exit(1)
+	}
+	setupLog.Info("Starting operator", "mode", mode, "targetNamespace", controller.GetNamespaceForMode(mode))
+
 	disableHTTP2 := func(c *tls.Config) {
 		setupLog.Info("disabling http/2")
 		c.NextProtos = []string{"http/1.1"}
 	}
 	tlsOpts = append(tlsOpts, disableHTTP2)
 
-	// Metrics endpoint is enabled in 'config/default/kustomization.yaml'. The Metrics options configure the server.
+	// Metrics endpoint is enabled in 'config/base/kustomization.yaml'. The Metrics options configure the server.
 	// More info:
 	// - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.22.4/pkg/metrics/server
 	// - https://book.kubebuilder.io/reference/metrics.html
@@ -147,8 +160,10 @@ func main() {
 	}
 
 	if err := (&controller.MLflowReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
+		Client:    mgr.GetClient(),
+		Scheme:    mgr.GetScheme(),
+		Mode:      mode,
+		ChartPath: "charts/mlflow",
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "MLflow")
 		os.Exit(1)

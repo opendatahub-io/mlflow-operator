@@ -16,7 +16,7 @@ on:
       - 'Makefile'
 
 env:
-  IMG: "example.com/mlflow-operator:v0.0.1"
+  IMG: "localhost/mlflow-operator:v0.0.1"
   CLUSTER_NAME: "mlflow"
 
 jobs:
