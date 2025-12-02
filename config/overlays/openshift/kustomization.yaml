@@ -1,0 +1,23 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Reference the base configuration
+resources:
+  - ../../default
+  # Include Prometheus ServiceMonitor (OpenShift has Prometheus Operator pre-installed)
+  - ../../prometheus
+
+# OpenShift-specific patches for secure metrics using service serving certificates
+patches:
+  - path: metrics_service_patch.yaml
+    target:
+      kind: Service
+      name: controller-manager-metrics-service
+  - path: manager_patch.yaml
+    target:
+      kind: Deployment
+      name: controller-manager
+  - path: servicemonitor_patch.yaml
+    target:
+      kind: ServiceMonitor
+      name: controller-manager-metrics-monitor
