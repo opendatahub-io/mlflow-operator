@@ -1,0 +1,8 @@
+apiVersion: mlflow.opendatahub.io/v1alpha1
+kind: MLflow
+metadata:
+  labels:
+    app.kubernetes.io/name: mlflow-operator
+    app.kubernetes.io/managed-by: kustomize
+  name: mlflow-sample
+spec:

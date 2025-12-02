@@ -8,4 +8,14 @@ layout:
 - go.kubebuilder.io/v4
 projectName: mlflow-operator
 repo: github.com/opendatahub-io/mlflow-operator
+resources:
+- api:
+    crdVersion: v1
+    namespaced: true
+  controller: true
+  domain: opendatahub.io
+  group: mlflow
+  kind: MLflow
+  path: github.com/opendatahub-io/mlflow-operator/api/v1alpha1
+  version: v1alpha1
 version: "3"

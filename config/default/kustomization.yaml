@@ -3,7 +3,7 @@ namespace: opendatahub
 namePrefix: mlflow-operator-
 
 resources:
-#- ../crd
+- ../crd
 - ../rbac
 - ../manager
 - metrics_service.yaml
