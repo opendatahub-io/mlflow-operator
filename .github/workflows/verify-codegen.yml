@@ -1,0 +1,45 @@
+name: Verify Generated Code
+
+on:
+  push:
+    branches:
+      - 'main'
+  pull_request:
+    paths:
+      - '.github/**'
+      - '**/*.go'
+      - 'go.mod'
+      - 'go.sum'
+      - 'Makefile'
+      - 'config/**'
+      - 'api/**'
+
+jobs:
+  verify-codegen:
+    name: Verify make manifests and make generate
+    runs-on: ubuntu-latest
+    steps:
+      - name: Clone the code
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Run make manifests
+        run: make manifests
+
+      - name: Run make generate
+        run: make generate
+
+      - name: Check for diffs
+        run: |
+          git diff --exit-code || (
+            echo "Error: Running 'make manifests' and 'make generate' resulted in changes."
+            echo "Please run 'make manifests' and 'make generate' locally and commit the changes."
+            echo ""
+            echo "Diff:"
+            git diff
+            exit 1
+          )

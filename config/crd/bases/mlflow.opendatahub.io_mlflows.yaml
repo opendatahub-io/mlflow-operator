@@ -12,7 +12,7 @@ spec:
     listKind: MLflowList
     plural: mlflows
     singular: mlflow
-  scope: Namespaced
+  scope: Cluster
   versions:
   - name: v1alpha1
     schema:
@@ -120,6 +120,9 @@ spec:
         required:
         - spec
         type: object
+        x-kubernetes-validations:
+        - message: MLflow resource name must be 'mlflow'
+          rule: self.metadata.name == 'mlflow'
     served: true
     storage: true
     subresources:

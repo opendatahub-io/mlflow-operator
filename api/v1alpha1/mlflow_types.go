@@ -20,14 +20,8 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-// NOTE: json tags are required.  Any new fields you add must have json tags for the fields to be serialized.
-
 // MLflowSpec defines the desired state of MLflow
 type MLflowSpec struct {
-	// Important: Run "make" to regenerate code after modifying this file
-	// The following markers will use OpenAPI v3 schema to validate the value
-	// More info: https://book.kubebuilder.io/reference/markers/crd-validation.html
-
 	// foo is an example field of MLflow. Edit mlflow_types.go to remove/update
 	// +optional
 	Foo *string `json:"foo,omitempty"`
@@ -35,10 +29,6 @@ type MLflowSpec struct {
 
 // MLflowStatus defines the observed state of MLflow.
 type MLflowStatus struct {
-	// Important: Run "make" to regenerate code after modifying this file
-
-	// For Kubernetes API conventions, see:
-	// https://github.com/kubernetes/community/blob/master/contributors/devel/sig-architecture/api-conventions.md#typical-status-properties
 
 	// conditions represent the current state of the MLflow resource.
 	// Each condition has a unique type and reflects the status of a specific aspect of the resource.
@@ -57,6 +47,8 @@ type MLflowStatus struct {
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
+// +kubebuilder:resource:scope=Cluster
+// +kubebuilder:validation:XValidation:rule="self.metadata.name == 'mlflow'",message="MLflow resource name must be 'mlflow'"
 
 // MLflow is the Schema for the mlflows API
 type MLflow struct {
