@@ -24,7 +24,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
-	mlflowv1alpha1 "github.com/opendatahub-io/mlflow-operator/api/v1alpha1"
+	mlflowv1 "github.com/opendatahub-io/mlflow-operator/api/v1"
 )
 
 // MLflowReconciler reconciles a MLflow object
@@ -47,7 +47,7 @@ func (r *MLflowReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 // SetupWithManager sets up the controller with the Manager.
 func (r *MLflowReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&mlflowv1alpha1.MLflow{}).
+		For(&mlflowv1.MLflow{}).
 		Named("mlflow").
 		Complete(r)
 }

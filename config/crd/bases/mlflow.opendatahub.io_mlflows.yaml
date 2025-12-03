@@ -14,7 +14,7 @@ spec:
     singular: mlflow
   scope: Cluster
   versions:
-  - name: v1alpha1
+  - name: v1
     schema:
       openAPIV3Schema:
         description: MLflow is the Schema for the mlflows API

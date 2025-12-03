@@ -8,7 +8,7 @@ This project was generated using [Kubebuilder](https://book.kubebuilder.io/) v4.
 
 ## Resources
 
-### MLflow (mlflow.opendatahub.io/v1alpha1)
+### MLflow (mlflow.opendatahub.io/v1)
 
 The MLflow custom resource is **cluster-scoped**, meaning it can be created without specifying a namespace and is accessible across the entire cluster.
 
@@ -18,7 +18,7 @@ The `api/` folder contains the API type definitions for all custom resources:
 
 ```
 api/
-└── v1alpha1/
+└── v1/
     ├── groupversion_info.go    # API group and version registration
     ├── mlflow_types.go          # MLflow resource type definitions
     └── zz_generated.deepcopy.go # Auto-generated DeepCopy methods
@@ -28,7 +28,7 @@ api/
 
 To add or modify fields in the MLflow resource:
 
-1. Edit `api/v1alpha1/mlflow_types.go`
+1. Edit `api/v1/mlflow_types.go`
    - Add fields to `MLflowSpec` for desired state
    - Add fields to `MLflowStatus` for observed state
    - Use Kubebuilder markers for validation, defaults, and CRD generation

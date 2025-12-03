@@ -1,4 +1,4 @@
-apiVersion: mlflow.opendatahub.io/v1alpha1
+apiVersion: mlflow.opendatahub.io/v1
 kind: MLflow
 metadata:
   labels:

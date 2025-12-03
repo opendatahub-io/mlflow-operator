@@ -27,7 +27,7 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	mlflowv1alpha1 "github.com/opendatahub-io/mlflow-operator/api/v1alpha1"
+	mlflowv1 "github.com/opendatahub-io/mlflow-operator/api/v1"
 )
 
 var _ = Describe("MLflow Controller", func() {
@@ -40,13 +40,13 @@ var _ = Describe("MLflow Controller", func() {
 			Name:      resourceName,
 			Namespace: "default",
 		}
-		mlflow := &mlflowv1alpha1.MLflow{}
+		mlflow := &mlflowv1.MLflow{}
 
 		BeforeEach(func() {
 			By("creating the custom resource for the Kind MLflow")
 			err := k8sClient.Get(ctx, typeNamespacedName, mlflow)
 			if err != nil && errors.IsNotFound(err) {
-				resource := &mlflowv1alpha1.MLflow{
+				resource := &mlflowv1.MLflow{
 					ObjectMeta: metav1.ObjectMeta{
 						Name:      resourceName,
 						Namespace: "default",
@@ -57,7 +57,7 @@ var _ = Describe("MLflow Controller", func() {
 		})
 
 		AfterEach(func() {
-			resource := &mlflowv1alpha1.MLflow{}
+			resource := &mlflowv1.MLflow{}
 			err := k8sClient.Get(ctx, typeNamespacedName, resource)
 			Expect(err).NotTo(HaveOccurred())
 
