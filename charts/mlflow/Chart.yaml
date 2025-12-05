@@ -3,7 +3,7 @@ name: mlflow
 description: A Helm chart for deploying MLflow on Kubernetes/OpenShift
 type: application
 version: 0.1.0
-appVersion: "2.16.2"
+appVersion: "3.6.0"
 keywords:
   - mlflow
   - machine-learning

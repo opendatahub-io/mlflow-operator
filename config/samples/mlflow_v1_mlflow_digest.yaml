@@ -12,7 +12,7 @@ spec:
     image:
       # Example digest-based reference (replace with actual digest)
       image: "quay.io/opendatahub/odh-kube-auth-proxy@sha256:1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef"
-      pullPolicy: IfNotPresent
+      imagePullPolicy: IfNotPresent
     resources:
       requests:
         cpu: "100m"
@@ -21,18 +21,12 @@ spec:
         cpu: "100m"
         memory: "256Mi"
 
-  # OpenShift-specific configuration (optional)
-  openShift:
-    servingCert:
-      enabled: true
-      secretName: mlflow-tls
-
   # MLflow container image with digest reference
   image:
     # Example digest-based reference (replace with actual digest)
     # This ensures the exact same image is used across all deployments
     image: "quay.io/opendatahub/mlflow@sha256:265a7ebe9cba52d4e71fcf8177b847824cba47a30c8aa8c8f96dea260bfc7052"
-    pullPolicy: IfNotPresent
+    imagePullPolicy: IfNotPresent
 
   # Number of replicas
   replicas: 1
@@ -48,13 +42,19 @@ spec:
 
   # Local file-based storage with PVC
   storage:
-    size: 10Gi
-    storageClassName: ""  # Use default storage class
-    accessMode: ReadWriteOnce
+    accessModes:
+      - ReadWriteOnce
+    resources:
+      requests:
+        storage: 10Gi
+    # storageClassName: ""  # Uncomment to specify storage class
 
   backendStoreUri: "sqlite:////mlflow/mlflow.db"
   registryStoreUri: "sqlite:////mlflow/mlflow.db"
   artifactsDestination: "file:///mlflow/artifacts"
+
+  # IMPORTANT: serveArtifacts MUST be enabled when using file-based artifact storage
+  serveArtifacts: true
 
   # Environment variables
   env:

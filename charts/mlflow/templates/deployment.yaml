@@ -11,7 +11,17 @@ metadata:
 spec:
   replicas: {{ .Values.replicaCount }}
   strategy:
+    {{- if .Values.storage.enabled }}
+    # Use Recreate strategy when PVC is attached to prevent conflicts
+    # (ReadWriteOnce volumes cannot be shared between pods during rolling updates)
     type: Recreate
+    {{- else }}
+    # Use RollingUpdate for zero-downtime deployments when using remote storage
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+    {{- end }}
   selector:
     matchLabels:
       app: mlflow
@@ -20,6 +30,9 @@ spec:
       labels:
         app: mlflow
         {{- with .Values.commonLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+        {{- with .Values.podLabels }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
     spec:
@@ -46,41 +59,34 @@ spec:
           persistentVolumeClaim:
             claimName: mlflow-pvc
         {{- end }}
-        - name: tls-secret
+        {{- if and .Values.kubeRbacProxy .Values.kubeRbacProxy.enabled }}
+        - name: proxy-tls
           secret:
-            {{- if and .Values.openShift (and .Values.openShift.servingCert .Values.openShift.servingCert.enabled) }}
-            secretName: {{ .Values.openShift.servingCert.secretName }}
-            {{- else }}
             secretName: {{ .Values.kubeRbacProxy.tls.secretName }}
-            {{- end }}
-            defaultMode: 420
-        {{- if and .Values.kubeRbacProxy (and .Values.kubeRbacProxy.enabled .Values.kubeRbacProxy.tls.upstreamCASecret) }}
-        # Upstream CA certificate for kube-rbac-proxy to validate MLflow server certificate
-        - name: upstream-ca
-          secret:
-            secretName: {{ .Values.kubeRbacProxy.tls.upstreamCASecret }}
             defaultMode: 420
         {{- end }}
       containers:
         - name: mlflow
-          {{- if or (hasPrefix "sha256:" .Values.image.tag) (or (hasPrefix "sha384:" .Values.image.tag) (hasPrefix "sha512:" .Values.image.tag)) }}
-          image: "{{ .Values.image.repository }}@{{ .Values.image.tag }}"
-          {{- else }}
-          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          image: {{ .Values.image.name }}
+          {{- if .Values.image.imagePullPolicy }}
+          imagePullPolicy: {{ .Values.image.imagePullPolicy }}
           {{- end }}
-          imagePullPolicy: {{ .Values.image.pullPolicy }}
           command:
             - mlflow
           args:
             - server
-            - --backend-store-uri={{ .Values.mlflow.backendStoreUri }}
-            - --registry-store-uri={{ .Values.mlflow.registryStoreUri }}
+            {{- if .Values.mlflow.serveArtifacts }}
+            - --serve-artifacts
             - --artifacts-destination={{ .Values.mlflow.artifactsDestination }}
-            {{- if .Values.mlflow.enableWorkspaces }}
+            {{- else }}
+            - --no-serve-artifacts
+            {{- end }}
+            {{- if .Values.mlflow.defaultArtifactRoot }}
+            - --default-artifact-root={{ .Values.mlflow.defaultArtifactRoot }}
+            {{- end }}
             - --app-name=kubernetes-auth
             - --enable-workspaces
             - --workspace-store-uri={{ .Values.mlflow.workspaceStoreUri }}
-            {{- end }}
             - --host=0.0.0.0
             - --port={{ .Values.mlflow.port }}
             - --workers={{ .Values.mlflow.workers }}
@@ -88,32 +94,71 @@ spec:
             - --allowed-hosts
             - "{{ join "," .Values.mlflow.allowedHosts }}"
             {{- end }}
-            {{- if .Values.mlflow.serveArtifacts }}
-            - --serve-artifacts
+            {{- if .Values.mlflow.staticPrefix }}
+            - --static-prefix={{ .Values.mlflow.staticPrefix }}
             {{- end }}
-            - --uvicorn-opts
-            - "--ssl-certfile=/etc/tls/tls.crt --ssl-keyfile=/etc/tls/tls.key --log-level debug"
-            - --static-prefix=/mlflow
           env:
+            - name: MLFLOW_BACKEND_STORE_URI
+              {{- if .Values.mlflow.backendStoreUriFrom }}
+              valueFrom:
+                {{- toYaml .Values.mlflow.backendStoreUriFrom | nindent 16 }}
+              {{- else }}
+              value: {{ .Values.mlflow.backendStoreUri | quote }}
+              {{- end }}
+            {{- if .Values.mlflow.registryStoreUri }}
+            - name: MLFLOW_REGISTRY_STORE_URI
+              {{- if .Values.mlflow.registryStoreUriFrom }}
+              valueFrom:
+                {{- toYaml .Values.mlflow.registryStoreUriFrom | nindent 16 }}
+              {{- else }}
+              value: {{ .Values.mlflow.registryStoreUri | quote }}
+              {{- end }}
+            {{- end }}
+            {{- if and .Values.kubeRbacProxy .Values.kubeRbacProxy.enabled }}
+            - name: MLFLOW_K8S_AUTH_AUTHORIZATION_MODE
+              value: "subject_access_review"
+            {{- end }}
             {{- range .Values.env }}
             - name: {{ .name }}
+              {{- if .valueFrom }}
+              valueFrom:
+                {{- toYaml .valueFrom | nindent 16 }}
+              {{- else }}
               value: {{ .value | quote }}
+              {{- end }}
             {{- end }}
           {{- if .Values.envFrom }}
           envFrom:
             {{- toYaml .Values.envFrom | nindent 12 }}
           {{- end }}
           ports:
-            - name: https-direct
+            - name: http
               containerPort: {{ .Values.mlflow.port }}
           volumeMounts:
             {{- if .Values.storage.enabled }}
             - name: mlflow-storage
               mountPath: /mlflow
             {{- end }}
-            - name: tls-secret
-              mountPath: /etc/tls
-              readOnly: true
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+              scheme: HTTP
+            initialDelaySeconds: 30
+            timeoutSeconds: 1
+            periodSeconds: 10
+            successThreshold: 1
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+              scheme: HTTP
+            initialDelaySeconds: 5
+            timeoutSeconds: 1
+            periodSeconds: 5
+            successThreshold: 1
+            failureThreshold: 3
           {{- with .Values.securityContext }}
           securityContext:
             {{- toYaml . | nindent 12 }}
@@ -124,17 +169,14 @@ spec:
           {{- end }}
         {{- if and .Values.kubeRbacProxy .Values.kubeRbacProxy.enabled }}
         - name: kube-rbac-proxy
-          {{- if or (hasPrefix "sha256:" .Values.kubeRbacProxy.image.tag) (or (hasPrefix "sha384:" .Values.kubeRbacProxy.image.tag) (hasPrefix "sha512:" .Values.kubeRbacProxy.image.tag)) }}
-          image: "{{ .Values.kubeRbacProxy.image.repository }}@{{ .Values.kubeRbacProxy.image.tag }}"
-          {{- else }}
-          image: "{{ .Values.kubeRbacProxy.image.repository }}:{{ .Values.kubeRbacProxy.image.tag }}"
+          image: {{ .Values.kubeRbacProxy.image.name }}
+          {{- if .Values.kubeRbacProxy.image.imagePullPolicy }}
+          imagePullPolicy: {{ .Values.kubeRbacProxy.image.imagePullPolicy }}
           {{- end }}
-          imagePullPolicy: {{ .Values.kubeRbacProxy.image.pullPolicy }}
           args:
             - --secure-listen-address=0.0.0.0:8443
             - --proxy-endpoints-port=8444
-            - --upstream=https://mlflow.{{ .Values.namespace }}.svc:{{ .Values.service.directPort }}/
-            - --upstream-ca-file={{ .Values.kubeRbacProxy.tls.upstreamCAFile }}
+            - --upstream=http://mlflow.{{ .Values.namespace }}.svc:{{ .Values.service.directPort }}/
             - --tls-cert-file=/etc/tls/private/tls.crt
             - --tls-private-key-file=/etc/tls/private/tls.key
             - --auth-header-fields-enabled
@@ -145,14 +187,9 @@ spec:
             - name: proxy-metrics
               containerPort: 8444
           volumeMounts:
-            - name: tls-secret
+            - name: proxy-tls
               mountPath: /etc/tls/private
               readOnly: true
-            {{- if .Values.kubeRbacProxy.tls.upstreamCASecret }}
-            - name: upstream-ca
-              mountPath: /etc/tls/upstream-ca
-              readOnly: true
-            {{- end }}
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true

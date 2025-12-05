@@ -62,7 +62,6 @@ rules:
     resources:
       - experiments
       - registeredmodels
-      - workspaces
       - jobs
     verbs:
       - create

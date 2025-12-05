@@ -98,6 +98,16 @@ cleanup-kind-cluster: ## Delete the Kind cluster used for e2e tests
 		echo "Kind cluster '$(KIND_CLUSTER)' does not exist."; \
 	fi
 
+.PHONY: validate-samples
+validate-samples: manifests ## Validate sample CRs against the CRD (requires kubectl access to a cluster)
+	@echo "Running sample validation script..."
+	@bash test/scripts/validate-samples.sh
+
+.PHONY: verify-manifests
+verify-manifests: kustomize ## Verify that all manifest builds succeed (requires helm)
+	@echo "Running manifest verification script..."
+	@bash test/scripts/verify-manifests.sh
+
 .PHONY: lint
 lint: golangci-lint ## Run golangci-lint linter
 	"$(GOLANGCI_LINT)" run

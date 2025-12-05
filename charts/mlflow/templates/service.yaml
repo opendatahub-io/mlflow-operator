@@ -8,9 +8,9 @@ metadata:
     {{- with .Values.commonLabels }}
     {{- toYaml . | nindent 4 }}
     {{- end }}
-  {{- if and .Values.openShift .Values.openShift.servingCert .Values.openShift.servingCert.enabled }}
+  {{- with .Values.service.annotations }}
   annotations:
-    service.beta.openshift.io/serving-cert-secret-name: {{ .Values.openShift.servingCert.secretName }}
+    {{- toYaml . | nindent 4 }}
   {{- end }}
 spec:
   selector:
@@ -23,15 +23,15 @@ spec:
       port: {{ .Values.service.port }}
       targetPort: https
     # Internal port for kube-rbac-proxy upstream (MLflow direct)
-    - name: https-direct
+    - name: http-mlflow
       protocol: TCP
       port: {{ .Values.service.directPort }}
-      targetPort: https-direct
+      targetPort: http
     {{- else }}
     # Direct MLflow port when kube-rbac-proxy is disabled
-    - name: https
+    - name: http
       protocol: TCP
       port: {{ .Values.service.port }}
-      targetPort: https-direct
+      targetPort: http
     {{- end }}
   type: {{ .Values.service.type }}

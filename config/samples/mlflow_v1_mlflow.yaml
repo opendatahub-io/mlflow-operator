@@ -8,7 +8,7 @@ spec:
     enabled: true
     image:
       image: "quay.io/opendatahub/odh-kube-auth-proxy:latest"
-      pullPolicy: IfNotPresent
+      imagePullPolicy: IfNotPresent
     resources:
       requests:
         cpu: "100m"
@@ -21,17 +21,10 @@ spec:
     #   secretName: mlflow-tls  # Secret containing tls.crt and tls.key
     #   upstreamCAFile: /var/run/secrets/kubernetes.io/serviceaccount/service-ca.crt
 
-  # OpenShift-specific configuration (optional)
-  openShift:
-    # Use OpenShift service-ca-operator for automatic TLS certificate provisioning
-    servingCert:
-      enabled: true
-      secretName: mlflow-tls  # Secret name where cert will be stored
-
   # MLflow container image
   image:
     image: quay.io/opendatahub/mlflow:latest
-    pullPolicy: Always
+    imagePullPolicy: Always
 
   # Number of replicas
   replicas: 1
@@ -51,13 +44,19 @@ spec:
   # Option 1: Local file-based storage (development/testing)
   # Requires PVC for SQLite database and local file artifacts
   storage:
-    size: 10Gi
-    storageClassName: ""  # Use default storage class
-    accessMode: ReadWriteOnce
+    accessModes:
+      - ReadWriteOnce
+    resources:
+      requests:
+        storage: 10Gi
+    # storageClassName: ""  # Uncomment to specify storage class
 
   backendStoreUri: "sqlite:////mlflow/mlflow.db"
   registryStoreUri: "sqlite:////mlflow/mlflow.db"
   artifactsDestination: "file:///mlflow/artifacts"
+
+  # IMPORTANT: serveArtifacts MUST be enabled when using file-based artifact storage
+  serveArtifacts: true
 
   # Option 2: Remote storage (production - COMMENTED OUT)
   # No PVC needed - remove or comment out 'storage' section above

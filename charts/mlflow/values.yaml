@@ -5,17 +5,21 @@
 # Namespace where MLflow will be deployed
 namespace: mlflow
 
-# Common labels applied to all resources
+# Common labels applied to all resources (Service, Deployment, ServiceAccount, etc.)
 commonLabels:
   component: mlflow
+
+# Pod-specific labels applied only to the MLflow pod
+# Use this for pod-specific metadata like version, environment, etc.
+# For labels that should be on all resources, use commonLabels
+podLabels: {}
 
 # Kube RBAC proxy sidecar (platform-agnostic authentication proxy)
 kubeRbacProxy:
   enabled: true
   image:
-    repository: quay.io/opendatahub/odh-kube-auth-proxy
-    tag: latest
-    pullPolicy: IfNotPresent
+    name: quay.io/opendatahub/odh-kube-auth-proxy:latest
+    # imagePullPolicy: IfNotPresent  # Optional: Override k8s defaults (IfNotPresent for most images, Always for :latest)
   resources:
     requests:
       cpu: 100m
@@ -26,37 +30,16 @@ kubeRbacProxy:
   tls:
     # Secret containing TLS certificate for kube-rbac-proxy (must have tls.crt and tls.key)
     secretName: mlflow-tls
-    # Path to CA certificate file for validating upstream MLflow server certificate
-    # Default is OpenShift service-ca location. For non-OpenShift, set to /etc/tls/upstream-ca/ca.crt
-    upstreamCAFile: /var/run/secrets/kubernetes.io/serviceaccount/service-ca.crt
-    # Secret containing upstream CA certificate (optional, for non-OpenShift deployments)
-    # Secret should contain a key "ca.crt" with the CA certificate
-    # This will be mounted at /etc/tls/upstream-ca/
-    # upstreamCASecret: mlflow-upstream-ca
-
-# OpenShift-specific configuration
-openShift:
-  # Use OpenShift service-ca-operator for automatic TLS certificate provisioning
-  servingCert:
-    enabled: true
-    secretName: mlflow-tls
 
 # MLflow deployment configuration
 replicaCount: 1
 
 image:
-  repository: quay.io/opendatahub/mlflow
-  pullPolicy: Always
-  tag: "latest"
+  name: quay.io/opendatahub/mlflow:latest
+  # imagePullPolicy: IfNotPresent  # Optional: Override k8s defaults (IfNotPresent for most images, Always for :latest)
 
-# Service account
 serviceAccount:
-  create: true
   name: mlflow-sa
-
-# RBAC
-rbac:
-  create: true
 
 # Resources for MLflow container
 resources:
@@ -72,7 +55,7 @@ resources:
 # Set false when using remote storage (S3, PostgreSQL, etc.)
 storage:
   enabled: true  # Enable by default - disable for remote file-based storage
-  size: 10Gi
+  size: 2Gi
   storageClassName: ""  # Use default storage class
   accessMode: ReadWriteOnce
 
@@ -81,38 +64,90 @@ mlflow:
   # Backend store URI (where MLflow stores experiment and run metadata)
   # Default uses SQLite which requires storage.enabled: true
   # For production, use remote DB: postgresql://user:pass@host:5432/mlflow
+  # Note: For URIs containing credentials, use backendStoreUriFrom instead
   backendStoreUri: "sqlite:////mlflow/mlflow.db"
+
+  # Backend store URI from secret (preferred for URIs with credentials)
+  # Takes precedence over backendStoreUri if both are set
+  # Example:
+  #   backendStoreUriFrom:
+  #     secretKeyRef:
+  #       name: mlflow-db-credentials
+  #       key: backend-store-uri
+  #       optional: false
+  backendStoreUriFrom: {}
+
   # Registry store URI (where MLflow stores model registry metadata)
   # If empty, uses the same value as backendStoreUri
-  registryStoreUri: "sqlite:////mlflow/mlflow.db"
+  # Note: For URIs containing credentials, use registryStoreUriFrom instead
+  # registryStoreUri: "sqlite:////mlflow/mlflow.db"
+
+  # Registry store URI from secret (preferred for URIs with credentials)
+  # Takes precedence over registryStoreUri if both are set
+  # Example:
+  #   registryStoreUriFrom:
+  #     secretKeyRef:
+  #       name: mlflow-db-credentials
+  #       key: registry-store-uri
+  #       optional: false
+  # registryStoreUriFrom: {}
+
   # Artifacts destination (where MLflow stores artifacts)
+  # Only used when serveArtifacts is enabled. When serveArtifacts is disabled,
+  # this value is ignored and clients access artifact storage directly.
   # Default uses local files which requires storage.enabled: true
   # For production, use remote storage: s3://bucket/path or gs://bucket/path
   artifactsDestination: "file:///mlflow/artifacts"
+
+  # Default artifact root path for MLflow runs
+  # This is used when a run doesn't specify an artifact location.
+  # If not specified, defaults to artifactsDestination value.
+  # Supported schemes: file://, s3://, gs://, wasbs://, hdfs://, etc.
+  # Example: s3://my-bucket/mlflow/artifacts
+  # defaultArtifactRoot: ""
+
   # Enable workspaces
   enableWorkspaces: true
   # Workspace store URI
   workspaceStoreUri: "kubernetes://"
   # Enable artifact serving
-  # When enabled, adds the --serve-artifacts flag to the MLflow server.
-  # This allows clients to log and retrieve artifacts through the MLflow server's REST API
-  # instead of directly accessing the artifact storage.
+  # When enabled, adds the --serve-artifacts flag to the MLflow server and uses artifactsDestination
+  # to configure where artifacts are stored. This allows clients to log and retrieve artifacts
+  # through the MLflow server's REST API instead of directly accessing the artifact storage.
+  # When disabled, artifactsDestination is ignored and clients must have direct access to artifact storage.
+  # REQUIRED when using file-based artifact storage (defaultArtifactRoot starting with "file://").
   serveArtifacts: true
   # Number of gunicorn worker processes for the MLflow server
   # Note: This is different from pod replicas. Each pod will run this many worker processes.
   # Defaults to 1. For high-traffic deployments, consider increasing pod replicas instead.
   workers: 1
-  # Port for MLflow server (when using TLS)
-  port: 9443
+  # Port for MLflow server
+  port: 5000
   # Allowed hosts (will be generated based on routes/services)
   allowedHosts: []
+  # Static URL prefix for MLflow (e.g., "/mlflow" for proxied deployments)
+  # Leave empty for direct access without a prefix
+  staticPrefix: ""
 
 # Environment variables for MLflow container
+# Supports both direct values and references to secrets/configmaps
 env:
-  - name: HOME
-    value: /tmp
   - name: MLFLOW_LOGGING_LEVEL
-    value: DEBUG
+    value: INFO
+  # MLFLOW_K8S_AUTH_AUTHORIZATION_MODE is set automatically when kubeRbacProxy.enabled is true
+  # To override, add it here explicitly
+  # Example with valueFrom (secret reference):
+  # - name: DB_PASSWORD
+  #   valueFrom:
+  #     secretKeyRef:
+  #       name: db-secret
+  #       key: password
+  # Example with valueFrom (configmap reference):
+  # - name: APP_CONFIG
+  #   valueFrom:
+  #     configMapKeyRef:
+  #       name: app-config
+  #       key: config-value
 
 # Additional environment variables from secrets/configmaps
 envFrom: []
@@ -137,7 +172,9 @@ securityContext:
 service:
   type: ClusterIP
   port: 8443
-  directPort: 9443
+  directPort: 5000
+  # Annotations to add to the service
+  annotations: {}
 
 # Node selector, tolerations, and affinity
 nodeSelector: {}

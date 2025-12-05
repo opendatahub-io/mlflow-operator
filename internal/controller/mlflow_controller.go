@@ -47,7 +47,7 @@ const (
 type MLflowReconciler struct {
 	client.Client
 	Scheme    *runtime.Scheme
-	Mode      string
+	Namespace string
 	ChartPath string
 }
 
@@ -55,13 +55,12 @@ type MLflowReconciler struct {
 // +kubebuilder:rbac:groups=mlflow.opendatahub.io,resources=mlflows/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=mlflow.opendatahub.io,resources=mlflows/finalizers,verbs=update
 // +kubebuilder:rbac:groups="",resources=namespaces,verbs=get;list;watch
-// +kubebuilder:rbac:groups="",resources=serviceaccounts,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups="",resources=persistentvolumeclaims,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterroles,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterrolebindings,verbs=get;list;watch;create;update;patch;delete
+//
+// Namespace-scoped permissions (serviceaccounts, secrets, services, persistentvolumeclaims, deployments, networkpolicies)
+// are granted via the Role in config/rbac/namespace_role.yaml instead of the ClusterRole above.
+// This allows the operator to manage resources in target namespaces where MLflow instances are deployed.
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
@@ -80,19 +79,16 @@ func (r *MLflowReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		return ctrl.Result{}, err
 	}
 
-	// Get target namespace based on mode
-	targetNamespace := GetNamespaceForMode(r.Mode)
+	// Use configured target namespace
+	targetNamespace := r.Namespace
 
 	// Handle deletion
 	if mlflow.GetDeletionTimestamp() != nil {
 		if controllerutil.ContainsFinalizer(mlflow, mlflowFinalizer) {
-			// Perform cleanup
 			if err := r.cleanupResources(ctx, mlflow, targetNamespace); err != nil {
 				log.Error(err, "Failed to cleanup resources")
 				return ctrl.Result{}, err
 			}
-
-			// Remove finalizer
 			controllerutil.RemoveFinalizer(mlflow, mlflowFinalizer)
 			if err := r.Update(ctx, mlflow); err != nil {
 				return ctrl.Result{}, err
@@ -175,7 +171,7 @@ func (r *MLflowReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	if err != nil {
 		if !errors.IsNotFound(err) {
 			log.Error(err, "Failed to get Deployment")
-			return ctrl.Result{RequeueAfter: 10 * time.Second}, err
+			return ctrl.Result{}, err
 		}
 		// Deployment not created yet, requeue
 		return ctrl.Result{RequeueAfter: 5 * time.Second}, nil

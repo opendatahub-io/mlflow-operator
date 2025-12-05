@@ -23,6 +23,7 @@ import (
 	. "github.com/onsi/gomega"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
@@ -58,7 +59,7 @@ var _ = Describe("MLflow Controller", func() {
 			err = k8sClient.Get(ctx, typeNamespacedName, mlflow)
 			if err != nil && errors.IsNotFound(err) {
 				disabled := false
-				resource := &mlflowv1.MLflow{
+				mlflowResource := &mlflowv1.MLflow{
 					ObjectMeta: metav1.ObjectMeta{
 						Name: resourceName,
 					},
@@ -66,9 +67,18 @@ var _ = Describe("MLflow Controller", func() {
 						KubeRbacProxy: &mlflowv1.KubeRbacProxyConfig{
 							Enabled: &disabled,
 						},
+						// Storage is required when using default sqlite backend
+						Storage: &corev1.PersistentVolumeClaimSpec{
+							AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
+							Resources: corev1.VolumeResourceRequirements{
+								Requests: corev1.ResourceList{
+									corev1.ResourceStorage: resource.MustParse("1Gi"),
+								},
+							},
+						},
 					},
 				}
-				Expect(k8sClient.Create(ctx, resource)).To(Succeed())
+				Expect(k8sClient.Create(ctx, mlflowResource)).To(Succeed())
 			}
 		})
 
@@ -85,7 +95,7 @@ var _ = Describe("MLflow Controller", func() {
 			controllerReconciler := &MLflowReconciler{
 				Client:    k8sClient,
 				Scheme:    k8sClient.Scheme(),
-				Mode:      "opendatahub",
+				Namespace: "opendatahub",
 				ChartPath: "../../charts/mlflow",
 			}
 

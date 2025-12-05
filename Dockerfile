@@ -26,6 +26,7 @@ RUN CGO_ENABLED=1 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} GO111MODUL
 FROM registry.access.redhat.com/ubi9/ubi-minimal:latest
 WORKDIR /
 COPY --from=builder /workspace/manager .
+COPY --from=builder /workspace/charts/mlflow charts/mlflow
 
 USER 1001
 ENTRYPOINT ["/manager"]

@@ -28,102 +28,11 @@ jobs:
       - name: Generate CRD manifests
         run: make manifests
 
-      - name: Install kubectl
-        uses: azure/setup-kubectl@v4
+      - name: Create Kind cluster
+        uses: helm/kind-action@v1
         with:
-          version: 'v1.28.0'
+          cluster_name: validation-cluster
+          wait: 30s
 
-      - name: Validate samples against CRD schema
-        run: |
-          echo "Validating sample CRs against generated CRD schema..."
-          echo "Note: Using 'kubectl apply --dry-run=client' for client-side validation (no cluster required)"
-          echo ""
-
-          # CRD file location
-          CRD_FILE="config/crd/bases/mlflow.opendatahub.io_mlflows.yaml"
-
-          if [ ! -f "$CRD_FILE" ]; then
-            echo "ERROR: CRD file not found at $CRD_FILE"
-            exit 1
-          fi
-
-          # First, validate the CRD itself is well-formed
-          echo "Validating CRD is well-formed..."
-          if kubectl apply --dry-run=client -f "$CRD_FILE" > /dev/null 2>&1; then
-            echo "✅ CRD is well-formed"
-          else
-            echo "❌ CRD validation failed"
-            kubectl apply --dry-run=client -f "$CRD_FILE"
-            exit 1
-          fi
-          echo ""
-
-          # Validate each sample against the CRD
-          FAILED=0
-          for sample in config/samples/mlflow_v1_*.yaml; do
-            echo "Validating $sample..."
-
-            # Combine CRD and sample for validation
-            # kubectl apply --dry-run=client validates the sample against the CRD schema
-            if cat "$CRD_FILE" "$sample" | kubectl apply --dry-run=client -f - > /dev/null 2>&1; then
-              echo "✅ $sample is valid"
-            else
-              echo "❌ $sample validation failed:"
-              cat "$CRD_FILE" "$sample" | kubectl apply --dry-run=client -f - 2>&1 | grep -v "Warning:"
-              FAILED=1
-            fi
-            echo ""
-          done
-
-          if [ $FAILED -eq 1 ]; then
-            echo "ERROR: One or more samples failed validation"
-            exit 1
-          fi
-
-          echo "✅ All samples validated successfully"
-
-      - name: Verify samples are documented
-        run: |
-          echo "Verifying all samples are documented in AGENTS.md..."
-
-          # Check that all sample files are mentioned in AGENTS.md
-          MISSING=0
-          for sample in config/samples/mlflow_v1_*.yaml; do
-            sample_name=$(basename "$sample")
-            if ! grep -q "$sample_name" AGENTS.md; then
-              echo "❌ Sample $sample_name is not documented in AGENTS.md"
-              MISSING=1
-            else
-              echo "✅ $sample_name is documented in AGENTS.md"
-            fi
-          done
-
-          if [ $MISSING -eq 1 ]; then
-            echo "ERROR: Some samples are not documented in AGENTS.md"
-            exit 1
-          fi
-
-          echo "✅ All samples are documented"
-
-      - name: Verify kustomization.yaml lists all samples
-        run: |
-          echo "Verifying kustomization.yaml references all samples..."
-
-          # Check that all samples are either in resources or commented in kustomization.yaml
-          MISSING=0
-          for sample in config/samples/mlflow_v1_*.yaml; do
-            sample_name=$(basename "$sample")
-            if ! grep -q "$sample_name" config/samples/kustomization.yaml; then
-              echo "❌ Sample $sample_name is not referenced in kustomization.yaml"
-              MISSING=1
-            else
-              echo "✅ $sample_name is referenced in kustomization.yaml"
-            fi
-          done
-
-          if [ $MISSING -eq 1 ]; then
-            echo "ERROR: Some samples are not referenced in kustomization.yaml"
-            exit 1
-          fi
-
-          echo "✅ All samples are referenced in kustomization.yaml"
+      - name: Validate samples
+        run: make validate-samples

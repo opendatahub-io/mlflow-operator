@@ -14,7 +14,7 @@ spec:
   # MLflow container image
   image:
     image: quay.io/opendatahub/mlflow:latest
-    pullPolicy: Always
+    imagePullPolicy: Always
 
   # Number of replicas
   replicas: 1
@@ -30,13 +30,18 @@ spec:
 
   # Local file-based storage with PVC
   storage:
-    size: 5Gi
-    storageClassName: ""  # Use default storage class
-    accessMode: ReadWriteOnce
+    accessModes:
+      - ReadWriteOnce
+    resources:
+      requests:
+        storage: 5Gi
 
   backendStoreUri: "sqlite:////mlflow/mlflow.db"
   registryStoreUri: "sqlite:////mlflow/mlflow.db"
   artifactsDestination: "file:///mlflow/artifacts"
+
+  # IMPORTANT: serveArtifacts MUST be enabled when using file-based artifact storage
+  serveArtifacts: true
 
   # Environment variables
   env:

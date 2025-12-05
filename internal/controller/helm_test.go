@@ -27,6 +27,10 @@ import (
 	mlflowv1 "github.com/opendatahub-io/mlflow-operator/api/v1"
 )
 
+const (
+	deploymentKind = "Deployment"
+)
+
 func TestMlflowToHelmValues_Storage(t *testing.T) {
 	renderer := &HelmRenderer{}
 
@@ -54,7 +58,7 @@ func TestMlflowToHelmValues_Storage(t *testing.T) {
 			mlflow: &mlflowv1.MLflow{
 				ObjectMeta: metav1.ObjectMeta{Name: "test"},
 				Spec: mlflowv1.MLflowSpec{
-					Storage: &mlflowv1.StorageConfig{},
+					Storage: &corev1.PersistentVolumeClaimSpec{},
 				},
 			},
 			wantEnabled:    true,
@@ -67,10 +71,14 @@ func TestMlflowToHelmValues_Storage(t *testing.T) {
 			mlflow: &mlflowv1.MLflow{
 				ObjectMeta: metav1.ObjectMeta{Name: "test"},
 				Spec: mlflowv1.MLflowSpec{
-					Storage: &mlflowv1.StorageConfig{
-						Size:             ptr(resource.MustParse("20Gi")),
+					Storage: &corev1.PersistentVolumeClaimSpec{
+						AccessModes:      []corev1.PersistentVolumeAccessMode{corev1.ReadWriteMany},
 						StorageClassName: ptr("fast-ssd"),
-						AccessMode:       ptr(corev1.ReadWriteMany),
+						Resources: corev1.VolumeResourceRequirements{
+							Requests: corev1.ResourceList{
+								corev1.ResourceStorage: resource.MustParse("20Gi"),
+							},
+						},
 					},
 				},
 			},
@@ -109,91 +117,14 @@ func TestMlflowToHelmValues_Storage(t *testing.T) {
 	}
 }
 
-func TestMlflowToHelmValues_OpenShift(t *testing.T) {
-	renderer := &HelmRenderer{}
-
-	tests := []struct {
-		name                   string
-		mlflow                 *mlflowv1.MLflow
-		wantServingCertEnabled bool
-		wantSecretName         string
-	}{
-		{
-			name: "openshift not configured - serving cert disabled by default",
-			mlflow: &mlflowv1.MLflow{
-				ObjectMeta: metav1.ObjectMeta{Name: "test"},
-				Spec:       mlflowv1.MLflowSpec{},
-			},
-			wantServingCertEnabled: false,
-			wantSecretName:         "mlflow-tls",
-		},
-		{
-			name: "openshift serving cert enabled",
-			mlflow: &mlflowv1.MLflow{
-				ObjectMeta: metav1.ObjectMeta{Name: "test"},
-				Spec: mlflowv1.MLflowSpec{
-					OpenShift: &mlflowv1.OpenShiftConfig{
-						ServingCert: &mlflowv1.ServingCertConfig{
-							Enabled: ptr(true),
-						},
-					},
-				},
-			},
-			wantServingCertEnabled: true,
-			wantSecretName:         "mlflow-tls",
-		},
-		{
-			name: "openshift serving cert with custom secret name",
-			mlflow: &mlflowv1.MLflow{
-				ObjectMeta: metav1.ObjectMeta{Name: "test"},
-				Spec: mlflowv1.MLflowSpec{
-					OpenShift: &mlflowv1.OpenShiftConfig{
-						ServingCert: &mlflowv1.ServingCertConfig{
-							Enabled:    ptr(true),
-							SecretName: ptr("custom-tls"),
-						},
-					},
-				},
-			},
-			wantServingCertEnabled: true,
-			wantSecretName:         "custom-tls",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			values := renderer.mlflowToHelmValues(tt.mlflow, "test-namespace")
-
-			openShift, ok := values["openShift"].(map[string]interface{})
-			if !ok {
-				t.Fatal("openShift not found in values or wrong type")
-			}
-
-			servingCert, ok := openShift["servingCert"].(map[string]interface{})
-			if !ok {
-				t.Fatal("openShift.servingCert not found or wrong type")
-			}
-
-			if got := servingCert["enabled"].(bool); got != tt.wantServingCertEnabled {
-				t.Errorf("openShift.servingCert.enabled = %v, want %v", got, tt.wantServingCertEnabled)
-			}
-
-			if got := servingCert["secretName"].(string); got != tt.wantSecretName {
-				t.Errorf("openShift.servingCert.secretName = %v, want %v", got, tt.wantSecretName)
-			}
-		})
-	}
-}
-
 func TestMlflowToHelmValues_Image(t *testing.T) {
 	renderer := &HelmRenderer{}
 
 	tests := []struct {
 		name           string
 		mlflow         *mlflowv1.MLflow
-		wantRepository string
-		wantTag        string
-		wantPullPolicy string
+		wantName       string
+		wantPullPolicy string // empty string means pullPolicy should not be set
 	}{
 		{
 			name: "image not configured - should use config defaults",
@@ -201,8 +132,8 @@ func TestMlflowToHelmValues_Image(t *testing.T) {
 				ObjectMeta: metav1.ObjectMeta{Name: "test"},
 				Spec:       mlflowv1.MLflowSpec{},
 			},
-			// Will use values from config package
-			wantPullPolicy: "Always",
+			// pullPolicy should not be set when not explicitly provided
+			wantPullPolicy: "",
 		},
 		{
 			name: "image with custom values",
@@ -210,13 +141,12 @@ func TestMlflowToHelmValues_Image(t *testing.T) {
 				ObjectMeta: metav1.ObjectMeta{Name: "test"},
 				Spec: mlflowv1.MLflowSpec{
 					Image: &mlflowv1.ImageConfig{
-						Image:      ptr("custom/mlflow:v2.0.0"),
-						PullPolicy: ptr(corev1.PullIfNotPresent),
+						Image:           ptr("custom/mlflow:v2.0.0"),
+						ImagePullPolicy: ptr(corev1.PullIfNotPresent),
 					},
 				},
 			},
-			wantRepository: "custom/mlflow",
-			wantTag:        "v2.0.0",
+			wantName:       "custom/mlflow:v2.0.0",
 			wantPullPolicy: "IfNotPresent",
 		},
 	}
@@ -230,20 +160,20 @@ func TestMlflowToHelmValues_Image(t *testing.T) {
 				t.Fatal("image not found in values or wrong type")
 			}
 
-			if tt.wantRepository != "" {
-				if got := image["repository"].(string); got != tt.wantRepository {
-					t.Errorf("image.repository = %v, want %v", got, tt.wantRepository)
+			if tt.wantName != "" {
+				if got := image["name"].(string); got != tt.wantName {
+					t.Errorf("image.name = %v, want %v", got, tt.wantName)
 				}
 			}
 
-			if tt.wantTag != "" {
-				if got := image["tag"].(string); got != tt.wantTag {
-					t.Errorf("image.tag = %v, want %v", got, tt.wantTag)
+			if tt.wantPullPolicy != "" {
+				if got, ok := image["imagePullPolicy"].(string); !ok || got != tt.wantPullPolicy {
+					t.Errorf("image.imagePullPolicy = %v, want %v", got, tt.wantPullPolicy)
 				}
-			}
-
-			if got := image["pullPolicy"].(string); got != tt.wantPullPolicy {
-				t.Errorf("image.pullPolicy = %v, want %v", got, tt.wantPullPolicy)
+			} else {
+				if _, exists := image["imagePullPolicy"]; exists {
+					t.Errorf("image.imagePullPolicy should not be set but found: %v", image["imagePullPolicy"])
+				}
 			}
 		})
 	}
@@ -258,8 +188,11 @@ func TestMlflowToHelmValues_MLflowConfig(t *testing.T) {
 		wantBackendStoreURI      string
 		wantRegistryStoreURI     string
 		wantArtifactsDestination string
+		wantDefaultArtifactRoot  string
 		wantServeArtifacts       bool
 		wantWorkers              int32
+		wantBackendSecretRef     bool
+		wantRegistrySecretRef    bool
 	}{
 		{
 			name: "mlflow config not set - should use defaults",
@@ -268,10 +201,13 @@ func TestMlflowToHelmValues_MLflowConfig(t *testing.T) {
 				Spec:       mlflowv1.MLflowSpec{},
 			},
 			wantBackendStoreURI:      defaultBackendStoreURI,
-			wantRegistryStoreURI:     defaultRegistryStoreURI,
+			wantRegistryStoreURI:     defaultBackendStoreURI, // Registry defaults to backend
 			wantArtifactsDestination: defaultArtifactsDest,
-			wantServeArtifacts:       true,
+			wantDefaultArtifactRoot:  defaultArtifactsDest, // Defaults to artifactsDestination
+			wantServeArtifacts:       false,                // Default is now false
 			wantWorkers:              1,
+			wantBackendSecretRef:     false,
+			wantRegistrySecretRef:    false,
 		},
 		{
 			name: "mlflow config with custom URIs",
@@ -286,8 +222,30 @@ func TestMlflowToHelmValues_MLflowConfig(t *testing.T) {
 			wantBackendStoreURI:      "postgresql://host/db",
 			wantRegistryStoreURI:     "postgresql://host/registry",
 			wantArtifactsDestination: "s3://bucket/artifacts",
-			wantServeArtifacts:       true,
+			wantDefaultArtifactRoot:  "s3://bucket/artifacts", // Defaults to artifactsDestination
+			wantServeArtifacts:       false,                   // Default is now false
 			wantWorkers:              1,
+			wantBackendSecretRef:     false,
+			wantRegistrySecretRef:    false,
+		},
+		{
+			name: "registry defaults to backend when omitted",
+			mlflow: &mlflowv1.MLflow{
+				ObjectMeta: metav1.ObjectMeta{Name: "test"},
+				Spec: mlflowv1.MLflowSpec{
+					BackendStoreURI:      ptr("postgresql://host/db"),
+					ArtifactsDestination: ptr("s3://bucket/artifacts"),
+					// RegistryStoreURI intentionally omitted
+				},
+			},
+			wantBackendStoreURI:      "postgresql://host/db",
+			wantRegistryStoreURI:     "postgresql://host/db", // Should default to backend
+			wantArtifactsDestination: "s3://bucket/artifacts",
+			wantDefaultArtifactRoot:  "s3://bucket/artifacts",
+			wantServeArtifacts:       false,
+			wantWorkers:              1,
+			wantBackendSecretRef:     false,
+			wantRegistrySecretRef:    false,
 		},
 		{
 			name: "mlflow config with custom serveArtifacts and workers",
@@ -299,10 +257,76 @@ func TestMlflowToHelmValues_MLflowConfig(t *testing.T) {
 				},
 			},
 			wantBackendStoreURI:      defaultBackendStoreURI,
-			wantRegistryStoreURI:     defaultRegistryStoreURI,
+			wantRegistryStoreURI:     defaultBackendStoreURI, // Registry defaults to backend
 			wantArtifactsDestination: defaultArtifactsDest,
+			wantDefaultArtifactRoot:  defaultArtifactsDest, // Defaults to artifactsDestination
 			wantServeArtifacts:       false,
 			wantWorkers:              4,
+			wantBackendSecretRef:     false,
+			wantRegistrySecretRef:    false,
+		},
+		{
+			name: "mlflow config with secret references",
+			mlflow: &mlflowv1.MLflow{
+				ObjectMeta: metav1.ObjectMeta{Name: "test"},
+				Spec: mlflowv1.MLflowSpec{
+					BackendStoreURIFrom: &corev1.SecretKeySelector{
+						LocalObjectReference: corev1.LocalObjectReference{Name: "db-creds"},
+						Key:                  "backend-uri",
+					},
+					RegistryStoreURIFrom: &corev1.SecretKeySelector{
+						LocalObjectReference: corev1.LocalObjectReference{Name: "db-creds"},
+						Key:                  "registry-uri",
+					},
+				},
+			},
+			wantBackendStoreURI:      defaultBackendStoreURI, // Falls back to default when using secret ref
+			wantRegistryStoreURI:     defaultBackendStoreURI, // Registry defaults to backend
+			wantArtifactsDestination: defaultArtifactsDest,
+			wantDefaultArtifactRoot:  defaultArtifactsDest, // Defaults to artifactsDestination
+			wantServeArtifacts:       false,                // Default is now false
+			wantWorkers:              1,
+			wantBackendSecretRef:     true,
+			wantRegistrySecretRef:    true,
+		},
+		{
+			name: "secret reference takes precedence over direct value",
+			mlflow: &mlflowv1.MLflow{
+				ObjectMeta: metav1.ObjectMeta{Name: "test"},
+				Spec: mlflowv1.MLflowSpec{
+					BackendStoreURI: ptr("postgresql://ignored"),
+					BackendStoreURIFrom: &corev1.SecretKeySelector{
+						LocalObjectReference: corev1.LocalObjectReference{Name: "db-creds"},
+						Key:                  "backend-uri",
+					},
+				},
+			},
+			wantBackendStoreURI:      defaultBackendStoreURI, // Direct value ignored when secret ref present
+			wantRegistryStoreURI:     defaultBackendStoreURI, // Registry defaults to backend
+			wantArtifactsDestination: defaultArtifactsDest,
+			wantDefaultArtifactRoot:  defaultArtifactsDest, // Defaults to artifactsDestination
+			wantServeArtifacts:       false,                // Default is now false
+			wantWorkers:              1,
+			wantBackendSecretRef:     true,
+			wantRegistrySecretRef:    true, // Should inherit backend secret ref
+		},
+		{
+			name: "mlflow config with custom defaultArtifactRoot",
+			mlflow: &mlflowv1.MLflow{
+				ObjectMeta: metav1.ObjectMeta{Name: "test"},
+				Spec: mlflowv1.MLflowSpec{
+					ArtifactsDestination: ptr("s3://bucket/artifacts"),
+					DefaultArtifactRoot:  ptr("s3://bucket/custom-root"),
+				},
+			},
+			wantBackendStoreURI:      defaultBackendStoreURI,
+			wantRegistryStoreURI:     defaultBackendStoreURI, // Registry defaults to backend
+			wantArtifactsDestination: "s3://bucket/artifacts",
+			wantDefaultArtifactRoot:  "s3://bucket/custom-root", // Custom value overrides default
+			wantServeArtifacts:       false,                     // Default is now false
+			wantWorkers:              1,
+			wantBackendSecretRef:     false,
+			wantRegistrySecretRef:    false,
 		},
 	}
 
@@ -327,6 +351,10 @@ func TestMlflowToHelmValues_MLflowConfig(t *testing.T) {
 				t.Errorf("mlflow.artifactsDestination = %v, want %v", got, tt.wantArtifactsDestination)
 			}
 
+			if got := mlflowConfig["defaultArtifactRoot"].(string); got != tt.wantDefaultArtifactRoot {
+				t.Errorf("mlflow.defaultArtifactRoot = %v, want %v", got, tt.wantDefaultArtifactRoot)
+			}
+
 			if got := mlflowConfig["serveArtifacts"].(bool); got != tt.wantServeArtifacts {
 				t.Errorf("mlflow.serveArtifacts = %v, want %v", got, tt.wantServeArtifacts)
 			}
@@ -334,7 +362,64 @@ func TestMlflowToHelmValues_MLflowConfig(t *testing.T) {
 			if got := mlflowConfig["workers"].(int32); got != tt.wantWorkers {
 				t.Errorf("mlflow.workers = %v, want %v", got, tt.wantWorkers)
 			}
+
+			// Check secret references
+			_, hasBackendSecretRef := mlflowConfig["backendStoreUriFrom"]
+			if hasBackendSecretRef != tt.wantBackendSecretRef {
+				t.Errorf("mlflow.backendStoreUriFrom exists = %v, want %v", hasBackendSecretRef, tt.wantBackendSecretRef)
+			}
+
+			_, hasRegistrySecretRef := mlflowConfig["registryStoreUriFrom"]
+			if hasRegistrySecretRef != tt.wantRegistrySecretRef {
+				t.Errorf("mlflow.registryStoreUriFrom exists = %v, want %v", hasRegistrySecretRef, tt.wantRegistrySecretRef)
+			}
+
+			// Validate secret ref structure if present
+			if tt.wantBackendSecretRef {
+				secretRef, ok := mlflowConfig["backendStoreUriFrom"].(map[string]interface{})
+				if !ok {
+					t.Error("backendStoreUriFrom is not a map")
+				} else {
+					secretKeyRef := secretRef["secretKeyRef"].(map[string]interface{})
+					if secretKeyRef["name"] != "db-creds" {
+						t.Errorf("backendStoreUriFrom secret name = %v, want db-creds", secretKeyRef["name"])
+					}
+					if secretKeyRef["key"] != "backend-uri" {
+						t.Errorf("backendStoreUriFrom secret key = %v, want backend-uri", secretKeyRef["key"])
+					}
+				}
+			}
 		})
+	}
+}
+
+func TestMlflowToHelmValues_StaticPrefix(t *testing.T) {
+	renderer := &HelmRenderer{}
+
+	mlflow := &mlflowv1.MLflow{
+		ObjectMeta: metav1.ObjectMeta{Name: "test"},
+		Spec:       mlflowv1.MLflowSpec{},
+	}
+
+	values := renderer.mlflowToHelmValues(mlflow, "test-namespace")
+
+	mlflowConfig, ok := values["mlflow"].(map[string]interface{})
+	if !ok {
+		t.Fatal("mlflow config not found in values or wrong type")
+	}
+
+	// Verify staticPrefix is set to the constant value
+	staticPrefix, ok := mlflowConfig["staticPrefix"].(string)
+	if !ok {
+		t.Fatal("staticPrefix not found in mlflow config or wrong type")
+	}
+
+	if staticPrefix != StaticPrefix {
+		t.Errorf("staticPrefix = %v, want %v", staticPrefix, StaticPrefix)
+	}
+
+	if staticPrefix != "/mlflow" {
+		t.Errorf("staticPrefix = %v, want /mlflow", staticPrefix)
 	}
 }
 
@@ -344,7 +429,7 @@ func TestMlflowToHelmValues_Env(t *testing.T) {
 	tests := []struct {
 		name        string
 		mlflow      *mlflowv1.MLflow
-		wantMinEnvs int // Default envs (HOME)
+		wantMinEnvs int // Minimum number of env vars expected
 		wantEnvName string
 		wantEnvVal  string
 	}{
@@ -354,7 +439,7 @@ func TestMlflowToHelmValues_Env(t *testing.T) {
 				ObjectMeta: metav1.ObjectMeta{Name: "test"},
 				Spec:       mlflowv1.MLflowSpec{},
 			},
-			wantMinEnvs: 1, // HOME only
+			wantMinEnvs: 0, // No env vars when none are specified
 		},
 		{
 			name: "with custom env vars",
@@ -367,7 +452,7 @@ func TestMlflowToHelmValues_Env(t *testing.T) {
 					},
 				},
 			},
-			wantMinEnvs: 3, // 1 default + 2 custom
+			wantMinEnvs: 2, // 2 custom env vars
 			wantEnvName: "CUSTOM_VAR",
 			wantEnvVal:  "custom-value",
 		},
@@ -391,7 +476,7 @@ func TestMlflowToHelmValues_Env(t *testing.T) {
 					},
 				},
 			},
-			wantMinEnvs: 2, // 1 default + 1 custom
+			wantMinEnvs: 1, // 1 custom env var
 		},
 	}
 
@@ -500,21 +585,19 @@ func TestMlflowToHelmValues_Resources(t *testing.T) {
 	tests := []struct {
 		name               string
 		mlflow             *mlflowv1.MLflow
+		wantResourcesSet   bool
 		wantRequestsCPU    string
 		wantRequestsMemory string
 		wantLimitsCPU      string
 		wantLimitsMemory   string
 	}{
 		{
-			name: "resources not configured - should use defaults",
+			name: "resources not configured - should not set in values (helm chart defaults apply)",
 			mlflow: &mlflowv1.MLflow{
 				ObjectMeta: metav1.ObjectMeta{Name: "test"},
 				Spec:       mlflowv1.MLflowSpec{},
 			},
-			wantRequestsCPU:    "250m",
-			wantRequestsMemory: "512Mi",
-			wantLimitsCPU:      "1",
-			wantLimitsMemory:   "1Gi",
+			wantResourcesSet: false,
 		},
 		{
 			name: "resources with custom values",
@@ -533,6 +616,7 @@ func TestMlflowToHelmValues_Resources(t *testing.T) {
 					},
 				},
 			},
+			wantResourcesSet:   true,
 			wantRequestsCPU:    "500m",
 			wantRequestsMemory: "1Gi",
 			wantLimitsCPU:      "2",
@@ -545,6 +629,13 @@ func TestMlflowToHelmValues_Resources(t *testing.T) {
 			values := renderer.mlflowToHelmValues(tt.mlflow, "test-namespace")
 
 			resources, ok := values["resources"].(map[string]interface{})
+			if !tt.wantResourcesSet {
+				if ok {
+					t.Error("resources should not be set when not configured in CR spec")
+				}
+				return
+			}
+
 			if !ok {
 				t.Fatal("resources not found in values or wrong type")
 			}
@@ -710,6 +801,156 @@ func TestConvertEnvVarSource(t *testing.T) {
 	}
 }
 
+// TestRenderChart_EnvVars tests that env vars with both value and valueFrom are rendered correctly
+//
+//nolint:gocyclo // Test function with comprehensive test cases
+func TestRenderChart_EnvVars(t *testing.T) {
+	renderer := NewHelmRenderer("../../charts/mlflow")
+
+	mlflow := &mlflowv1.MLflow{
+		ObjectMeta: metav1.ObjectMeta{Name: "test-mlflow"},
+		Spec: mlflowv1.MLflowSpec{
+			Env: []corev1.EnvVar{
+				{
+					Name:  "SIMPLE_VAR",
+					Value: "simple-value",
+				},
+				{
+					Name: "SECRET_VAR",
+					ValueFrom: &corev1.EnvVarSource{
+						SecretKeyRef: &corev1.SecretKeySelector{
+							LocalObjectReference: corev1.LocalObjectReference{Name: "my-secret"},
+							Key:                  "password",
+						},
+					},
+				},
+				{
+					Name: "CONFIGMAP_VAR",
+					ValueFrom: &corev1.EnvVarSource{
+						ConfigMapKeyRef: &corev1.ConfigMapKeySelector{
+							LocalObjectReference: corev1.LocalObjectReference{Name: "my-config"},
+							Key:                  "config-key",
+						},
+					},
+				},
+			},
+		},
+	}
+
+	objs, err := renderer.RenderChart(mlflow, "test-ns")
+	if err != nil {
+		t.Fatalf("RenderChart() error = %v", err)
+	}
+
+	// Find the Deployment
+	var deployment *unstructured.Unstructured
+	for _, obj := range objs {
+		if obj.GetKind() == deploymentKind {
+			deployment = obj
+			break
+		}
+	}
+	if deployment == nil {
+		t.Fatal("Deployment not found in rendered objects")
+	}
+
+	// Get the env vars from the MLflow container
+	containers, found, err := unstructured.NestedSlice(deployment.Object, "spec", "template", "spec", "containers")
+	if err != nil || !found || len(containers) == 0 {
+		t.Fatalf("Failed to get containers from deployment: found=%v, err=%v", found, err)
+	}
+
+	var mlflowContainer map[string]interface{}
+	for _, c := range containers {
+		container := c.(map[string]interface{})
+		if container["name"] == "mlflow" {
+			mlflowContainer = container
+			break
+		}
+	}
+	if mlflowContainer == nil {
+		t.Fatal("MLflow container not found")
+	}
+
+	env, found, err := unstructured.NestedSlice(mlflowContainer, "env")
+	if err != nil || !found {
+		t.Fatalf("Failed to get env from container: found=%v, err=%v", found, err)
+	}
+
+	// Check for SIMPLE_VAR with value
+	foundSimpleVar := false
+	for _, e := range env {
+		envVar := e.(map[string]interface{})
+		if envVar["name"] == "SIMPLE_VAR" {
+			foundSimpleVar = true
+			if envVar["value"] != "simple-value" {
+				t.Errorf("SIMPLE_VAR value = %v, want 'simple-value'", envVar["value"])
+			}
+			if _, hasValueFrom := envVar["valueFrom"]; hasValueFrom {
+				t.Error("SIMPLE_VAR should not have valueFrom")
+			}
+		}
+	}
+	if !foundSimpleVar {
+		t.Error("SIMPLE_VAR not found in env")
+	}
+
+	// Check for SECRET_VAR with valueFrom
+	foundSecretVar := false
+	for _, e := range env {
+		envVar := e.(map[string]interface{})
+		if envVar["name"] == "SECRET_VAR" {
+			foundSecretVar = true
+			if _, hasValue := envVar["value"]; hasValue {
+				t.Error("SECRET_VAR should not have value field")
+			}
+			valueFrom, ok := envVar["valueFrom"].(map[string]interface{})
+			if !ok {
+				t.Fatal("SECRET_VAR valueFrom not found or wrong type")
+			}
+			secretKeyRef, ok := valueFrom["secretKeyRef"].(map[string]interface{})
+			if !ok {
+				t.Fatal("SECRET_VAR secretKeyRef not found or wrong type")
+			}
+			if secretKeyRef["name"] != "my-secret" {
+				t.Errorf("SECRET_VAR secret name = %v, want 'my-secret'", secretKeyRef["name"])
+			}
+			if secretKeyRef["key"] != "password" {
+				t.Errorf("SECRET_VAR secret key = %v, want 'password'", secretKeyRef["key"])
+			}
+		}
+	}
+	if !foundSecretVar {
+		t.Error("SECRET_VAR not found in env")
+	}
+
+	// Check for CONFIGMAP_VAR with valueFrom
+	foundConfigMapVar := false
+	for _, e := range env {
+		envVar := e.(map[string]interface{})
+		if envVar["name"] == "CONFIGMAP_VAR" {
+			foundConfigMapVar = true
+			valueFrom, ok := envVar["valueFrom"].(map[string]interface{})
+			if !ok {
+				t.Fatal("CONFIGMAP_VAR valueFrom not found or wrong type")
+			}
+			configMapKeyRef, ok := valueFrom["configMapKeyRef"].(map[string]interface{})
+			if !ok {
+				t.Fatal("CONFIGMAP_VAR configMapKeyRef not found or wrong type")
+			}
+			if configMapKeyRef["name"] != "my-config" {
+				t.Errorf("CONFIGMAP_VAR configmap name = %v, want 'my-config'", configMapKeyRef["name"])
+			}
+			if configMapKeyRef["key"] != "config-key" {
+				t.Errorf("CONFIGMAP_VAR configmap key = %v, want 'config-key'", configMapKeyRef["key"])
+			}
+		}
+	}
+	if !foundConfigMapVar {
+		t.Error("CONFIGMAP_VAR not found in env")
+	}
+}
+
 // TestRenderChart tests the full helm chart rendering including YAML parsing
 func TestRenderChart(t *testing.T) {
 	renderer := NewHelmRenderer("../../charts/mlflow")
@@ -743,7 +984,7 @@ func TestRenderChart(t *testing.T) {
 				// Should have Deployment
 				foundDeployment := false
 				for _, obj := range objs {
-					if obj.GetKind() == "Deployment" {
+					if obj.GetKind() == deploymentKind {
 						foundDeployment = true
 					}
 				}
@@ -768,7 +1009,7 @@ func TestRenderChart(t *testing.T) {
 			wantErr:   false,
 			validateObjs: func(t *testing.T, objs []*unstructured.Unstructured) {
 				for _, obj := range objs {
-					if obj.GetKind() == "Deployment" {
+					if obj.GetKind() == deploymentKind {
 						// Check allowed hosts are in args
 						containers, found, err := unstructured.NestedSlice(obj.Object, "spec", "template", "spec", "containers")
 						if err != nil || !found || len(containers) == 0 {
@@ -823,14 +1064,12 @@ func TestMlflowToHelmValues_KubeRbacProxyImage(t *testing.T) {
 	renderer := &HelmRenderer{}
 
 	tests := []struct {
-		name               string
-		mlflow             *mlflowv1.MLflow
-		wantEnabled        bool
-		wantRepository     string
-		wantTag            string
-		wantPullPolicy     string
-		wantSecretName     string
-		wantUpstreamCAFile string
+		name           string
+		mlflow         *mlflowv1.MLflow
+		wantEnabled    bool
+		wantName       string
+		wantPullPolicy string // empty string means pullPolicy should not be set
+		wantSecretName string
 	}{
 		{
 			name: "kube-rbac-proxy with default config",
@@ -838,10 +1077,9 @@ func TestMlflowToHelmValues_KubeRbacProxyImage(t *testing.T) {
 				ObjectMeta: metav1.ObjectMeta{Name: "test"},
 				Spec:       mlflowv1.MLflowSpec{},
 			},
-			wantEnabled:        false,
-			wantPullPolicy:     "IfNotPresent",
-			wantSecretName:     "mlflow-tls",
-			wantUpstreamCAFile: "/var/run/secrets/kubernetes.io/serviceaccount/service-ca.crt",
+			wantEnabled:    false,
+			wantPullPolicy: "", // pullPolicy should not be set when not explicitly provided
+			wantSecretName: "mlflow-tls",
 		},
 		{
 			name: "kube-rbac-proxy enabled with custom image",
@@ -851,18 +1089,16 @@ func TestMlflowToHelmValues_KubeRbacProxyImage(t *testing.T) {
 					KubeRbacProxy: &mlflowv1.KubeRbacProxyConfig{
 						Enabled: ptr(true),
 						Image: &mlflowv1.ImageConfig{
-							Image:      ptr("custom/proxy:v1.0.0"),
-							PullPolicy: ptr(corev1.PullAlways),
+							Image:           ptr("custom/proxy:v1.0.0"),
+							ImagePullPolicy: ptr(corev1.PullAlways),
 						},
 					},
 				},
 			},
-			wantEnabled:        true,
-			wantRepository:     "custom/proxy",
-			wantTag:            "v1.0.0",
-			wantPullPolicy:     "Always",
-			wantSecretName:     "mlflow-tls",
-			wantUpstreamCAFile: "/var/run/secrets/kubernetes.io/serviceaccount/service-ca.crt",
+			wantEnabled:    true,
+			wantName:       "custom/proxy:v1.0.0",
+			wantPullPolicy: "Always",
+			wantSecretName: "mlflow-tls",
 		},
 		{
 			name: "kube-rbac-proxy with custom TLS config",
@@ -872,16 +1108,14 @@ func TestMlflowToHelmValues_KubeRbacProxyImage(t *testing.T) {
 					KubeRbacProxy: &mlflowv1.KubeRbacProxyConfig{
 						Enabled: ptr(true),
 						TLS: &mlflowv1.TLSConfig{
-							SecretName:     ptr("custom-tls"),
-							UpstreamCAFile: ptr("/custom/ca.crt"),
+							SecretName: ptr("custom-tls"),
 						},
 					},
 				},
 			},
-			wantEnabled:        true,
-			wantPullPolicy:     "IfNotPresent",
-			wantSecretName:     "custom-tls",
-			wantUpstreamCAFile: "/custom/ca.crt",
+			wantEnabled:    true,
+			wantPullPolicy: "", // pullPolicy should not be set when not explicitly provided
+			wantSecretName: "custom-tls",
 		},
 	}
 
@@ -903,20 +1137,20 @@ func TestMlflowToHelmValues_KubeRbacProxyImage(t *testing.T) {
 				t.Fatal("kubeRbacProxy.image not found in values or wrong type")
 			}
 
-			if tt.wantRepository != "" {
-				if got := image["repository"].(string); got != tt.wantRepository {
-					t.Errorf("kubeRbacProxy.image.repository = %v, want %v", got, tt.wantRepository)
+			if tt.wantName != "" {
+				if got := image["name"].(string); got != tt.wantName {
+					t.Errorf("kubeRbacProxy.image.name = %v, want %v", got, tt.wantName)
 				}
 			}
 
-			if tt.wantTag != "" {
-				if got := image["tag"].(string); got != tt.wantTag {
-					t.Errorf("kubeRbacProxy.image.tag = %v, want %v", got, tt.wantTag)
+			if tt.wantPullPolicy != "" {
+				if got, ok := image["imagePullPolicy"].(string); !ok || got != tt.wantPullPolicy {
+					t.Errorf("kubeRbacProxy.image.imagePullPolicy = %v, want %v", got, tt.wantPullPolicy)
 				}
-			}
-
-			if got := image["pullPolicy"].(string); got != tt.wantPullPolicy {
-				t.Errorf("kubeRbacProxy.image.pullPolicy = %v, want %v", got, tt.wantPullPolicy)
+			} else {
+				if _, exists := image["imagePullPolicy"]; exists {
+					t.Errorf("kubeRbacProxy.image.imagePullPolicy should not be set but found: %v", image["imagePullPolicy"])
+				}
 			}
 
 			tls, ok := kubeRbacProxy["tls"].(map[string]interface{})
@@ -926,77 +1160,6 @@ func TestMlflowToHelmValues_KubeRbacProxyImage(t *testing.T) {
 
 			if got := tls["secretName"].(string); got != tt.wantSecretName {
 				t.Errorf("kubeRbacProxy.tls.secretName = %v, want %v", got, tt.wantSecretName)
-			}
-
-			if got := tls["upstreamCAFile"].(string); got != tt.wantUpstreamCAFile {
-				t.Errorf("kubeRbacProxy.tls.upstreamCAFile = %v, want %v", got, tt.wantUpstreamCAFile)
-			}
-		})
-	}
-}
-
-func TestSplitImage(t *testing.T) {
-	renderer := &HelmRenderer{}
-
-	tests := []struct {
-		name           string
-		image          string
-		wantRepository string
-		wantTag        string
-	}{
-		{
-			name:           "simple image with tag",
-			image:          "nginx:1.19",
-			wantRepository: "nginx",
-			wantTag:        "1.19",
-		},
-		{
-			name:           "image without tag defaults to latest",
-			image:          "nginx",
-			wantRepository: "nginx",
-			wantTag:        "latest",
-		},
-		{
-			name:           "image with registry and tag",
-			image:          "quay.io/opendatahub/mlflow:latest",
-			wantRepository: "quay.io/opendatahub/mlflow",
-			wantTag:        "latest",
-		},
-		{
-			name:           "image with port number in registry",
-			image:          "registry.example.com:5000/myimage:v1.0",
-			wantRepository: "registry.example.com:5000/myimage",
-			wantTag:        "v1.0",
-		},
-		{
-			name:           "digest-based reference with sha256",
-			image:          "quay.io/opendatahub/mlflow@sha256:1234567890abcdef",
-			wantRepository: "quay.io/opendatahub/mlflow",
-			wantTag:        "sha256:1234567890abcdef",
-		},
-		{
-			name:           "simple image with digest",
-			image:          "nginx@sha256:abcdef123456",
-			wantRepository: "nginx",
-			wantTag:        "sha256:abcdef123456",
-		},
-		{
-			name:           "registry with port and digest",
-			image:          "registry.example.com:5000/myimage@sha256:fedcba654321",
-			wantRepository: "registry.example.com:5000/myimage",
-			wantTag:        "sha256:fedcba654321",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			repo, tag := renderer.splitImage(tt.image)
-
-			if repo != tt.wantRepository {
-				t.Errorf("splitImage(%q) repository = %v, want %v", tt.image, repo, tt.wantRepository)
-			}
-			if tag != tt.wantTag {
-				t.Errorf("splitImage(%q) tag = %v, want %v", tt.image, tag, tt.wantTag)
 			}
 		})
 	}

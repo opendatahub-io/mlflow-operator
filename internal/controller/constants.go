@@ -17,32 +17,14 @@ limitations under the License.
 package controller
 
 const (
-	// ModeRHOAI represents Red Hat OpenShift AI deployment mode
-	ModeRHOAI = "rhoai"
-	// ModeOpenDataHub represents OpenDataHub deployment mode
-	ModeOpenDataHub = "opendatahub"
-
-	// NamespaceRHOAI is the namespace for RHOAI deployments
-	NamespaceRHOAI = "redhat-ods-applications"
-	// NamespaceOpenDataHub is the namespace for OpenDataHub deployments
-	NamespaceOpenDataHub = "opendatahub"
-
 	// ServiceAccountName is the name of the service account for MLflow deployments
 	ServiceAccountName = "mlflow-sa"
 	// ClusterRoleName is the name of the ClusterRole for namespace listing
 	ClusterRoleName = ServiceAccountName + "-list-namespaces"
 	// ClusterRoleBindingName is the name of the ClusterRoleBinding for namespace listing
 	ClusterRoleBindingName = ServiceAccountName + "-list-namespaces"
+	// TLSSecretName is the default name for the TLS secret used by kube-rbac-proxy
+	TLSSecretName = "mlflow-tls"
+	// StaticPrefix is the URL prefix for MLflow when deployed via the operator (required for kube-rbac-proxy routing)
+	StaticPrefix = "/mlflow"
 )
-
-// GetNamespaceForMode returns the appropriate namespace based on the deployment mode
-func GetNamespaceForMode(mode string) string {
-	switch mode {
-	case ModeRHOAI:
-		return NamespaceRHOAI
-	case ModeOpenDataHub:
-		return NamespaceOpenDataHub
-	default:
-		return NamespaceOpenDataHub
-	}
-}

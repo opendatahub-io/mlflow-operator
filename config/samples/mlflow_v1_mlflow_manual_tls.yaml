@@ -11,7 +11,7 @@ spec:
     enabled: true
     image:
       image: "gcr.io/kubebuilder/kube-rbac-proxy:v0.13.1"
-      pullPolicy: IfNotPresent
+      imagePullPolicy: IfNotPresent
     resources:
       requests:
         cpu: "100m"
@@ -22,16 +22,11 @@ spec:
     # Manual TLS configuration
     tls:
       secretName: mlflow-tls-manual  # Create this secret manually with tls.crt and tls.key
-      upstreamCAFile: /etc/tls/upstream-ca/ca.crt  # Path where upstream CA will be mounted
-      upstreamCASecret: mlflow-upstream-ca  # Secret containing the CA certificate to validate MLflow server
-
-  # No OpenShift configuration needed for vanilla Kubernetes
-  # openShift section is omitted
 
   # MLflow container image
   image:
     image: quay.io/opendatahub/mlflow:latest
-    pullPolicy: Always
+    imagePullPolicy: Always
 
   # Number of replicas
   replicas: 1
@@ -47,32 +42,29 @@ spec:
 
   # Local file-based storage with PVC
   storage:
-    size: 10Gi
-    storageClassName: ""  # Use default storage class
-    accessMode: ReadWriteOnce
+    accessModes:
+      - ReadWriteOnce
+    resources:
+      requests:
+        storage: 10Gi
+    # storageClassName: ""  # Uncomment to specify storage class
 
   backendStoreUri: "sqlite:////mlflow/mlflow.db"
   registryStoreUri: "sqlite:////mlflow/mlflow.db"
   artifactsDestination: "file:///mlflow/artifacts"
+
+  # IMPORTANT: serveArtifacts MUST be enabled when using file-based artifact storage
+  serveArtifacts: true
 
   # Environment variables
   env:
     - name: MLFLOW_LOGGING_LEVEL
       value: INFO
 
-# Note: Before deploying this example, you need to manually create the TLS secrets:
+# Note: Before deploying this example, you need to manually create the TLS secret:
 #
-# 1. Create the server TLS certificate secret (for kube-rbac-proxy to serve HTTPS):
+# Create the server TLS certificate secret (for kube-rbac-proxy to serve HTTPS):
 #    kubectl create secret tls mlflow-tls-manual \
 #      --cert=path/to/tls.crt \
 #      --key=path/to/tls.key \
 #      -n <namespace>
-#
-# 2. Create the upstream CA certificate secret (for kube-rbac-proxy to validate MLflow server):
-#    kubectl create secret generic mlflow-upstream-ca \
-#      --from-file=ca.crt=path/to/ca.crt \
-#      -n <namespace>
-#
-# The ca.crt should be the CA certificate that signed the MLflow server's TLS certificate.
-# In many cases, this can be the same CA that signed the kube-rbac-proxy certificate,
-# or it can be a self-signed certificate if using self-signed certs.

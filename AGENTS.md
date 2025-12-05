@@ -204,7 +204,7 @@ This will automatically create a Kind cluster, run the tests, and clean up the c
 
 ### Linting
 
-This repo using golangci-lint, to ensure linting is successful after code changes run 
+This repo uses golangci-lint; to ensure linting is successful after code changes, run
 
 ```bash
 golangci-lint run
@@ -265,13 +265,15 @@ After updating samples, ensure:
    make manifests  # Generate CRDs first
 
    # Validate locally (client-side only, no cluster required)
-   for sample in config/samples/mlflow_v1_*.yaml; do
+   # Find all MLflow sample files by content, not naming pattern
+   SAMPLES=$(grep -l "kind: MLflow" config/samples/*.yaml)
+   for sample in $SAMPLES; do
      echo "Validating $sample..."
      cat config/crd/bases/mlflow.opendatahub.io_mlflows.yaml "$sample" | \
        kubectl apply --dry-run=client -f -
    done
 
-   # CI automatically validates samples on every PR
+   # CI automatically validates samples on every PR with full schema validation
    ```
 
 2. Helm chart can render all configurations:
@@ -287,7 +289,9 @@ After updating samples, ensure:
 **Automated validation:**
 
 The `.github/workflows/validate-samples.yaml` workflow automatically validates samples on every PR:
-- Validates all samples against the CRD schema using `kubectl apply --dry-run=client` (client-side only, no cluster required)
+- Creates a Kind cluster for validation
+- Installs the CRD into the cluster
+- Validates all samples against the CRD schema using `kubectl apply --dry-run=server` (full server-side validation)
 - Verifies samples are documented in AGENTS.md
 - Verifies samples are referenced in kustomization.yaml
 - Runs on changes to samples, API, or CRD definitions
@@ -329,7 +333,8 @@ Validates sample CRs on every PR:
 ## Agent notes
 
 Any agent working with this repo should always ensure:
-1. **AGENTS.md** is kept up to date with any changes made to this repo
-2. **config/samples/** directory contains up-to-date example CRs that reflect current API structure
+1. **AGENTS.md** is kept up to date with any changes made to this repo. Only add changes that will help future agents, take care not to add unnecessary noise.
+2. **config/samples/** directory contains up-to-date example CRs that reflect the current API structure
 3. **README.md** references are consistent with actual sample files
-4. **GitHub workflows** will automatically validate samples - ensure changes pass CI checks
+4. **GitHub workflows** will automatically validate samples—ensure changes pass CI checks
+5. **Code Comments** do not make self-evident code comments, especially when the information is plainly obvious looking at the code

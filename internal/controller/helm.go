@@ -21,7 +21,6 @@ import (
 	"fmt"
 	"io"
 	"path/filepath"
-	"strings"
 
 	"helm.sh/helm/v3/pkg/chart"
 	"helm.sh/helm/v3/pkg/chart/loader"
@@ -38,9 +37,8 @@ import (
 const (
 	defaultMLflowImage        = "quay.io/opendatahub/mlflow:main"
 	defaultKubeRbacProxyImage = "quay.io/opendatahub/odh-kube-auth-proxy:latest"
-	defaultStorageSize        = "10Gi"
+	defaultStorageSize        = "2Gi"
 	defaultBackendStoreURI    = "sqlite:////mlflow/mlflow.db"
-	defaultRegistryStoreURI   = "sqlite:////mlflow/mlflow.db"
 	defaultArtifactsDest      = "file:///mlflow/artifacts"
 )
 
@@ -81,13 +79,18 @@ func (h *HelmRenderer) RenderChart(mlflow *mlflowv1.MLflow, namespace string) ([
 func (h *HelmRenderer) mlflowToHelmValues(mlflow *mlflowv1.MLflow, namespace string) map[string]interface{} {
 	values := make(map[string]interface{})
 
-	// Namespace
 	values["namespace"] = namespace
 
-	// Common labels
 	values["commonLabels"] = map[string]interface{}{
-		"mlflow-cr": mlflow.Name,
 		"component": "mlflow",
+	}
+
+	if len(mlflow.Spec.PodLabels) > 0 {
+		podLabels := make(map[string]interface{})
+		for k, v := range mlflow.Spec.PodLabels {
+			podLabels[k] = v
+		}
+		values["podLabels"] = podLabels
 	}
 
 	// Kube RBAC Proxy configuration
@@ -97,10 +100,8 @@ func (h *HelmRenderer) mlflowToHelmValues(mlflow *mlflowv1.MLflow, namespace str
 	if kubeRbacProxyImage == "" {
 		kubeRbacProxyImage = defaultKubeRbacProxyImage
 	}
-	kubeRbacProxyPullPolicy := string(corev1.PullIfNotPresent)
-	tlsSecretName := "mlflow-tls"
-	upstreamCAFile := "/var/run/secrets/kubernetes.io/serviceaccount/service-ca.crt"
-	var upstreamCASecret *string
+	var kubeRbacProxyPullPolicy *string
+	tlsSecretName := TLSSecretName
 
 	if mlflow.Spec.KubeRbacProxy != nil {
 		// Check if explicitly enabled
@@ -113,8 +114,9 @@ func (h *HelmRenderer) mlflowToHelmValues(mlflow *mlflowv1.MLflow, namespace str
 			if mlflow.Spec.KubeRbacProxy.Image.Image != nil {
 				kubeRbacProxyImage = *mlflow.Spec.KubeRbacProxy.Image.Image
 			}
-			if mlflow.Spec.KubeRbacProxy.Image.PullPolicy != nil {
-				kubeRbacProxyPullPolicy = string(*mlflow.Spec.KubeRbacProxy.Image.PullPolicy)
+			if mlflow.Spec.KubeRbacProxy.Image.ImagePullPolicy != nil {
+				policy := string(*mlflow.Spec.KubeRbacProxy.Image.ImagePullPolicy)
+				kubeRbacProxyPullPolicy = &policy
 			}
 		}
 
@@ -123,121 +125,65 @@ func (h *HelmRenderer) mlflowToHelmValues(mlflow *mlflowv1.MLflow, namespace str
 			if mlflow.Spec.KubeRbacProxy.TLS.SecretName != nil {
 				tlsSecretName = *mlflow.Spec.KubeRbacProxy.TLS.SecretName
 			}
-			if mlflow.Spec.KubeRbacProxy.TLS.UpstreamCAFile != nil {
-				upstreamCAFile = *mlflow.Spec.KubeRbacProxy.TLS.UpstreamCAFile
-			}
-			if mlflow.Spec.KubeRbacProxy.TLS.UpstreamCASecret != nil {
-				upstreamCASecret = mlflow.Spec.KubeRbacProxy.TLS.UpstreamCASecret
-			}
 		}
 	}
 
-	// Parse image into a repository and tag for Helm
-	kubeRbacProxyRepo, kubeRbacProxyTag := h.splitImage(kubeRbacProxyImage)
-
 	tlsValues := map[string]interface{}{
-		"secretName":     tlsSecretName,
-		"upstreamCAFile": upstreamCAFile,
+		"secretName": tlsSecretName,
 	}
-	if upstreamCASecret != nil {
-		tlsValues["upstreamCASecret"] = *upstreamCASecret
+
+	kubeRbacProxyImageValues := map[string]interface{}{
+		"name": kubeRbacProxyImage,
+	}
+	if kubeRbacProxyPullPolicy != nil {
+		kubeRbacProxyImageValues["imagePullPolicy"] = *kubeRbacProxyPullPolicy
 	}
 
 	kubeRbacProxyValues := map[string]interface{}{
 		"enabled": kubeRbacProxyEnabled,
-		"image": map[string]interface{}{
-			"repository": kubeRbacProxyRepo,
-			"tag":        kubeRbacProxyTag,
-			"pullPolicy": kubeRbacProxyPullPolicy,
-		},
-		"tls": tlsValues,
+		"image":   kubeRbacProxyImageValues,
+		"tls":     tlsValues,
 	}
 
-	// KubeRbacProxy resources
 	if mlflow.Spec.KubeRbacProxy != nil && mlflow.Spec.KubeRbacProxy.Resources != nil {
 		kubeRbacProxyValues["resources"] = h.convertResources(mlflow.Spec.KubeRbacProxy.Resources)
-	} else {
-		kubeRbacProxyValues["resources"] = map[string]interface{}{
-			"requests": map[string]interface{}{
-				"cpu":    "100m",
-				"memory": "256Mi",
-			},
-			"limits": map[string]interface{}{
-				"cpu":    "100m",
-				"memory": "256Mi",
-			},
-		}
 	}
 
 	values["kubeRbacProxy"] = kubeRbacProxyValues
 
-	// OpenShift configuration
-	servingCertEnabled := false
-	servingCertSecretName := tlsSecretName // Use same secret name as kube-rbac-proxy by default
-
-	if mlflow.Spec.OpenShift != nil && mlflow.Spec.OpenShift.ServingCert != nil {
-		if mlflow.Spec.OpenShift.ServingCert.Enabled != nil {
-			servingCertEnabled = *mlflow.Spec.OpenShift.ServingCert.Enabled
-		}
-		if mlflow.Spec.OpenShift.ServingCert.SecretName != nil {
-			servingCertSecretName = *mlflow.Spec.OpenShift.ServingCert.SecretName
-		}
-	}
-
-	values["openShift"] = map[string]interface{}{
-		"servingCert": map[string]interface{}{
-			"enabled":    servingCertEnabled,
-			"secretName": servingCertSecretName,
-		},
-	}
-
-	// Image configuration
 	// Use config from environment variables as default, can be overridden by CR spec
 	mlflowImage := cfg.MLflowImage
 	if mlflowImage == "" {
 		mlflowImage = defaultMLflowImage
 	}
-	imagePullPolicy := string(corev1.PullAlways)
+	var imagePullPolicy *string
 
 	if mlflow.Spec.Image != nil {
 		if mlflow.Spec.Image.Image != nil {
 			mlflowImage = *mlflow.Spec.Image.Image
 		}
-		if mlflow.Spec.Image.PullPolicy != nil {
-			imagePullPolicy = string(*mlflow.Spec.Image.PullPolicy)
+		if mlflow.Spec.Image.ImagePullPolicy != nil {
+			policy := string(*mlflow.Spec.Image.ImagePullPolicy)
+			imagePullPolicy = &policy
 		}
 	}
 
-	// Parse image into repository and tag for Helm
-	imageRepo, imageTag := h.splitImage(mlflowImage)
-
-	values["image"] = map[string]interface{}{
-		"repository": imageRepo,
-		"tag":        imageTag,
-		"pullPolicy": imagePullPolicy,
+	imageValues := map[string]interface{}{
+		"name": mlflowImage,
 	}
+	if imagePullPolicy != nil {
+		imageValues["imagePullPolicy"] = *imagePullPolicy
+	}
+	values["image"] = imageValues
 
-	// Replicas
 	replicas := int32(1)
 	if mlflow.Spec.Replicas != nil {
 		replicas = *mlflow.Spec.Replicas
 	}
 	values["replicaCount"] = replicas
 
-	// Resources
 	if mlflow.Spec.Resources != nil {
 		values["resources"] = h.convertResources(mlflow.Spec.Resources)
-	} else {
-		values["resources"] = map[string]interface{}{
-			"requests": map[string]interface{}{
-				"cpu":    "250m",
-				"memory": "512Mi",
-			},
-			"limits": map[string]interface{}{
-				"cpu":    "1",
-				"memory": "1Gi",
-			},
-		}
 	}
 
 	// Storage - only enabled if explicitly configured
@@ -250,14 +196,22 @@ func (h *HelmRenderer) mlflowToHelmValues(mlflow *mlflowv1.MLflow, namespace str
 	if mlflow.Spec.Storage != nil {
 		// If Storage is specified, enable it
 		storageEnabled = true
-		if mlflow.Spec.Storage.Size != nil {
-			storageSize = mlflow.Spec.Storage.Size.String()
+
+		// Extract size from Resources.Requests[storage]
+		if mlflow.Spec.Storage.Resources.Requests != nil {
+			if storageQuantity, ok := mlflow.Spec.Storage.Resources.Requests[corev1.ResourceStorage]; ok {
+				storageSize = storageQuantity.String()
+			}
 		}
+
+		// Extract storage class name
 		if mlflow.Spec.Storage.StorageClassName != nil {
 			storageClassName = *mlflow.Spec.Storage.StorageClassName
 		}
-		if mlflow.Spec.Storage.AccessMode != nil {
-			accessMode = string(*mlflow.Spec.Storage.AccessMode)
+
+		// Extract the first access mode from an array (we only use one for simplicity)
+		if len(mlflow.Spec.Storage.AccessModes) > 0 {
+			accessMode = string(mlflow.Spec.Storage.AccessModes[0])
 		}
 	}
 
@@ -268,67 +222,96 @@ func (h *HelmRenderer) mlflowToHelmValues(mlflow *mlflowv1.MLflow, namespace str
 		"accessMode":       accessMode,
 	}
 
-	// MLflow configuration
 	backendStoreURI := defaultBackendStoreURI
-	registryStoreURI := defaultRegistryStoreURI
 	artifactsDest := defaultArtifactsDest
 
-	if mlflow.Spec.BackendStoreURI != nil {
+	// BackendStoreURI: prefer secret ref over direct value
+	var backendStoreURIFrom map[string]interface{}
+	if mlflow.Spec.BackendStoreURIFrom != nil {
+		backendStoreURIFrom = map[string]interface{}{
+			"secretKeyRef": map[string]interface{}{
+				"name": mlflow.Spec.BackendStoreURIFrom.Name,
+				"key":  mlflow.Spec.BackendStoreURIFrom.Key,
+			},
+		}
+		if mlflow.Spec.BackendStoreURIFrom.Optional != nil {
+			backendStoreURIFrom["secretKeyRef"].(map[string]interface{})["optional"] = *mlflow.Spec.BackendStoreURIFrom.Optional
+		}
+	} else if mlflow.Spec.BackendStoreURI != nil {
 		backendStoreURI = *mlflow.Spec.BackendStoreURI
 	}
-	if mlflow.Spec.RegistryStoreURI != nil {
+
+	// RegistryStoreURI: defaults to backendStoreUri when omitted (per API contract)
+	// Prefer secret ref over direct value
+	var registryStoreURIFrom map[string]interface{}
+	registryStoreURI := backendStoreURI // Default to backend URI
+	if mlflow.Spec.RegistryStoreURIFrom != nil {
+		registryStoreURIFrom = map[string]interface{}{
+			"secretKeyRef": map[string]interface{}{
+				"name": mlflow.Spec.RegistryStoreURIFrom.Name,
+				"key":  mlflow.Spec.RegistryStoreURIFrom.Key,
+			},
+		}
+		if mlflow.Spec.RegistryStoreURIFrom.Optional != nil {
+			registryStoreURIFrom["secretKeyRef"].(map[string]interface{})["optional"] = *mlflow.Spec.RegistryStoreURIFrom.Optional
+		}
+	} else if mlflow.Spec.RegistryStoreURI != nil {
 		registryStoreURI = *mlflow.Spec.RegistryStoreURI
+	} else if backendStoreURIFrom != nil {
+		// Registry isn't set, but backend uses secret ref - use the same secret for registry
+		registryStoreURIFrom = backendStoreURIFrom
 	}
+	// Otherwise registryStoreURI already defaults to backendStoreURI
+
 	if mlflow.Spec.ArtifactsDestination != nil {
 		artifactsDest = *mlflow.Spec.ArtifactsDestination
 	}
 
-	// Build allowed hosts list for MLflow
-	allowedHosts := []string{
-		"*",                            // Wildcard to allow all hosts
-		"mlflow",                       // Service name
-		"mlflow." + namespace,          // Service in namespace
-		"mlflow." + namespace + ".svc", // Full service name
-		"mlflow." + namespace + ".svc.cluster.local", // FQDN
-		"localhost", // Localhost
-		"127.0.0.1", // Localhost IP
+	// DefaultArtifactRoot: if not specified, defaults to artifactsDestination
+	defaultArtifactRoot := artifactsDest
+	if mlflow.Spec.DefaultArtifactRoot != nil {
+		defaultArtifactRoot = *mlflow.Spec.DefaultArtifactRoot
 	}
 
-	// ServeArtifacts configuration
-	serveArtifacts := true
+	// Wildcard to allow all hosts
+	allowedHosts := []string{"*"}
+
+	// Defaults to false, but MUST be true when using file-based artifact storage
+	serveArtifacts := false
 	if mlflow.Spec.ServeArtifacts != nil {
 		serveArtifacts = *mlflow.Spec.ServeArtifacts
 	}
 
-	// Workers configuration
 	workers := int32(1)
 	if mlflow.Spec.Workers != nil {
 		workers = *mlflow.Spec.Workers
 	}
 
-	values["mlflow"] = map[string]interface{}{
+	mlflowConfig := map[string]interface{}{
 		"backendStoreUri":      backendStoreURI,
 		"registryStoreUri":     registryStoreURI,
 		"artifactsDestination": artifactsDest,
+		"defaultArtifactRoot":  defaultArtifactRoot,
 		"enableWorkspaces":     true,
 		"workspaceStoreUri":    "kubernetes://",
 		"serveArtifacts":       serveArtifacts,
 		"workers":              workers,
 		"port":                 9443,
 		"allowedHosts":         allowedHosts,
+		"staticPrefix":         StaticPrefix, // Hardcoded for operator deployments (required for kube-rbac-proxy routing)
 	}
 
-	// Environment variables
-	env := []map[string]interface{}{
-		{
-			"name":  "HOME",
-			"value": "/tmp",
-		},
-		{
-			"name":  "MLFLOW_K8S_AUTH_AUTHORIZATION_MODE",
-			"value": "subject_access_review",
-		},
+	// Add secret references if provided
+	if backendStoreURIFrom != nil {
+		mlflowConfig["backendStoreUriFrom"] = backendStoreURIFrom
 	}
+	if registryStoreURIFrom != nil {
+		mlflowConfig["registryStoreUriFrom"] = registryStoreURIFrom
+	}
+
+	values["mlflow"] = mlflowConfig
+
+	env := make([]map[string]interface{}, 0, len(mlflow.Spec.Env))
 
 	// Add custom env vars from spec
 	for _, e := range mlflow.Spec.Env {
@@ -346,7 +329,6 @@ func (h *HelmRenderer) mlflowToHelmValues(mlflow *mlflowv1.MLflow, namespace str
 
 	values["env"] = env
 
-	// EnvFrom
 	if len(mlflow.Spec.EnvFrom) > 0 {
 		envFrom := make([]map[string]interface{}, 0, len(mlflow.Spec.EnvFrom))
 		for _, ef := range mlflow.Spec.EnvFrom {
@@ -366,23 +348,27 @@ func (h *HelmRenderer) mlflowToHelmValues(mlflow *mlflowv1.MLflow, namespace str
 		values["envFrom"] = envFrom
 	}
 
-	// Service account and RBAC
+	serviceAccountName := ServiceAccountName
+	if mlflow.Spec.ServiceAccountName != nil {
+		serviceAccountName = *mlflow.Spec.ServiceAccountName
+	}
 	values["serviceAccount"] = map[string]interface{}{
 		"create": true,
-		"name":   ServiceAccountName,
-	}
-	values["rbac"] = map[string]interface{}{
-		"create": true,
+		"name":   serviceAccountName,
 	}
 
-	// Service
+	// Add OpenShift service-ca annotation for automatic cert provisioning
+	serviceAnnotations := map[string]interface{}{
+		"service.beta.openshift.io/serving-cert-secret-name": tlsSecretName,
+	}
+
 	values["service"] = map[string]interface{}{
-		"type":       "ClusterIP",
-		"port":       8443,
-		"directPort": 9443,
+		"type":        "ClusterIP",
+		"port":        8443,
+		"directPort":  9443,
+		"annotations": serviceAnnotations,
 	}
 
-	// Pod Security Context
 	if mlflow.Spec.PodSecurityContext != nil {
 		// Convert PodSecurityContext to map
 		// For now, we'll pass through the whole object as-is
@@ -397,7 +383,6 @@ func (h *HelmRenderer) mlflowToHelmValues(mlflow *mlflowv1.MLflow, namespace str
 		}
 	}
 
-	// Container Security Context
 	if mlflow.Spec.SecurityContext != nil {
 		values["securityContext"] = mlflow.Spec.SecurityContext
 	} else {
@@ -407,21 +392,18 @@ func (h *HelmRenderer) mlflowToHelmValues(mlflow *mlflowv1.MLflow, namespace str
 		}
 	}
 
-	// Node Selector
 	if len(mlflow.Spec.NodeSelector) > 0 {
 		values["nodeSelector"] = mlflow.Spec.NodeSelector
 	} else {
 		values["nodeSelector"] = map[string]string{}
 	}
 
-	// Tolerations
 	if len(mlflow.Spec.Tolerations) > 0 {
 		values["tolerations"] = mlflow.Spec.Tolerations
 	} else {
 		values["tolerations"] = []corev1.Toleration{}
 	}
 
-	// Affinity
 	if mlflow.Spec.Affinity != nil {
 		values["affinity"] = mlflow.Spec.Affinity
 	} else {
@@ -533,26 +515,4 @@ func (h *HelmRenderer) convertEnvVarSource(source *corev1.EnvVarSource) map[stri
 	}
 
 	return result
-}
-
-// splitImage splits an image string into repository and tag/digest
-// Handles both tag-based (image:tag) and digest-based (image@sha256:...) references
-// If no tag or digest is specified, returns "latest" as the tag
-func (h *HelmRenderer) splitImage(image string) (string, string) {
-	// Handle digest references (image@sha256:...)
-	if idx := strings.Index(image, "@"); idx != -1 {
-		return image[:idx], image[idx+1:]
-	}
-
-	parts := strings.Split(image, ":")
-	if len(parts) == 1 {
-		return parts[0], "latest"
-	}
-	// Handle images with port numbers (e.g., registry.com:5000/image:tag)
-	// Find the last colon which should be the tag separator
-	lastColon := strings.LastIndex(image, ":")
-	if lastColon == -1 {
-		return image, "latest"
-	}
-	return image[:lastColon], image[lastColon+1:]
 }
