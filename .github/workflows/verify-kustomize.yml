@@ -1,0 +1,33 @@
+name: Verify Manifest Builds
+
+on:
+  push:
+    branches:
+      - 'main'
+  pull_request:
+    paths:
+      - '.github/**'
+      - 'config/**'
+      - 'charts/**'
+      - 'Makefile'
+
+jobs:
+  verify-builds:
+    name: Verify kustomize and Helm builds
+    runs-on: ubuntu-latest
+    steps:
+      - name: Clone the code
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Install Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: 'v3.14.0'
+
+      - name: Verify manifests
+        run: make verify-manifests

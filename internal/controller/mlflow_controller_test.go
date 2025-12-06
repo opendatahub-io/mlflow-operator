@@ -21,7 +21,9 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
@@ -42,15 +44,41 @@ var _ = Describe("MLflow Controller", func() {
 		mlflow := &mlflowv1.MLflow{}
 
 		BeforeEach(func() {
-			By("creating the custom resource for the Kind MLflow")
-			err := k8sClient.Get(ctx, typeNamespacedName, mlflow)
+			By("creating the opendatahub namespace")
+			ns := &corev1.Namespace{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "opendatahub",
+				},
+			}
+			err := k8sClient.Get(ctx, types.NamespacedName{Name: "opendatahub"}, ns)
 			if err != nil && errors.IsNotFound(err) {
-				resource := &mlflowv1.MLflow{
+				Expect(k8sClient.Create(ctx, ns)).To(Succeed())
+			}
+
+			By("creating the custom resource for the Kind MLflow")
+			err = k8sClient.Get(ctx, typeNamespacedName, mlflow)
+			if err != nil && errors.IsNotFound(err) {
+				disabled := false
+				mlflowResource := &mlflowv1.MLflow{
 					ObjectMeta: metav1.ObjectMeta{
 						Name: resourceName,
 					},
+					Spec: mlflowv1.MLflowSpec{
+						KubeRbacProxy: &mlflowv1.KubeRbacProxyConfig{
+							Enabled: &disabled,
+						},
+						// Storage is required when using default sqlite backend
+						Storage: &corev1.PersistentVolumeClaimSpec{
+							AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
+							Resources: corev1.VolumeResourceRequirements{
+								Requests: corev1.ResourceList{
+									corev1.ResourceStorage: resource.MustParse("1Gi"),
+								},
+							},
+						},
+					},
 				}
-				Expect(k8sClient.Create(ctx, resource)).To(Succeed())
+				Expect(k8sClient.Create(ctx, mlflowResource)).To(Succeed())
 			}
 		})
 
@@ -65,8 +93,10 @@ var _ = Describe("MLflow Controller", func() {
 		It("should successfully reconcile the resource", func() {
 			By("Reconciling the created resource")
 			controllerReconciler := &MLflowReconciler{
-				Client: k8sClient,
-				Scheme: k8sClient.Scheme(),
+				Client:    k8sClient,
+				Scheme:    k8sClient.Scheme(),
+				Namespace: "opendatahub",
+				ChartPath: "../../charts/mlflow",
 			}
 
 			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{

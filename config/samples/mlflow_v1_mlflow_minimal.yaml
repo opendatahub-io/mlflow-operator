@@ -1,0 +1,49 @@
+apiVersion: mlflow.opendatahub.io/v1
+kind: MLflow
+metadata:
+  name: mlflow
+spec:
+  # Minimal configuration - direct access without kube-rbac-proxy
+  # Suitable for development/testing environments
+  # WARNING: No authentication/authorization - use only in trusted environments
+
+  # Disable kube-rbac-proxy for direct access to MLflow
+  kubeRbacProxy:
+    enabled: false
+
+  # MLflow container image
+  image:
+    image: quay.io/opendatahub/mlflow:latest
+    imagePullPolicy: Always
+
+  # Number of replicas
+  replicas: 1
+
+  # Compute resources (minimal for development)
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "256Mi"
+    limits:
+      cpu: "500m"
+      memory: "512Mi"
+
+  # Local file-based storage with PVC
+  storage:
+    accessModes:
+      - ReadWriteOnce
+    resources:
+      requests:
+        storage: 5Gi
+
+  backendStoreUri: "sqlite:////mlflow/mlflow.db"
+  registryStoreUri: "sqlite:////mlflow/mlflow.db"
+  artifactsDestination: "file:///mlflow/artifacts"
+
+  # IMPORTANT: serveArtifacts MUST be enabled when using file-based artifact storage
+  serveArtifacts: true
+
+  # Environment variables
+  env:
+    - name: MLFLOW_LOGGING_LEVEL
+      value: DEBUG

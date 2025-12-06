@@ -3,9 +3,11 @@ kind: Kustomization
 
 # Reference the base configuration
 resources:
-  - ../../default
+  - ../../base
   # Include Prometheus ServiceMonitor (OpenShift has Prometheus Operator pre-installed)
   - ../../prometheus
+  # Include MLflow ConsoleLink and HTTPRoute
+  - ../../routing
 
 # OpenShift-specific patches for secure metrics using service serving certificates
 patches:
@@ -21,3 +23,41 @@ patches:
     target:
       kind: ServiceMonitor
       name: controller-manager-metrics-monitor
+
+# Kustomize replacements to populate resources from params.env
+replacements:
+  # Replace controller-manager image for production deployments
+  - source:
+      kind: ConfigMap
+      name: operator-params
+      fieldPath: data.MLFLOW_OPERATOR_IMAGE
+    targets:
+      - select:
+          kind: Deployment
+          name: controller-manager
+        fieldPaths:
+          - spec.template.spec.containers.[name=manager].image
+
+  # Replace gateway-name in HTTPRoute
+  - source:
+      kind: ConfigMap
+      name: operator-params
+      fieldPath: data.gateway-name
+    targets:
+      - select:
+          kind: HTTPRoute
+          name: mlflow
+        fieldPaths:
+          - spec.parentRefs.0.name
+
+  # Replace mlflow-url in ConsoleLink
+  - source:
+      kind: ConfigMap
+      name: operator-params
+      fieldPath: data.mlflow-url
+    targets:
+      - select:
+          kind: ConsoleLink
+          name: mlflowlink
+        fieldPaths:
+          - spec.href

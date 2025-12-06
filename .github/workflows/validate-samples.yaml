@@ -1,0 +1,38 @@
+name: Validate Sample CRs
+
+on:
+  push:
+    branches:
+      - 'main'
+  pull_request:
+    paths:
+      - '.github/**'
+      - 'config/samples/**'
+      - 'api/**'
+      - 'config/crd/**'
+      - 'Makefile'
+
+jobs:
+  validate-samples:
+    name: Validate Sample CRs
+    runs-on: ubuntu-latest
+    steps:
+      - name: Clone the code
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Generate CRD manifests
+        run: make manifests
+
+      - name: Create Kind cluster
+        uses: helm/kind-action@v1
+        with:
+          cluster_name: validation-cluster
+          wait: 30s
+
+      - name: Validate samples
+        run: make validate-samples

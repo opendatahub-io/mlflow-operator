@@ -1,5 +1,6 @@
 # Image URL to use all building/pushing image targets
-IMG ?= controller:latest
+# Using localhost for local development and CI with kind clusters
+IMG ?= localhost/mlflow-operator:latest
 
 # Get the currently used golang install path (in GOPATH/bin, unless GOBIN is set)
 ifeq (,$(shell go env GOBIN))
@@ -63,7 +64,7 @@ test: manifests generate fmt vet setup-envtest ## Run tests.
 
 # E2E test configuration
 KIND_CLUSTER ?= mlflow
-E2E_IMG ?= example.com/mlflow-operator:v0.0.1
+E2E_IMG ?= localhost/mlflow-operator:v0.0.1
 
 .PHONY: setup-kind-cluster
 setup-kind-cluster: ## Create a Kind cluster for e2e tests if it doesn't exist
@@ -96,6 +97,16 @@ cleanup-kind-cluster: ## Delete the Kind cluster used for e2e tests
 	else \
 		echo "Kind cluster '$(KIND_CLUSTER)' does not exist."; \
 	fi
+
+.PHONY: validate-samples
+validate-samples: manifests ## Validate sample CRs against the CRD (requires kubectl access to a cluster)
+	@echo "Running sample validation script..."
+	@bash test/scripts/validate-samples.sh
+
+.PHONY: verify-manifests
+verify-manifests: kustomize ## Verify that all manifest builds succeed (requires helm)
+	@echo "Running manifest verification script..."
+	@bash test/scripts/verify-manifests.sh
 
 .PHONY: lint
 lint: golangci-lint ## Run golangci-lint linter
@@ -166,11 +177,11 @@ uninstall: manifests kustomize ## Uninstall CRDs from the K8s cluster specified 
 .PHONY: deploy
 deploy: manifests kustomize ## Deploy controller to the K8s cluster specified in ~/.kube/config.
 	cd config/manager && "$(KUSTOMIZE)" edit set image controller=${IMG}
-	"$(KUSTOMIZE)" build config/default | "$(KUBECTL)" apply -f -
+	"$(KUSTOMIZE)" build config/overlays/dev | "$(KUBECTL)" apply -f -
 
 .PHONY: undeploy
 undeploy: kustomize ## Undeploy controller from the K8s cluster specified in ~/.kube/config. Call with ignore-not-found=true to ignore resource not found errors during deletion.
-	"$(KUSTOMIZE)" build config/default | "$(KUBECTL)" delete --ignore-not-found=$(ignore-not-found) -f -
+	"$(KUSTOMIZE)" build config/overlays/dev | "$(KUBECTL)" delete --ignore-not-found=$(ignore-not-found) -f -
 
 ##@ Dependencies
 
