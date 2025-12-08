@@ -44,7 +44,7 @@ kustomize build config/overlays/rhoai | kubectl apply -f -
 
 For OpenDataHub mode:
 ```sh
-kustomize build config/overlays/opendatahub | kubectl apply -f -
+kustomize build config/overlays/odh | kubectl apply -f -
 ```
 
 **Option 2: Build and deploy from source**

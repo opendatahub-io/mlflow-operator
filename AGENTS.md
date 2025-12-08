@@ -74,7 +74,7 @@ The MLflow operator supports two deployment modes, configured via the `--mode` f
 --mode=opendatahub
 ```
 - Deploys MLflow resources to the `opendatahub` namespace
-- Use the OpenDataHub overlay: `config/overlays/opendatahub/`
+- Use the OpenDataHub overlay: `config/overlays/odh/`
 
 ### Deploying with Different Modes
 
@@ -85,7 +85,7 @@ Using kustomize overlays:
 kustomize build config/overlays/rhoai | kubectl apply -f -
 
 # Deploy with OpenDataHub mode
-kustomize build config/overlays/opendatahub | kubectl apply -f -
+kustomize build config/overlays/odh | kubectl apply -f -
 ```
 
 ## Helm Chart
