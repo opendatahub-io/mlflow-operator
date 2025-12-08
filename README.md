@@ -112,55 +112,35 @@ The operator supports deploying a kube-rbac-proxy sidecar for Kubernetes RBAC-ba
 ```yaml
 spec:
   kubeRbacProxy:
-    enabled: true
+    enabled: true  # Default is true, can be omitted
     image:
       image: "quay.io/opendatahub/odh-kube-auth-proxy:latest"
-      pullPolicy: IfNotPresent
+      imagePullPolicy: IfNotPresent
     resources:
       requests:
         cpu: "100m"
         memory: "256Mi"
-    tls:
-      secretName: mlflow-tls  # Secret with tls.crt and tls.key
-      upstreamCAFile: /etc/tls/upstream-ca/ca.crt  # Path to upstream CA cert
-      upstreamCASecret: mlflow-upstream-ca  # Optional: Secret containing upstream CA
+      limits:
+        cpu: "100m"
+        memory: "256Mi"
 ```
 
 #### TLS Certificate Configuration
 
-**OpenShift (Automatic)**:
-```yaml
-spec:
-  openShift:
-    servingCert:
-      enabled: true
-      secretName: mlflow-tls  # OpenShift will provision cert here
-```
+TLS certificates are automatically provisioned using the OpenShift service-ca operator.
+The operator sets the `service.beta.openshift.io/serving-cert-secret-name` annotation on the MLflow service,
+which triggers automatic certificate generation in the `mlflow-tls` secret.
 
-**Vanilla Kubernetes (Manual)**:
+No manual certificate configuration is required or supported.
+
+To disable kube-rbac-proxy (and thus TLS):
 ```yaml
 spec:
   kubeRbacProxy:
-    enabled: true
-    tls:
-      secretName: mlflow-tls-manual
-      upstreamCAFile: /etc/tls/upstream-ca/ca.crt
-      upstreamCASecret: mlflow-upstream-ca
+    enabled: false
 ```
 
-Then create the required secrets:
-```bash
-# Server TLS certificate (for kube-rbac-proxy)
-kubectl create secret tls mlflow-tls-manual \
-  --cert=path/to/tls.crt \
-  --key=path/to/tls.key \
-  -n <namespace>
-
-# Upstream CA certificate (for kube-rbac-proxy to validate MLflow)
-kubectl create secret generic mlflow-upstream-ca \
-  --from-file=ca.crt=path/to/ca.crt \
-  -n <namespace>
-```
+Note: kube-rbac-proxy is enabled by default to provide authentication and TLS termination.
 
 ### Storage Configuration
 
@@ -208,20 +188,15 @@ The NetworkPolicy can be customized by modifying the Helm chart values or by cre
 See the [config/samples](./config/samples/) directory for complete examples:
 - `mlflow_v1_mlflow.yaml` - OpenShift deployment with local storage and kube-rbac-proxy
 - `mlflow_v1_mlflow_remote_storage.yaml` - Remote PostgreSQL + S3 storage with horizontal scaling
-- `mlflow_v1_mlflow_manual_tls.yaml` - Vanilla Kubernetes with manual TLS certificates
 
 ## Troubleshooting
 
 ### Common Issues
 
 **MLflow pods fail to start with TLS errors**:
-- Verify the TLS secret exists and contains `tls.crt` and `tls.key`
-- On OpenShift, ensure `openShift.servingCert.enabled: true` is set
-- On vanilla Kubernetes, ensure you've created the TLS secret manually
-
-**kube-rbac-proxy fails with upstream CA errors**:
-- On OpenShift: The default CA file path should work automatically
-- On vanilla Kubernetes: Ensure you've set `upstreamCASecret` and created the corresponding secret with `ca.crt`
+- Verify the OpenShift service-ca operator is running and functioning
+- Check if the `mlflow-tls` secret was created automatically by the service-ca operator
+- Ensure the Service has the `service.beta.openshift.io/serving-cert-secret-name` annotation set
 
 **Cannot connect to MLflow**:
 - Check if kube-rbac-proxy is enabled - if so, you need to authenticate via Kubernetes RBAC

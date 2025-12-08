@@ -1077,8 +1077,8 @@ func TestMlflowToHelmValues_KubeRbacProxyImage(t *testing.T) {
 				ObjectMeta: metav1.ObjectMeta{Name: "test"},
 				Spec:       mlflowv1.MLflowSpec{},
 			},
-			wantEnabled:    false,
-			wantPullPolicy: "", // pullPolicy should not be set when not explicitly provided
+			wantEnabled:    true, // Default is now true
+			wantPullPolicy: "",   // pullPolicy should not be set when not explicitly provided
 			wantSecretName: "mlflow-tls",
 		},
 		{
@@ -1099,23 +1099,6 @@ func TestMlflowToHelmValues_KubeRbacProxyImage(t *testing.T) {
 			wantName:       "custom/proxy:v1.0.0",
 			wantPullPolicy: "Always",
 			wantSecretName: "mlflow-tls",
-		},
-		{
-			name: "kube-rbac-proxy with custom TLS config",
-			mlflow: &mlflowv1.MLflow{
-				ObjectMeta: metav1.ObjectMeta{Name: "test"},
-				Spec: mlflowv1.MLflowSpec{
-					KubeRbacProxy: &mlflowv1.KubeRbacProxyConfig{
-						Enabled: ptr(true),
-						TLS: &mlflowv1.TLSConfig{
-							SecretName: ptr("custom-tls"),
-						},
-					},
-				},
-			},
-			wantEnabled:    true,
-			wantPullPolicy: "", // pullPolicy should not be set when not explicitly provided
-			wantSecretName: "custom-tls",
 		},
 	}
 

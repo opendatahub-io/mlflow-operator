@@ -95,7 +95,8 @@ func (h *HelmRenderer) mlflowToHelmValues(mlflow *mlflowv1.MLflow, namespace str
 
 	// Kube RBAC Proxy configuration
 	cfg := config.GetConfig()
-	kubeRbacProxyEnabled := false
+	// Default to enabled (matches kubebuilder default on KubeRbacProxyConfig.Enabled)
+	kubeRbacProxyEnabled := true
 	kubeRbacProxyImage := cfg.KubeAuthProxyImage
 	if kubeRbacProxyImage == "" {
 		kubeRbacProxyImage = defaultKubeRbacProxyImage
@@ -104,10 +105,11 @@ func (h *HelmRenderer) mlflowToHelmValues(mlflow *mlflowv1.MLflow, namespace str
 	tlsSecretName := TLSSecretName
 
 	if mlflow.Spec.KubeRbacProxy != nil {
-		// Check if explicitly enabled
+		// If explicitly set, use the specified value
 		if mlflow.Spec.KubeRbacProxy.Enabled != nil {
 			kubeRbacProxyEnabled = *mlflow.Spec.KubeRbacProxy.Enabled
 		}
+		// Otherwise, keep default (true) from kubebuilder marker
 
 		// Image configuration
 		if mlflow.Spec.KubeRbacProxy.Image != nil {
@@ -117,13 +119,6 @@ func (h *HelmRenderer) mlflowToHelmValues(mlflow *mlflowv1.MLflow, namespace str
 			if mlflow.Spec.KubeRbacProxy.Image.ImagePullPolicy != nil {
 				policy := string(*mlflow.Spec.KubeRbacProxy.Image.ImagePullPolicy)
 				kubeRbacProxyPullPolicy = &policy
-			}
-		}
-
-		// TLS configuration
-		if mlflow.Spec.KubeRbacProxy.TLS != nil {
-			if mlflow.Spec.KubeRbacProxy.TLS.SecretName != nil {
-				tlsSecretName = *mlflow.Spec.KubeRbacProxy.TLS.SecretName
 			}
 		}
 	}

@@ -35,6 +35,8 @@ type MLflowSpec struct {
 	KubeRbacProxy *KubeRbacProxyConfig `json:"kubeRbacProxy,omitempty"`
 
 	// Image specifies the MLflow container image.
+	// If not specified, use the default image
+	// via the MLFLOW_IMAGE environment variable in the operator.
 	// +optional
 	Image *ImageConfig `json:"image,omitempty"`
 
@@ -108,6 +110,16 @@ type MLflowSpec struct {
 	//   - "s3://my-bucket/mlflow/artifacts" (no Storage needed)
 	//   - "gs://my-bucket/mlflow/artifacts" (no Storage needed)
 	// If not specified when ServeArtifacts is enabled, defaults to "file:///mlflow/artifacts"
+	//
+	// For cloud storage authentication, use EnvFrom to inject credentials from secrets or configmaps.
+	// Example for S3:
+	//   envFrom:
+	//   - secretRef:
+	//       name: aws-credentials  # Contains AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY
+	// Example for GCS:
+	//   envFrom:
+	//   - secretRef:
+	//       name: gcp-credentials  # Contains GOOGLE_APPLICATION_CREDENTIALS path
 	// +optional
 	ArtifactsDestination *string `json:"artifactsDestination,omitempty"`
 
@@ -190,18 +202,6 @@ type KubeRbacProxyConfig struct {
 	// If not specified, defaults to: requests(cpu: 100m, memory: 256Mi), limits(cpu: 100m, memory: 256Mi)
 	// +optional
 	Resources *corev1.ResourceRequirements `json:"resources,omitempty"`
-
-	// TLS specifies TLS certificate configuration for kube-rbac-proxy
-	// +optional
-	TLS *TLSConfig `json:"tls,omitempty"`
-}
-
-// TLSConfig contains TLS certificate configuration for kube-rbac-proxy
-type TLSConfig struct {
-	// SecretName is the name of the secret containing tls.crt and tls.key
-	// Defaults to "mlflow-tls"
-	// +optional
-	SecretName *string `json:"secretName,omitempty"`
 }
 
 // ImageConfig contains container image configuration
