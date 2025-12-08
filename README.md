@@ -160,12 +160,20 @@ spec:
 #### Remote Storage (Production)
 ```yaml
 spec:
-  # No storage PVC needed
-  backendStoreUri: "postgresql://mlflow:password@postgres.example.com:5432/mlflow"
-  registryStoreUri: "postgresql://mlflow:password@postgres.example.com:5432/mlflow"
+  # No storage PVC needed - using remote PostgreSQL and S3
+
+  # Use secret references for database URIs containing credentials (recommended)
+  backendStoreUriFrom:
+    name: mlflow-db-credentials
+    key: backend-store-uri  # postgresql://user:password@host:5432/dbname
+
+  registryStoreUriFrom:
+    name: mlflow-db-credentials
+    key: registry-store-uri  # postgresql://user:password@host:5432/dbname
+
   artifactsDestination: "s3://my-mlflow-bucket/artifacts"
 
-  # S3 credentials
+  # S3 credentials via secret
   envFrom:
     - secretRef:
         name: aws-credentials  # Contains AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY
@@ -173,6 +181,15 @@ spec:
   env:
     - name: AWS_DEFAULT_REGION
       value: us-east-1
+```
+
+Create the database credentials secret:
+```bash
+# Create secret with database URIs
+kubectl create secret generic mlflow-db-credentials \
+  --from-literal=backend-store-uri='postgresql://mlflow:password@postgres.example.com:5432/mlflow' \
+  --from-literal=registry-store-uri='postgresql://mlflow:password@postgres.example.com:5432/mlflow' \
+  -n <namespace>
 ```
 
 ### Network Security
