@@ -1,7 +1,7 @@
 apiVersion: v1
 kind: Service
 metadata:
-  name: mlflow
+  name: mlflow{{ .Values.resourceSuffix }}
   namespace: {{ .Values.namespace }}
   labels:
     app: mlflow

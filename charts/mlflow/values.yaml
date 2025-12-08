@@ -5,6 +5,13 @@
 # Namespace where MLflow will be deployed
 namespace: mlflow
 
+# Resource suffix for unique naming across multiple MLflow instances
+# All resources will be named like "mlflow{{ .Values.resourceSuffix }}"
+# Example: If resourceSuffix is "-dev", resources will be named "mlflow-dev"
+# Leave empty (default) for standard "mlflow" resource names
+# This is automatically set by the operator based on the CR name
+resourceSuffix: ""
+
 # Common labels applied to all resources (Service, Deployment, ServiceAccount, etc.)
 commonLabels:
   component: mlflow

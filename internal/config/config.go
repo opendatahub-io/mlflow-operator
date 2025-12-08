@@ -28,6 +28,12 @@ type OperatorConfig struct {
 	MLflowImage string
 	// KubeAuthProxyImage is the default image to use for the kube-rbac-proxy sidecar
 	KubeAuthProxyImage string
+	// GatewayName is the name of the Gateway resource for HttpRoute
+	GatewayName string
+	// MLflowURL is the external URL for accessing MLflow
+	MLflowURL string
+	// SectionTitle is the title for the ConsoleLink section in OpenShift console
+	SectionTitle string
 }
 
 var (
@@ -45,10 +51,16 @@ func GetConfig() *OperatorConfig {
 		// Set defaults (these can be overridden by env vars)
 		v.SetDefault("MLFLOW_IMAGE", "quay.io/opendatahub/mlflow:main")
 		v.SetDefault("KUBE_AUTH_PROXY_IMAGE", "quay.io/opendatahub/odh-kube-auth-proxy:latest")
+		v.SetDefault("GATEWAY_NAME", "data-science-gateway")
+		v.SetDefault("MLFLOW_URL", "https://mlflow.example.com")
+		v.SetDefault("SECTION_TITLE", "MLflow")
 
 		instance = &OperatorConfig{
 			MLflowImage:        v.GetString("MLFLOW_IMAGE"),
 			KubeAuthProxyImage: v.GetString("KUBE_AUTH_PROXY_IMAGE"),
+			GatewayName:        v.GetString("GATEWAY_NAME"),
+			MLflowURL:          v.GetString("MLFLOW_URL"),
+			SectionTitle:       v.GetString("SECTION_TITLE"),
 		}
 	})
 	return instance

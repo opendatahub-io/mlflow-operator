@@ -27,11 +27,13 @@ import (
 	// to ensure that exec-entrypoint and run can make use of them.
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
 
+	consolev1 "github.com/openshift/api/console/v1"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
+	"k8s.io/client-go/discovery"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/cache"
@@ -40,6 +42,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	"sigs.k8s.io/controller-runtime/pkg/metrics/filters"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
+	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	mlflowv1 "github.com/opendatahub-io/mlflow-operator/api/v1"
 	"github.com/opendatahub-io/mlflow-operator/internal/controller"
@@ -54,6 +57,8 @@ var (
 func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
 	utilruntime.Must(mlflowv1.AddToScheme(scheme))
+	utilruntime.Must(consolev1.AddToScheme(scheme))
+	utilruntime.Must(gatewayv1.Install(scheme))
 	// +kubebuilder:scaffold:scheme
 }
 
@@ -138,7 +143,46 @@ func main() {
 	// Create label selector for MLflow-owned resources
 	labelSelector := labels.SelectorFromSet(labels.Set{"app": "mlflow"})
 
-	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
+	// Check ConsoleLink availability early to configure cache
+	cfg := ctrl.GetConfigOrDie()
+	discoveryClient, err := discovery.NewDiscoveryClientForConfig(cfg)
+	if err != nil {
+		setupLog.Error(err, "unable to create discovery client")
+		os.Exit(1)
+	}
+
+	// Build the ByObject cache configuration
+	byObjectCache := map[client.Object]cache.ByObject{
+		&appsv1.Deployment{}:            {Label: labelSelector},
+		&corev1.Secret{}:                {Label: labelSelector},
+		&corev1.Service{}:               {Label: labelSelector},
+		&corev1.ServiceAccount{}:        {Label: labelSelector},
+		&corev1.PersistentVolumeClaim{}: {Label: labelSelector},
+	}
+
+	// Conditionally add ConsoleLink to cache if available
+	consoleLinkAvailable, err := controller.IsConsoleLinkAvailable(discoveryClient)
+	if err != nil {
+		setupLog.Error(err, "Failed to check ConsoleLink availability")
+	} else if consoleLinkAvailable {
+		setupLog.Info("ConsoleLink CRD available, adding to cache with label selector")
+		byObjectCache[&consolev1.ConsoleLink{}] = cache.ByObject{Label: labelSelector}
+	} else {
+		setupLog.Info("ConsoleLink CRD not available, skipping cache configuration")
+	}
+
+	// Conditionally add HTTPRoute to cache if available
+	httpRouteAvailable, err := controller.IsHTTPRouteAvailable(discoveryClient)
+	if err != nil {
+		setupLog.Error(err, "Failed to check HTTPRoute availability")
+	} else if httpRouteAvailable {
+		setupLog.Info("HTTPRoute CRD available, adding to cache with label selector")
+		byObjectCache[&gatewayv1.HTTPRoute{}] = cache.ByObject{Label: labelSelector}
+	} else {
+		setupLog.Info("HTTPRoute CRD not available, skipping cache configuration")
+	}
+
+	mgr, err := ctrl.NewManager(cfg, ctrl.Options{
 		Scheme:                 scheme,
 		Metrics:                metricsServerOptions,
 		HealthProbeBindAddress: probeAddr,
@@ -154,13 +198,7 @@ func main() {
 				namespace: {},
 			},
 			// Apply label selector specifically to owned resources
-			ByObject: map[client.Object]cache.ByObject{
-				&appsv1.Deployment{}:            {Label: labelSelector},
-				&corev1.Secret{}:                {Label: labelSelector},
-				&corev1.Service{}:               {Label: labelSelector},
-				&corev1.ServiceAccount{}:        {Label: labelSelector},
-				&corev1.PersistentVolumeClaim{}: {Label: labelSelector},
-			},
+			ByObject: byObjectCache,
 		},
 		// LeaderElectionReleaseOnCancel defines if the leader should step down voluntarily
 		// when the Manager ends. This requires the binary to immediately end when the
@@ -180,10 +218,11 @@ func main() {
 	}
 
 	if err := (&controller.MLflowReconciler{
-		Client:    mgr.GetClient(),
-		Scheme:    mgr.GetScheme(),
-		Namespace: namespace,
-		ChartPath: "charts/mlflow",
+		Client:          mgr.GetClient(),
+		Scheme:          mgr.GetScheme(),
+		Namespace:       namespace,
+		ChartPath:       "charts/mlflow",
+		DiscoveryClient: discoveryClient,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "MLflow")
 		os.Exit(1)

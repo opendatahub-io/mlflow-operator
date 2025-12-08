@@ -1,7 +1,7 @@
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: mlflow
+  name: mlflow{{ .Values.resourceSuffix }}
   namespace: {{ .Values.namespace }}
   labels:
     app: mlflow

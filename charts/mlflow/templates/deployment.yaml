@@ -1,7 +1,7 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: mlflow
+  name: mlflow{{ .Values.resourceSuffix }}
   namespace: {{ .Values.namespace }}
   labels:
     app: mlflow
@@ -57,7 +57,7 @@ spec:
         {{- if .Values.storage.enabled }}
         - name: mlflow-storage
           persistentVolumeClaim:
-            claimName: mlflow-pvc
+            claimName: mlflow-pvc{{ .Values.resourceSuffix }}
         {{- end }}
         {{- if and .Values.kubeRbacProxy .Values.kubeRbacProxy.enabled }}
         - name: proxy-tls
@@ -176,7 +176,7 @@ spec:
           args:
             - --secure-listen-address=0.0.0.0:8443
             - --proxy-endpoints-port=8444
-            - --upstream=http://mlflow.{{ .Values.namespace }}.svc:{{ .Values.service.directPort }}/
+            - --upstream=http://mlflow{{ .Values.resourceSuffix }}.{{ .Values.namespace }}.svc:{{ .Values.service.directPort }}/
             - --tls-cert-file=/etc/tls/private/tls.crt
             - --tls-private-key-file=/etc/tls/private/tls.key
             - --auth-header-fields-enabled

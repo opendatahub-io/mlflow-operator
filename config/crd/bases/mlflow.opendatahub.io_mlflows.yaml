@@ -2246,6 +2246,9 @@ spec:
         x-kubernetes-validations:
         - message: MLflow resource name must be 'mlflow'
           rule: self.metadata.name == 'mlflow'
+        - message: MLflow resource name must be at most 40 characters to ensure generated
+            resource names stay within Kubernetes 63-character limit
+          rule: self.metadata.name.size() <= 40
     served: true
     storage: true
     subresources:

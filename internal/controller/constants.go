@@ -19,12 +19,20 @@ package controller
 const (
 	// ServiceAccountName is the name of the service account for MLflow deployments
 	ServiceAccountName = "mlflow-sa"
-	// ClusterRoleName is the name of the ClusterRole for namespace listing
-	ClusterRoleName = ServiceAccountName + "-list-namespaces"
-	// ClusterRoleBindingName is the name of the ClusterRoleBinding for namespace listing
-	ClusterRoleBindingName = ServiceAccountName + "-list-namespaces"
 	// TLSSecretName is the default name for the TLS secret used by kube-rbac-proxy
 	TLSSecretName = "mlflow-tls"
 	// StaticPrefix is the URL prefix for MLflow when deployed via the operator (required for kube-rbac-proxy routing)
 	StaticPrefix = "/mlflow"
 )
+
+// getClusterRoleName returns the ClusterRole name for a given MLflow instance.
+// Pattern: mlflow-sa-mlflow{{ suffix }}
+func getClusterRoleName(mlflowName string) string {
+	return "mlflow" + getResourceSuffix(mlflowName)
+}
+
+// getClusterRoleBindingName returns the ClusterRoleBinding name for a given MLflow instance.
+// Pattern: mlflow-sa-mlflow{{ suffix }}
+func getClusterRoleBindingName(mlflowName string) string {
+	return "mlflow" + getResourceSuffix(mlflowName)
+}

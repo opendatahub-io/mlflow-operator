@@ -239,6 +239,7 @@ type MLflowStatus struct {
 // +kubebuilder:subresource:status
 // +kubebuilder:resource:scope=Cluster
 // +kubebuilder:validation:XValidation:rule="self.metadata.name == 'mlflow'",message="MLflow resource name must be 'mlflow'"
+// +kubebuilder:validation:XValidation:rule="self.metadata.name.size() <= 40",message="MLflow resource name must be at most 40 characters to ensure generated resource names stay within Kubernetes 63-character limit"
 
 // MLflow is the Schema for the mlflows API
 type MLflow struct {

@@ -223,7 +223,14 @@ See the [config/samples](./config/samples/) directory for complete examples:
 **Storage issues**:
 - Ensure the PVC is bound: `kubectl get pvc -n <namespace>`
 - For remote storage, verify database/S3 credentials are correct
-- Check MLflow logs: `kubectl logs -n <namespace> deployment/mlflow -c mlflow`
+- Check MLflow logs:
+  ```bash
+  # For CR named "mlflow":
+  kubectl logs -n <namespace> deployment/mlflow -c mlflow
+
+  # For CR with custom name (e.g., "production"):
+  kubectl logs -n <namespace> deployment/mlflow-production -c mlflow
+  ```
 
 ### To Uninstall
 **Delete the instances (CRs) from the cluster:**

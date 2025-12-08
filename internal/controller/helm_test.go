@@ -714,6 +714,47 @@ func TestMlflowToHelmValues_Namespace(t *testing.T) {
 	}
 }
 
+func TestMlflowToHelmValues_ResourceSuffix(t *testing.T) {
+	renderer := &HelmRenderer{}
+
+	tests := []struct {
+		name               string
+		crName             string
+		wantResourceSuffix string
+	}{
+		{
+			name:               "singleton mlflow CR should have empty suffix",
+			crName:             "mlflow",
+			wantResourceSuffix: "",
+		},
+		{
+			name:               "custom CR name should have suffix",
+			crName:             "dev",
+			wantResourceSuffix: "-dev",
+		},
+		{
+			name:               "another custom CR name",
+			crName:             "production",
+			wantResourceSuffix: "-production",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mlflow := &mlflowv1.MLflow{
+				ObjectMeta: metav1.ObjectMeta{Name: tt.crName},
+				Spec:       mlflowv1.MLflowSpec{},
+			}
+
+			values := renderer.mlflowToHelmValues(mlflow, "test-namespace")
+
+			if got := values["resourceSuffix"].(string); got != tt.wantResourceSuffix {
+				t.Errorf("resourceSuffix = %v, want %v", got, tt.wantResourceSuffix)
+			}
+		})
+	}
+}
+
 func TestConvertResources(t *testing.T) {
 	renderer := &HelmRenderer{}
 
@@ -802,8 +843,6 @@ func TestConvertEnvVarSource(t *testing.T) {
 }
 
 // TestRenderChart_EnvVars tests that env vars with both value and valueFrom are rendered correctly
-//
-//nolint:gocyclo // Test function with comprehensive test cases
 func TestRenderChart_EnvVars(t *testing.T) {
 	renderer := NewHelmRenderer("../../charts/mlflow")
 
@@ -1042,6 +1081,58 @@ func TestRenderChart(t *testing.T) {
 							t.Error("--allowed-hosts not found in deployment args")
 						}
 					}
+				}
+			},
+		},
+		{
+			name: "RBAC resources should use resourceSuffix naming pattern",
+			mlflow: &mlflowv1.MLflow{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "my-instance",
+				},
+				Spec: mlflowv1.MLflowSpec{
+					BackendStoreURI:      ptr("sqlite:////mlflow/mlflow.db"),
+					RegistryStoreURI:     ptr("sqlite:////mlflow/mlflow.db"),
+					ArtifactsDestination: ptr("file:///mlflow/artifacts"),
+				},
+			},
+			namespace: "test-ns",
+			wantErr:   false,
+			validateObjs: func(t *testing.T, objs []*unstructured.Unstructured) {
+				expectedSuffix := "-my-instance"
+				expectedName := "mlflow" + expectedSuffix
+
+				foundClusterRole := false
+				foundClusterRoleBinding := false
+
+				for _, obj := range objs {
+					switch obj.GetKind() {
+					case "ClusterRole":
+						foundClusterRole = true
+						if obj.GetName() != expectedName {
+							t.Errorf("ClusterRole name = %s, want %s (should not include service account name)", obj.GetName(), expectedName)
+						}
+					case "ClusterRoleBinding":
+						foundClusterRoleBinding = true
+						if obj.GetName() != expectedName {
+							t.Errorf("ClusterRoleBinding name = %s, want %s (should not include service account name)", obj.GetName(), expectedName)
+						}
+						// Verify it references the correct ClusterRole
+						roleRef, found, err := unstructured.NestedString(obj.Object, "roleRef", "name")
+						if err != nil || !found {
+							t.Fatalf("Failed to get roleRef.name from ClusterRoleBinding: found=%v, err=%v", found, err)
+						}
+						if roleRef != expectedName {
+							t.Errorf("ClusterRoleBinding roleRef.name = %s, want %s", roleRef, expectedName)
+						}
+					}
+				}
+
+				if !foundClusterRole {
+					t.Error("ClusterRole not found in rendered objects")
+				}
+				if !foundClusterRoleBinding {
+					t.Error("ClusterRoleBinding not found in rendered objects")
 				}
 			},
 		},

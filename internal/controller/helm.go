@@ -42,6 +42,16 @@ const (
 	defaultArtifactsDest      = "file:///mlflow/artifacts"
 )
 
+// getResourceSuffix returns the resource suffix for naming MLflow resources.
+// Returns empty string for CR named "mlflow", otherwise returns "-{crname}".
+// All resources are named as "mlflow{{ suffix }}".
+func getResourceSuffix(mlflowName string) string {
+	if mlflowName == "mlflow" {
+		return ""
+	}
+	return "-" + mlflowName
+}
+
 // HelmRenderer handles rendering of Helm charts
 type HelmRenderer struct {
 	chartPath string
@@ -75,11 +85,14 @@ func (h *HelmRenderer) RenderChart(mlflow *mlflowv1.MLflow, namespace string) ([
 }
 
 // mlflowToHelmValues converts MLflow CR spec to Helm values
-// nolint:gocyclo // This function is complex by nature as it maps many CR fields to Helm values
 func (h *HelmRenderer) mlflowToHelmValues(mlflow *mlflowv1.MLflow, namespace string) map[string]interface{} {
 	values := make(map[string]interface{})
 
 	values["namespace"] = namespace
+
+	// Resource suffix for unique naming - empty string for singleton "mlflow" CR, "-<name>" for others
+	// All resources will be named like "mlflow{{ .Values.resourceSuffix }}"
+	values["resourceSuffix"] = getResourceSuffix(mlflow.Name)
 
 	values["commonLabels"] = map[string]interface{}{
 		"component": "mlflow",

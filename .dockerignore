@@ -10,3 +10,6 @@
 # Re-include Go module files
 !go.mod
 !go.sum
+
+# Re-include assets for go:embed
+!internal/controller/assets

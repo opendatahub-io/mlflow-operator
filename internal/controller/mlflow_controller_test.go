@@ -25,6 +25,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/discovery"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -92,14 +93,20 @@ var _ = Describe("MLflow Controller", func() {
 		})
 		It("should successfully reconcile the resource", func() {
 			By("Reconciling the created resource")
+
+			// Create discovery client for the test
+			discoveryClient, err := discovery.NewDiscoveryClientForConfig(cfg)
+			Expect(err).NotTo(HaveOccurred())
+
 			controllerReconciler := &MLflowReconciler{
-				Client:    k8sClient,
-				Scheme:    k8sClient.Scheme(),
-				Namespace: "opendatahub",
-				ChartPath: "../../charts/mlflow",
+				Client:          k8sClient,
+				Scheme:          k8sClient.Scheme(),
+				Namespace:       "opendatahub",
+				ChartPath:       "../../charts/mlflow",
+				DiscoveryClient: discoveryClient,
 			}
 
-			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
+			_, err = controllerReconciler.Reconcile(ctx, reconcile.Request{
 				NamespacedName: typeNamespacedName,
 			})
 			Expect(err).NotTo(HaveOccurred())

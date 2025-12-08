@@ -44,6 +44,8 @@ spec:
           value: placeholder-gateway-name
         - name: MLFLOW_URL
           value: placeholder-mlflow-url
+        - name: SECTION_TITLE
+          value: placeholder-section-title
         ports: []
         securityContext:
           readOnlyRootFilesystem: true
