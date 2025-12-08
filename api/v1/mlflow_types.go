@@ -51,7 +51,7 @@ type MLflowSpec struct {
 	Resources *corev1.ResourceRequirements `json:"resources,omitempty"`
 
 	// ServiceAccountName is the name of the ServiceAccount to use for the MLflow pod.
-	// If not specified, a default ServiceAccount will be created with the naming pattern: <mlflow-name>-sa
+	// If not specified, a default ServiceAccount will be "mlflow-sa"
 	// +kubebuilder:default="mlflow-sa"
 	// +optional
 	ServiceAccountName *string `json:"serviceAccountName,omitempty"`
