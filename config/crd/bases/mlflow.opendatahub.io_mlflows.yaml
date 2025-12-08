@@ -1884,7 +1884,7 @@ spec:
                 default: mlflow-sa
                 description: |-
                   ServiceAccountName is the name of the ServiceAccount to use for the MLflow pod.
-                  If not specified, a default ServiceAccount will be created with the naming pattern: <mlflow-name>-sa
+                  If not specified, a default ServiceAccount will be "mlflow-sa"
                 type: string
               storage:
                 description: |-

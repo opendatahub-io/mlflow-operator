@@ -16,10 +16,6 @@ spec:
       limits:
         cpu: "100m"
         memory: "256Mi"
-    # TLS configuration (optional)
-    # tls:
-    #   secretName: mlflow-tls  # Secret containing tls.crt and tls.key
-    #   upstreamCAFile: /var/run/secrets/kubernetes.io/serviceaccount/service-ca.crt
 
   # MLflow container image
   image:

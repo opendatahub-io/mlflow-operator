@@ -14,7 +14,7 @@ metadata:
   name: mlflow
 spec:
 
-  # Kube RBAC Proxy configuration (platform-agnostic)
+  # Kube RBAC Proxy configuration
   kubeRbacProxy:
     enabled: true
     image:
@@ -27,10 +27,6 @@ spec:
       limits:
         cpu: "100m"
         memory: "256Mi"
-    # TLS configuration (optional, defaults shown below)
-    # tls:
-    #   secretName: mlflow-tls
-    #   upstreamCAFile: /var/run/secrets/kubernetes.io/serviceaccount/service-ca.crt
 
   # MLflow container image
   image:
