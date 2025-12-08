@@ -10,5 +10,5 @@ keywords:
   - model-registry
 home: https://github.com/opendatahub-io/mlflow-operator
 maintainers:
-  - name: OpenDataHub
-    url: https://opendatahub.io
+  - name: MLflow Operator Maintainers
+    url: https://github.com/opendatahub-io/mlflow-operator
