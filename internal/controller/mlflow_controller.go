@@ -30,7 +30,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/util/retry"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -49,10 +48,11 @@ const (
 // MLflowReconciler reconciles a MLflow object
 type MLflowReconciler struct {
 	client.Client
-	Scheme          *runtime.Scheme
-	Namespace       string
-	ChartPath       string
-	DiscoveryClient discovery.DiscoveryInterface
+	Scheme               *runtime.Scheme
+	Namespace            string
+	ChartPath            string
+	ConsoleLinkAvailable bool
+	HTTPRouteAvailable   bool
 }
 
 // +kubebuilder:rbac:groups=mlflow.opendatahub.io,resources=mlflows,verbs=get;list;watch;create;update;patch;delete
@@ -172,7 +172,7 @@ func (r *MLflowReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	}
 
 	// Reconcile ConsoleLink (if available in cluster)
-	if err := r.reconcileConsoleLink(ctx, mlflow, r.DiscoveryClient); err != nil {
+	if err := r.reconcileConsoleLink(ctx, mlflow); err != nil {
 		log.Error(err, "Failed to reconcile ConsoleLink")
 		meta.SetStatusCondition(&mlflow.Status.Conditions, metav1.Condition{
 			Type:    "Available",
@@ -344,10 +344,7 @@ func (r *MLflowReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Owns(&corev1.PersistentVolumeClaim{})
 
 	// Conditionally watch ConsoleLink if available in the cluster
-	consoleLinkAvailable, err := IsConsoleLinkAvailable(r.DiscoveryClient)
-	if err != nil {
-		log.Error(err, "Failed to check ConsoleLink availability, proceeding without watching ConsoleLinks")
-	} else if consoleLinkAvailable {
+	if r.ConsoleLinkAvailable {
 		log.Info("ConsoleLink CRD available, adding to watch list")
 		builder = builder.Owns(&consolev1.ConsoleLink{})
 	} else {
@@ -355,10 +352,7 @@ func (r *MLflowReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	}
 
 	// Conditionally watch HTTPRoute if available in the cluster
-	httpRouteAvailable, err := IsHTTPRouteAvailable(r.DiscoveryClient)
-	if err != nil {
-		log.Error(err, "Failed to check HTTPRoute availability, proceeding without watching HTTPRoutes")
-	} else if httpRouteAvailable {
+	if r.HTTPRouteAvailable {
 		log.Info("HTTPRoute CRD available, adding to watch list")
 		builder = builder.Owns(&gatewayv1.HTTPRoute{})
 	} else {

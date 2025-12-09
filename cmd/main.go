@@ -218,11 +218,12 @@ func main() {
 	}
 
 	if err := (&controller.MLflowReconciler{
-		Client:          mgr.GetClient(),
-		Scheme:          mgr.GetScheme(),
-		Namespace:       namespace,
-		ChartPath:       "charts/mlflow",
-		DiscoveryClient: discoveryClient,
+		Client:               mgr.GetClient(),
+		Scheme:               mgr.GetScheme(),
+		Namespace:            namespace,
+		ChartPath:            "charts/mlflow",
+		ConsoleLinkAvailable: consoleLinkAvailable,
+		HTTPRouteAvailable:   httpRouteAvailable,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "MLflow")
 		os.Exit(1)

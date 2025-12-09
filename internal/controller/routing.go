@@ -96,16 +96,10 @@ func IsHTTPRouteAvailable(discoveryClient discovery.DiscoveryInterface) (bool, e
 }
 
 // reconcileConsoleLink creates or updates the ConsoleLink for MLflow
-func (r *MLflowReconciler) reconcileConsoleLink(ctx context.Context, mlflow *mlflowv1.MLflow, discoveryClient discovery.DiscoveryInterface) error {
+func (r *MLflowReconciler) reconcileConsoleLink(ctx context.Context, mlflow *mlflowv1.MLflow) error {
 	log := logf.FromContext(ctx)
 
-	// Check if ConsoleLink is available in the cluster
-	available, err := IsConsoleLinkAvailable(discoveryClient)
-	if err != nil {
-		return err
-	}
-
-	if !available {
+	if !r.ConsoleLinkAvailable {
 		log.V(1).Info("Skipping ConsoleLink creation - not available in cluster")
 		return nil
 	}
@@ -165,13 +159,7 @@ func (r *MLflowReconciler) reconcileConsoleLink(ctx context.Context, mlflow *mlf
 func (r *MLflowReconciler) reconcileHttpRoute(ctx context.Context, mlflow *mlflowv1.MLflow, namespace string) error {
 	log := logf.FromContext(ctx)
 
-	// Check if HTTPRoute is available in the cluster
-	available, err := IsHTTPRouteAvailable(r.DiscoveryClient)
-	if err != nil {
-		return err
-	}
-
-	if !available {
+	if !r.HTTPRouteAvailable {
 		log.V(1).Info("Skipping HTTPRoute creation - not available in cluster")
 		return nil
 	}
