@@ -1,15 +1,24 @@
 # More info: https://docs.docker.com/engine/reference/builder/#dockerignore-file
 # Ignore everything by default and re-include only needed files
-**
+*
 
-# Re-include Go source files (but not *_test.go)
-!**/*.go
-!charts
-**/*_test.go
-
-# Re-include Go module files
+# Go modules
 !go.mod
 !go.sum
 
-# Re-include assets for go:embed
-!internal/controller/assets
+# Source code
+!cmd/
+!api/
+!internal/
+!hack/
+
+# Charts
+!charts/
+
+# Project metadata / build files
+!Dockerfile
+!.dockerignore
+!Makefile
+!PROJECT
+!.golangci.yml
+!AGENTS.md
