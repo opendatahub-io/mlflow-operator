@@ -130,7 +130,7 @@ func (r *MLflowReconciler) reconcileConsoleLink(ctx context.Context, mlflow *mlf
 		Spec: consolev1.ConsoleLinkSpec{
 			Link: consolev1.Link{
 				Text: "MLflow",
-				Href: cfg.MLflowURL,
+				Href: fmt.Sprintf("%s/%s", cfg.MLflowURL, consoleLinkName),
 			},
 			Location: consolev1.ApplicationMenu,
 			ApplicationMenu: &consolev1.ApplicationMenuSpec{
