@@ -13,7 +13,7 @@ spec:
 
   # MLflow container image
   image:
-    image: quay.io/opendatahub/mlflow:latest
+    image: quay.io/opendatahub/mlflow:master
     imagePullPolicy: Always
 
   # Number of replicas

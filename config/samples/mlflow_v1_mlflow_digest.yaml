@@ -67,8 +67,8 @@ spec:
 # - Reproducibility - critical for production deployments and compliance
 #
 # To get the digest of an image:
-#   docker pull quay.io/opendatahub/mlflow:latest
-#   docker inspect quay.io/opendatahub/mlflow:latest | grep RepoDigests
+#   docker pull quay.io/opendatahub/mlflow:master
+#   docker inspect quay.io/opendatahub/mlflow:master | grep RepoDigests
 #
 # Or using skopeo:
-#   skopeo inspect docker://quay.io/opendatahub/mlflow:latest | grep Digest
+#   skopeo inspect docker://quay.io/opendatahub/mlflow:master | grep Digest
