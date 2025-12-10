@@ -2,6 +2,8 @@ module github.com/opendatahub-io/mlflow-operator
 
 go 1.24.6
 
+require github.com/opendatahub-io/mlflow-operator/api v0.0.0
+
 require (
 	github.com/onsi/ginkgo/v2 v2.27.2
 	github.com/onsi/gomega v1.38.2
@@ -123,3 +125,5 @@ require (
 	sigs.k8s.io/structured-merge-diff/v6 v6.3.0 // indirect
 	sigs.k8s.io/yaml v1.6.0 // indirect
 )
+
+replace github.com/opendatahub-io/mlflow-operator/api => ./api
