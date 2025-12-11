@@ -34,7 +34,9 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	mlflowv1 "github.com/opendatahub-io/mlflow-operator/api/v1"
@@ -123,10 +125,21 @@ func (r *MLflowReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	for _, obj := range objects {
 		// MLflow CR is cluster-scoped so set owner reference for all resources
 		if obj.GetKind() != "Namespace" {
-			if err := controllerutil.SetControllerReference(mlflow, obj, r.Scheme); err != nil {
-				log.Error(err, "Failed to set controller reference", "object", obj.GetKind(), "name", obj.GetName())
-				// Continue with other objects
-				continue
+			// For the shared "mlflow" ClusterRole, append owner references instead of using
+			// SetControllerReference which only allows one controller owner. This allows
+			// multiple MLflow instances to share the same ClusterRole.
+			if obj.GetKind() == "ClusterRole" && obj.GetName() == ClusterRoleName {
+				if err := r.appendOwnerReference(ctx, mlflow, obj); err != nil {
+					log.Error(err, "Failed to append owner reference", "object", obj.GetKind(), "name", obj.GetName())
+					// Continue with other objects
+					continue
+				}
+			} else {
+				if err := controllerutil.SetControllerReference(mlflow, obj, r.Scheme); err != nil {
+					log.Error(err, "Failed to set controller reference", "object", obj.GetKind(), "name", obj.GetName())
+					// Continue with other objects
+					continue
+				}
 			}
 		}
 
@@ -183,7 +196,7 @@ func (r *MLflowReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	}
 
 	// Get deployment name using the resource suffix
-	deploymentName := "mlflow" + getResourceSuffix(mlflow.Name)
+	deploymentName := ResourceName + getResourceSuffix(mlflow.Name)
 
 	// Check deployment readiness
 	deployment := &appsv1.Deployment{}
@@ -291,7 +304,11 @@ func (r *MLflowReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Owns(&corev1.Service{}).
 		Owns(&corev1.ServiceAccount{}).
 		Owns(&corev1.PersistentVolumeClaim{}).
-		Owns(&rbacv1.ClusterRole{}).
+		// For the shared ClusterRole, we use Watches instead of Owns because:
+		// 1. The ClusterRole has multiple non-controller owner references (one per MLflow instance)
+		// 2. Owns() only triggers on controller owner references
+		// This handler enqueues all MLflow instances listed in the owner references
+		Watches(&rbacv1.ClusterRole{}, handler.EnqueueRequestsFromMapFunc(r.clusterRoleToMLflowRequests)).
 		Owns(&rbacv1.ClusterRoleBinding{})
 
 	// Conditionally watch ConsoleLink if available in the cluster
@@ -313,6 +330,28 @@ func (r *MLflowReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return builder.Complete(r)
 }
 
+// clusterRoleToMLflowRequests maps ClusterRole events to MLflow reconcile requests.
+// Since the shared ClusterRole can have multiple MLflow owner references (not controller refs),
+// we need to manually extract and enqueue all referenced MLflow instances.
+func (r *MLflowReconciler) clusterRoleToMLflowRequests(ctx context.Context, obj client.Object) []reconcile.Request {
+	// Only handle the shared ClusterRole
+	if obj.GetName() != ClusterRoleName {
+		return nil
+	}
+
+	var requests []reconcile.Request
+	for _, ownerRef := range obj.GetOwnerReferences() {
+		if ownerRef.APIVersion == mlflowv1.GroupVersion.String() && ownerRef.Kind == "MLflow" {
+			requests = append(requests, reconcile.Request{
+				NamespacedName: types.NamespacedName{
+					Name: ownerRef.Name,
+				},
+			})
+		}
+	}
+	return requests
+}
+
 // updateStatus updates the MLflow status with retry on conflict
 func (r *MLflowReconciler) updateStatus(ctx context.Context, mlflow *mlflowv1.MLflow) error {
 	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
@@ -326,4 +365,49 @@ func (r *MLflowReconciler) updateStatus(ctx context.Context, mlflow *mlflowv1.ML
 		// Update the status
 		return r.Status().Update(ctx, latest)
 	})
+}
+
+// appendOwnerReference appends an owner reference to the object without removing existing ones.
+// This is used for shared resources like ClusterRole where multiple MLflow instances may reference the same resource.
+// Unlike SetControllerReference, this allows multiple owners (but none are marked as controller).
+// It fetches the existing object from the cluster to preserve owner references from other MLflow instances.
+func (r *MLflowReconciler) appendOwnerReference(ctx context.Context, mlflow *mlflowv1.MLflow, obj client.Object) error {
+	// Build the owner reference for this MLflow instance
+	gvk := mlflowv1.GroupVersion.WithKind("MLflow")
+	ownerRef := metav1.OwnerReference{
+		APIVersion: gvk.GroupVersion().String(),
+		Kind:       gvk.Kind,
+		Name:       mlflow.Name,
+		UID:        mlflow.UID,
+	}
+
+	// Try to get the existing object from the cluster to preserve its owner references
+	existing := obj.DeepCopyObject().(client.Object)
+	err := r.Get(ctx, client.ObjectKeyFromObject(obj), existing)
+	if err != nil {
+		if !errors.IsNotFound(err) {
+			return err
+		}
+		// Object doesn't exist yet, just set this owner reference
+		obj.SetOwnerReferences([]metav1.OwnerReference{ownerRef})
+		return nil
+	}
+
+	// Get existing owner references from the cluster object
+	existingRefs := existing.GetOwnerReferences()
+
+	// Check if this owner reference already exists
+	for _, ref := range existingRefs {
+		if ref.UID == ownerRef.UID {
+			// Already exists, set the existing refs on the object to apply
+			obj.SetOwnerReferences(existingRefs)
+			return nil
+		}
+	}
+
+	// Append the new owner reference
+	existingRefs = append(existingRefs, ownerRef)
+	obj.SetOwnerReferences(existingRefs)
+
+	return nil
 }

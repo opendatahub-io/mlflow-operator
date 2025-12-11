@@ -17,6 +17,10 @@ limitations under the License.
 package controller
 
 const (
+	// ResourceName is the base name used for MLflow resources (deployments, services, etc.)
+	ResourceName = "mlflow"
+	// ClusterRoleName is the name of the shared ClusterRole used by all MLflow instances
+	ClusterRoleName = "mlflow"
 	// ServiceAccountName is the name of the service account for MLflow deployments
 	ServiceAccountName = "mlflow-sa"
 	// TLSSecretName is the default name for the TLS secret used by kube-rbac-proxy
