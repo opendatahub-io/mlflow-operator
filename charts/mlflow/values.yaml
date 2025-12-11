@@ -133,6 +133,7 @@ mlflow:
   # Allowed hosts (will be generated based on routes/services)
   allowedHosts: []
   # Static URL prefix for MLflow (e.g., "/mlflow" for proxied deployments)
+  # This also gets set as the --root-path for uvicorn in the deployment template.
   # Leave empty for direct access without a prefix
   staticPrefix: ""
 

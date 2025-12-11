@@ -1080,6 +1080,18 @@ func TestRenderChart(t *testing.T) {
 						if !hasAllowedHosts {
 							t.Error("--allowed-hosts not found in deployment args")
 						}
+
+						expectedRootPathArg := "--uvicorn-opts=--root-path=" + StaticPrefix
+						hasRootPathArg := false
+						for _, arg := range args {
+							if arg == expectedRootPathArg {
+								hasRootPathArg = true
+								break
+							}
+						}
+						if !hasRootPathArg {
+							t.Errorf("%s not found in deployment args", expectedRootPathArg)
+						}
 					}
 				}
 			},
