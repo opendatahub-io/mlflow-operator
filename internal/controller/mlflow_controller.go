@@ -41,8 +41,7 @@ import (
 )
 
 const (
-	mlflowFinalizer = "mlflow.opendatahub.io/finalizer"
-	chartPath       = "charts/mlflow"
+	chartPath = "charts/mlflow"
 )
 
 // MLflowReconciler reconciles a MLflow object
@@ -88,27 +87,9 @@ func (r *MLflowReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	// Use configured target namespace
 	targetNamespace := r.Namespace
 
-	// Handle deletion
+	// Handle deletion - all resources are cleaned up via owner references
 	if mlflow.GetDeletionTimestamp() != nil {
-		if controllerutil.ContainsFinalizer(mlflow, mlflowFinalizer) {
-			if err := r.cleanupResources(ctx, mlflow, targetNamespace); err != nil {
-				log.Error(err, "Failed to cleanup resources")
-				return ctrl.Result{}, err
-			}
-			controllerutil.RemoveFinalizer(mlflow, mlflowFinalizer)
-			if err := r.Update(ctx, mlflow); err != nil {
-				return ctrl.Result{}, err
-			}
-		}
 		return ctrl.Result{}, nil
-	}
-
-	// Add finalizer if not present
-	if !controllerutil.ContainsFinalizer(mlflow, mlflowFinalizer) {
-		controllerutil.AddFinalizer(mlflow, mlflowFinalizer)
-		if err := r.Update(ctx, mlflow); err != nil {
-			return ctrl.Result{}, err
-		}
 	}
 
 	// Render Helm chart
@@ -140,8 +121,8 @@ func (r *MLflowReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 
 	// Apply rendered manifests
 	for _, obj := range objects {
-		// Set owner reference for namespaced resources (except namespace itself)
-		if obj.GetKind() != "Namespace" && obj.GetKind() != "ClusterRole" && obj.GetKind() != "ClusterRoleBinding" {
+		// MLflow CR is cluster-scoped so set owner reference for all resources
+		if obj.GetKind() != "Namespace" {
 			if err := controllerutil.SetControllerReference(mlflow, obj, r.Scheme); err != nil {
 				log.Error(err, "Failed to set controller reference", "object", obj.GetKind(), "name", obj.GetName())
 				// Continue with other objects
@@ -299,38 +280,6 @@ func (r *MLflowReconciler) applyObject(ctx context.Context, obj client.Object) e
 	return nil
 }
 
-// cleanupResources cleans up resources when MLflow is deleted
-// nolint:unparam // error return is kept for consistency with reconciler pattern, cleanup is best-effort
-func (r *MLflowReconciler) cleanupResources(ctx context.Context, mlflow *mlflowv1.MLflow, namespace string) error {
-	log := logf.FromContext(ctx)
-	log.Info("Cleaning up MLflow resources", "namespace", namespace)
-
-	// Most resources will be automatically deleted via owner references
-	// Here we clean up cluster-scoped resources that don't have owner references
-
-	// Delete ClusterRole
-	clusterRole := &rbacv1.ClusterRole{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: getClusterRoleName(mlflow.Name),
-		},
-	}
-	if err := r.Delete(ctx, clusterRole); err != nil && !errors.IsNotFound(err) {
-		log.Error(err, "Failed to delete ClusterRole")
-	}
-
-	// Delete ClusterRoleBinding
-	clusterRoleBinding := &rbacv1.ClusterRoleBinding{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: getClusterRoleBindingName(mlflow.Name),
-		},
-	}
-	if err := r.Delete(ctx, clusterRoleBinding); err != nil && !errors.IsNotFound(err) {
-		log.Error(err, "Failed to delete ClusterRoleBinding")
-	}
-
-	return nil
-}
-
 // SetupWithManager sets up the controller with the Manager.
 func (r *MLflowReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	log := ctrl.Log.WithName("setup")
@@ -341,7 +290,9 @@ func (r *MLflowReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Owns(&corev1.Secret{}).
 		Owns(&corev1.Service{}).
 		Owns(&corev1.ServiceAccount{}).
-		Owns(&corev1.PersistentVolumeClaim{})
+		Owns(&corev1.PersistentVolumeClaim{}).
+		Owns(&rbacv1.ClusterRole{}).
+		Owns(&rbacv1.ClusterRoleBinding{})
 
 	// Conditionally watch ConsoleLink if available in the cluster
 	if r.ConsoleLinkAvailable {

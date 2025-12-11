@@ -30,6 +30,7 @@ import (
 	consolev1 "github.com/openshift/api/console/v1"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
@@ -158,6 +159,8 @@ func main() {
 		&corev1.Service{}:               {Label: labelSelector},
 		&corev1.ServiceAccount{}:        {Label: labelSelector},
 		&corev1.PersistentVolumeClaim{}: {Label: labelSelector},
+		&rbacv1.ClusterRole{}:           {Label: labelSelector},
+		&rbacv1.ClusterRoleBinding{}:    {Label: labelSelector},
 	}
 
 	// Conditionally add ConsoleLink to cache if available

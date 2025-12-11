@@ -24,15 +24,3 @@ const (
 	// StaticPrefix is the URL prefix for MLflow when deployed via the operator (required for kube-rbac-proxy routing)
 	StaticPrefix = "/mlflow"
 )
-
-// getClusterRoleName returns the ClusterRole name for a given MLflow instance.
-// Pattern: mlflow-sa-mlflow{{ suffix }}
-func getClusterRoleName(mlflowName string) string {
-	return "mlflow" + getResourceSuffix(mlflowName)
-}
-
-// getClusterRoleBindingName returns the ClusterRoleBinding name for a given MLflow instance.
-// Pattern: mlflow-sa-mlflow{{ suffix }}
-func getClusterRoleBindingName(mlflowName string) string {
-	return "mlflow" + getResourceSuffix(mlflowName)
-}
