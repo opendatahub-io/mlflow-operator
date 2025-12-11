@@ -46,7 +46,7 @@ const (
 // Returns empty string for CR named "mlflow", otherwise returns "-{crname}".
 // All resources are named as "mlflow{{ suffix }}".
 func getResourceSuffix(mlflowName string) string {
-	if mlflowName == "mlflow" {
+	if mlflowName == ResourceName {
 		return ""
 	}
 	return "-" + mlflowName

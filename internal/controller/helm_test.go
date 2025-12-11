@@ -1085,7 +1085,7 @@ func TestRenderChart(t *testing.T) {
 			},
 		},
 		{
-			name: "RBAC resources should use resourceSuffix naming pattern",
+			name: "RBAC resources should use static ClusterRole name and resourceSuffix for ClusterRoleBinding",
 			mlflow: &mlflowv1.MLflow{
 				ObjectMeta: metav1.ObjectMeta{
 					Name: "my-instance",
@@ -1100,7 +1100,9 @@ func TestRenderChart(t *testing.T) {
 			wantErr:   false,
 			validateObjs: func(t *testing.T, objs []*unstructured.Unstructured) {
 				expectedSuffix := "-my-instance"
-				expectedName := "mlflow" + expectedSuffix
+				expectedBindingName := "mlflow" + expectedSuffix
+				// ClusterRole is static (shared across all instances)
+				expectedClusterRoleName := "mlflow"
 
 				foundClusterRole := false
 				foundClusterRoleBinding := false
@@ -1109,21 +1111,21 @@ func TestRenderChart(t *testing.T) {
 					switch obj.GetKind() {
 					case "ClusterRole":
 						foundClusterRole = true
-						if obj.GetName() != expectedName {
-							t.Errorf("ClusterRole name = %s, want %s (should not include service account name)", obj.GetName(), expectedName)
+						if obj.GetName() != expectedClusterRoleName {
+							t.Errorf("ClusterRole name = %s, want %s (should be static, shared across all MLflow instances)", obj.GetName(), expectedClusterRoleName)
 						}
 					case "ClusterRoleBinding":
 						foundClusterRoleBinding = true
-						if obj.GetName() != expectedName {
-							t.Errorf("ClusterRoleBinding name = %s, want %s (should not include service account name)", obj.GetName(), expectedName)
+						if obj.GetName() != expectedBindingName {
+							t.Errorf("ClusterRoleBinding name = %s, want %s (should include resourceSuffix)", obj.GetName(), expectedBindingName)
 						}
-						// Verify it references the correct ClusterRole
+						// Verify it references the static ClusterRole
 						roleRef, found, err := unstructured.NestedString(obj.Object, "roleRef", "name")
 						if err != nil || !found {
 							t.Fatalf("Failed to get roleRef.name from ClusterRoleBinding: found=%v, err=%v", found, err)
 						}
-						if roleRef != expectedName {
-							t.Errorf("ClusterRoleBinding roleRef.name = %s, want %s", roleRef, expectedName)
+						if roleRef != expectedClusterRoleName {
+							t.Errorf("ClusterRoleBinding roleRef.name = %s, want %s", roleRef, expectedClusterRoleName)
 						}
 					}
 				}
