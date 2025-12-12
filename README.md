@@ -66,6 +66,26 @@ make deploy IMG=<some-registry>/mlflow-operator:tag
 
 > **NOTE**: If you encounter RBAC errors, you may need cluster-admin privileges.
 
+**Option 3: Deploy to Open Data Hub or Red Hat OpenShift AI platform**
+
+If Open Data Hub (ODH) or Red Hat OpenShift AI (RHOAI) is already installed on your cluster, you can use the `deploy-to-platform` target. This command automatically fetches the gateway hostname from the cluster and configures the operator to use it:
+
+```sh
+make deploy-to-platform IMG=<some-registry>/mlflow-operator:tag PLATFORM=rhoai # or PLATFORM=odh by default
+```
+
+This command:
+1. Fetches the data-science-gateway hostname from the `openshift-ingress` namespace
+2. Updates the `mlflow-url` in `config/base/params.env` to use `https://<gateway-hostname>`
+3. Deploys the operator with the correct gateway configuration
+
+> **IMPORTANT**: The ODH/RHOAI gateway must already exist for the HTTPRoute to work correctly. This target is only for clusters where ODH or RHOAI is already installed and the `data-science-gateway` Gateway resource is present.
+
+You can customize the gateway name and namespace if needed:
+```sh
+make deploy-to-platform ODH_GATEWAY_NAME=my-gateway ODH_GATEWAY_NAMESPACE=my-namespace IMG=<some-registry>/mlflow-operator:tag
+```
+
 **Create MLflow instances**
 
 > **NOTE**: The target namespace must already exist. The operator does not create namespaces.
