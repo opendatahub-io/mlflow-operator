@@ -99,7 +99,6 @@ spec:
             {{- end }}
             {{- if .Values.mlflow.staticPrefix }}
             - --static-prefix={{ .Values.mlflow.staticPrefix }}
-            - --uvicorn-opts=--root-path={{ .Values.mlflow.staticPrefix }}
             {{- end }}
           env:
             - name: MLFLOW_BACKEND_STORE_URI
