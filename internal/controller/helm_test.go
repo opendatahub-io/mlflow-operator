@@ -203,8 +203,8 @@ func TestMlflowToHelmValues_MLflowConfig(t *testing.T) {
 			wantBackendStoreURI:      defaultBackendStoreURI,
 			wantRegistryStoreURI:     defaultBackendStoreURI, // Registry defaults to backend
 			wantArtifactsDestination: defaultArtifactsDest,
-			wantDefaultArtifactRoot:  defaultArtifactsDest, // Defaults to artifactsDestination
-			wantServeArtifacts:       false,                // Default is now false
+			wantDefaultArtifactRoot:  "", // Empty - let MLflow use its intelligent defaults
+			wantServeArtifacts:       false,
 			wantWorkers:              1,
 			wantBackendSecretRef:     false,
 			wantRegistrySecretRef:    false,
@@ -222,8 +222,8 @@ func TestMlflowToHelmValues_MLflowConfig(t *testing.T) {
 			wantBackendStoreURI:      "postgresql://host/db",
 			wantRegistryStoreURI:     "postgresql://host/registry",
 			wantArtifactsDestination: "s3://bucket/artifacts",
-			wantDefaultArtifactRoot:  "s3://bucket/artifacts", // Defaults to artifactsDestination
-			wantServeArtifacts:       false,                   // Default is now false
+			wantDefaultArtifactRoot:  "", // Empty - let MLflow use its intelligent defaults
+			wantServeArtifacts:       false,
 			wantWorkers:              1,
 			wantBackendSecretRef:     false,
 			wantRegistrySecretRef:    false,
@@ -241,7 +241,7 @@ func TestMlflowToHelmValues_MLflowConfig(t *testing.T) {
 			wantBackendStoreURI:      "postgresql://host/db",
 			wantRegistryStoreURI:     "postgresql://host/db", // Should default to backend
 			wantArtifactsDestination: "s3://bucket/artifacts",
-			wantDefaultArtifactRoot:  "s3://bucket/artifacts",
+			wantDefaultArtifactRoot:  "", // Empty - let MLflow use its intelligent defaults
 			wantServeArtifacts:       false,
 			wantWorkers:              1,
 			wantBackendSecretRef:     false,
@@ -259,7 +259,7 @@ func TestMlflowToHelmValues_MLflowConfig(t *testing.T) {
 			wantBackendStoreURI:      defaultBackendStoreURI,
 			wantRegistryStoreURI:     defaultBackendStoreURI, // Registry defaults to backend
 			wantArtifactsDestination: defaultArtifactsDest,
-			wantDefaultArtifactRoot:  defaultArtifactsDest, // Defaults to artifactsDestination
+			wantDefaultArtifactRoot:  "", // Empty - let MLflow use its intelligent defaults
 			wantServeArtifacts:       false,
 			wantWorkers:              4,
 			wantBackendSecretRef:     false,
@@ -283,8 +283,8 @@ func TestMlflowToHelmValues_MLflowConfig(t *testing.T) {
 			wantBackendStoreURI:      defaultBackendStoreURI, // Falls back to default when using secret ref
 			wantRegistryStoreURI:     defaultBackendStoreURI, // Registry defaults to backend
 			wantArtifactsDestination: defaultArtifactsDest,
-			wantDefaultArtifactRoot:  defaultArtifactsDest, // Defaults to artifactsDestination
-			wantServeArtifacts:       false,                // Default is now false
+			wantDefaultArtifactRoot:  "", // Empty - let MLflow use its intelligent defaults
+			wantServeArtifacts:       false,
 			wantWorkers:              1,
 			wantBackendSecretRef:     true,
 			wantRegistrySecretRef:    true,
@@ -304,8 +304,8 @@ func TestMlflowToHelmValues_MLflowConfig(t *testing.T) {
 			wantBackendStoreURI:      defaultBackendStoreURI, // Direct value ignored when secret ref present
 			wantRegistryStoreURI:     defaultBackendStoreURI, // Registry defaults to backend
 			wantArtifactsDestination: defaultArtifactsDest,
-			wantDefaultArtifactRoot:  defaultArtifactsDest, // Defaults to artifactsDestination
-			wantServeArtifacts:       false,                // Default is now false
+			wantDefaultArtifactRoot:  "", // Empty - let MLflow use its intelligent defaults
+			wantServeArtifacts:       false,
 			wantWorkers:              1,
 			wantBackendSecretRef:     true,
 			wantRegistrySecretRef:    true, // Should inherit backend secret ref
