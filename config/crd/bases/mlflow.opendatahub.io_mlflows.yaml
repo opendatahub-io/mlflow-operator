@@ -1018,9 +1018,8 @@ spec:
                 x-kubernetes-map-type: atomic
               defaultArtifactRoot:
                 description: |-
-                  DefaultArtifactRoot is the default artifact root path for MLflow runs.
-                  This is used when a run doesn't specify an artifact location.
-                  If not specified, defaults to artifactsDestination value.
+                  DefaultArtifactRoot is the default artifact root path for MLflow runs on the server.
+                  This is required when serveArtifacts is false.
                   Supported schemes: file://, s3://, gs://, wasbs://, hdfs://, etc.
                   Examples:
                     - "s3://my-bucket/mlflow/artifacts"
@@ -2112,6 +2111,10 @@ spec:
                 type: integer
             type: object
             x-kubernetes-validations:
+            - message: defaultArtifactRoot must be set when serveArtifacts is not
+                true
+              rule: has(self.defaultArtifactRoot) || (has(self.serveArtifacts) &&
+                self.serveArtifacts)
             - message: serveArtifacts must be enabled when defaultArtifactRoot uses
                 file-based storage (file:// prefix)
               rule: '!has(self.defaultArtifactRoot) || !self.defaultArtifactRoot.startsWith(''file://'')

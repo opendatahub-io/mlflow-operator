@@ -22,6 +22,7 @@ import (
 )
 
 // MLflowSpec defines the desired state of MLflow
+// +kubebuilder:validation:XValidation:rule="has(self.defaultArtifactRoot) || (has(self.serveArtifacts) && self.serveArtifacts)",message="defaultArtifactRoot must be set when serveArtifacts is not true"
 // +kubebuilder:validation:XValidation:rule="!has(self.defaultArtifactRoot) || !self.defaultArtifactRoot.startsWith('file://') || (has(self.serveArtifacts) && self.serveArtifacts)",message="serveArtifacts must be enabled when defaultArtifactRoot uses file-based storage (file:// prefix)"
 // +kubebuilder:validation:XValidation:rule="!(has(self.backendStoreUri) && has(self.backendStoreUriFrom))",message="backendStoreUri and backendStoreUriFrom are mutually exclusive"
 // +kubebuilder:validation:XValidation:rule="!(has(self.registryStoreUri) && has(self.registryStoreUriFrom))",message="registryStoreUri and registryStoreUriFrom are mutually exclusive"
@@ -123,9 +124,8 @@ type MLflowSpec struct {
 	// +optional
 	ArtifactsDestination *string `json:"artifactsDestination,omitempty"`
 
-	// DefaultArtifactRoot is the default artifact root path for MLflow runs.
-	// This is used when a run doesn't specify an artifact location.
-	// If not specified, defaults to artifactsDestination value.
+	// DefaultArtifactRoot is the default artifact root path for MLflow runs on the server.
+	// This is required when serveArtifacts is false.
 	// Supported schemes: file://, s3://, gs://, wasbs://, hdfs://, etc.
 	// Examples:
 	//   - "s3://my-bucket/mlflow/artifacts"
@@ -219,7 +219,6 @@ type ImageConfig struct {
 
 // MLflowStatus defines the observed state of MLflow.
 type MLflowStatus struct {
-
 	// conditions represent the current state of the MLflow resource.
 	// Each condition has a unique type and reflects the status of a specific aspect of the resource.
 	//

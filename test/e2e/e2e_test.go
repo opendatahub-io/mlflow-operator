@@ -287,7 +287,12 @@ var _ = Describe("Manager", Ordered, func() {
 kind: MLflow
 metadata:
   name: mlflow
-spec: {}`
+spec:
+  serveArtifacts: true
+  artifactsDestination: s3://mlflow-artifacts/test
+  defaultArtifactRoot: s3://mlflow-artifacts/test-root
+  backendStoreUri: postgresql://user:pass@db:5432/mlflow
+  registryStoreUri: postgresql://user:pass@db:5432/mlflow`
 
 			mlflowFile := filepath.Join("/tmp", "mlflow-valid.yaml")
 			err := os.WriteFile(mlflowFile, []byte(mlflowYAML), os.FileMode(0o644))
@@ -313,7 +318,12 @@ spec: {}`
 kind: MLflow
 metadata:
   name: invalid-name
-spec: {}`
+spec:
+  serveArtifacts: true
+  artifactsDestination: s3://mlflow-artifacts/test
+  defaultArtifactRoot: s3://mlflow-artifacts/test-root
+  backendStoreUri: postgresql://user:pass@db:5432/mlflow
+  registryStoreUri: postgresql://user:pass@db:5432/mlflow`
 
 			invalidFile := filepath.Join("/tmp", "mlflow-invalid.yaml")
 			err = os.WriteFile(invalidFile, []byte(invalidYAML), os.FileMode(0o644))
