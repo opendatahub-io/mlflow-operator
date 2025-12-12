@@ -34,6 +34,8 @@ import (
 )
 
 var _ = Describe("MLflow Controller", func() {
+	pgStoreURI := "postgresql://user:pass@host:5432/db"
+
 	Context("When reconciling a resource", func() {
 		const resourceName = "mlflow"
 
@@ -65,6 +67,10 @@ var _ = Describe("MLflow Controller", func() {
 						Name: resourceName,
 					},
 					Spec: mlflowv1.MLflowSpec{
+						DefaultArtifactRoot: func() *string {
+							val := "s3://default/artifacts"
+							return &val
+						}(),
 						KubeRbacProxy: &mlflowv1.KubeRbacProxyConfig{
 							Enabled: &disabled,
 						},
@@ -161,6 +167,53 @@ var _ = Describe("MLflow Controller", func() {
 			Expect(rootRule.Matches[0].Path).NotTo(BeNil())
 			Expect(rootRule.Matches[0].Path.Value).NotTo(BeNil())
 			Expect(*rootRule.Matches[0].Path.Value).To(Equal("/" + ResourceName))
+		})
+	})
+
+	Describe("CEL validation", func() {
+		const resourceName = "mlflow"
+		ctx := context.Background()
+
+		AfterEach(func() {
+			resource := &mlflowv1.MLflow{}
+			err := k8sClient.Get(ctx, types.NamespacedName{Name: resourceName}, resource)
+			if errors.IsNotFound(err) {
+				return
+			}
+			Expect(err).NotTo(HaveOccurred())
+			Expect(k8sClient.Delete(ctx, resource)).To(Succeed())
+		})
+
+		It("rejects when serveArtifacts is false and defaultArtifactRoot is missing", func() {
+			serveArtifactsFalse := false
+			mlflow := &mlflowv1.MLflow{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: resourceName,
+				},
+				Spec: mlflowv1.MLflowSpec{
+					ServeArtifacts:   &serveArtifactsFalse,
+					BackendStoreURI:  &pgStoreURI,
+					RegistryStoreURI: &pgStoreURI,
+				},
+			}
+			err := k8sClient.Create(ctx, mlflow)
+			Expect(errors.IsInvalid(err)).To(BeTrue())
+			Expect(err.Error()).To(ContainSubstring("defaultArtifactRoot must be set"))
+		})
+
+		It("allows missing defaultArtifactRoot when serveArtifacts is true", func() {
+			serveArtifactsTrue := true
+			mlflow := &mlflowv1.MLflow{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: resourceName,
+				},
+				Spec: mlflowv1.MLflowSpec{
+					ServeArtifacts:   &serveArtifactsTrue,
+					BackendStoreURI:  &pgStoreURI,
+					RegistryStoreURI: &pgStoreURI,
+				},
+			}
+			Expect(k8sClient.Create(ctx, mlflow)).To(Succeed())
 		})
 	})
 })
