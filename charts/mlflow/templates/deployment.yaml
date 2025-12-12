@@ -66,7 +66,7 @@ spec:
             defaultMode: 420
         - name: proxy-config
           configMap:
-            name: kube-rbac-proxy-config{{ .Values.resourceSuffix }}
+            name: mlflow-kube-rbac-proxy-config{{ .Values.resourceSuffix }}
         {{- end }}
       containers:
         - name: mlflow
