@@ -275,8 +275,11 @@ func (h *HelmRenderer) mlflowToHelmValues(mlflow *mlflowv1.MLflow, namespace str
 		artifactsDest = *mlflow.Spec.ArtifactsDestination
 	}
 
-	// DefaultArtifactRoot: if not specified, defaults to artifactsDestination
-	defaultArtifactRoot := artifactsDest
+	// DefaultArtifactRoot: only set if user explicitly specifies it
+	// When unset, MLflow uses intelligent defaults based on --serve-artifacts:
+	// - If --serve-artifacts is enabled (default): uses mlflow-artifacts:/ URI proxy
+	// - If --serve-artifacts is disabled: uses ./mlruns
+	var defaultArtifactRoot string
 	if mlflow.Spec.DefaultArtifactRoot != nil {
 		defaultArtifactRoot = *mlflow.Spec.DefaultArtifactRoot
 	}
