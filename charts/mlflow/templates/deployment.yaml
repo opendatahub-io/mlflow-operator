@@ -64,6 +64,9 @@ spec:
           secret:
             secretName: {{ .Values.kubeRbacProxy.tls.secretName }}
             defaultMode: 420
+        - name: proxy-config
+          configMap:
+            name: kube-rbac-proxy-config{{ .Values.resourceSuffix }}
         {{- end }}
       containers:
         - name: mlflow
@@ -180,6 +183,7 @@ spec:
             - --upstream=http://mlflow{{ .Values.resourceSuffix }}.{{ .Values.namespace }}.svc:{{ .Values.service.directPort }}/
             - --tls-cert-file=/etc/tls/private/tls.crt
             - --tls-private-key-file=/etc/tls/private/tls.key
+            - --config-file=/etc/kube-rbac-proxy/config.yaml
             - --auth-header-fields-enabled
             - --ignore-paths=/healthz,/health
           ports:
@@ -190,6 +194,9 @@ spec:
           volumeMounts:
             - name: proxy-tls
               mountPath: /etc/tls/private
+              readOnly: true
+            - name: proxy-config
+              mountPath: /etc/kube-rbac-proxy
               readOnly: true
           securityContext:
             allowPrivilegeEscalation: false
