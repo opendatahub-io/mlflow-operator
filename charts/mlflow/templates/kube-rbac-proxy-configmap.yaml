@@ -2,7 +2,7 @@
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: kube-rbac-proxy-config{{ .Values.resourceSuffix }}
+  name: mlflow-kube-rbac-proxy-config{{ .Values.resourceSuffix }}
   namespace: {{ .Values.namespace }}
   labels:
     app: mlflow
