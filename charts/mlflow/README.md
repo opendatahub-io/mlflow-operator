@@ -72,7 +72,7 @@ This is the intended behavior: kube-rbac-proxy acts as an authentication gateway
 
 ### Configuration Reference
 
-The proxy configuration is stored in a ConfigMap (`kube-rbac-proxy-config`) and mounted into the sidecar container. The relevant values are:
+The proxy configuration is stored in a ConfigMap (`mlflow-kube-rbac-proxy-config`) and mounted into the sidecar container. The relevant values are:
 
 | Value | Description | Default |
 |-------|-------------|---------|
