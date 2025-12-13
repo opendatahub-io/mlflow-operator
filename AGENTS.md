@@ -118,21 +118,18 @@ charts/mlflow/
     ├── serviceaccount.yaml
     ├── rbac.yaml
     ├── pvc.yaml
-    ├── deployment.yaml           # Includes kube-auth-proxy sidecar on OpenShift
-    ├── service.yaml
-    ├── service-direct.yaml
-    └── route.yaml                # OpenShift only
+    ├── deployment.yaml           # MLflow server with kubernetes-auth and TLS
+    └── service.yaml
 ```
 
 ### OpenShift Integration
 
 When deploying on OpenShift (`openShift.enabled: true`), the deployment includes:
 
-- **kube-rbac-proxy sidecar**: Provides RBAC-based authentication and authorization
-- **OpenShift Route**: Exposes MLflow UI with TLS termination
+- **In-pod TLS**: Uvicorn terminates TLS using the service-ca-generated secret
 - **Service CA**: Automatically provisions TLS certificates
 
-The kube-rbac-proxy sidecar sits in front of the MLflow server and validates user permissions against Kubernetes RBAC before proxying requests to the upstream MLflow server.
+The Helm chart does not create an OpenShift Route. Create your own Route if you need external exposure on OpenShift.
 
 ### Customizing Values
 
@@ -226,12 +223,11 @@ The `config/samples/` directory contains example MLflow custom resource configur
 1. **mlflow_v1_mlflow.yaml** - Default configuration
    - OpenShift deployment with service-ca certificates
    - Local storage (SQLite + file-based artifacts)
-   - kube-rbac-proxy enabled with auto TLS
+   - TLS terminated by MLflow (uvicorn) using service-ca certs
 
 2. **mlflow_v1_mlflow_minimal.yaml** - Minimal configuration
-   - Direct access without kube-rbac-proxy
    - Local storage with minimal resources
-   - Suitable for development/testing only (no auth)
+   - Suitable for development/testing
 
 3. **mlflow_v1_mlflow_manual_tls.yaml** - Manual TLS configuration
    - Vanilla Kubernetes deployment
@@ -246,7 +242,7 @@ The `config/samples/` directory contains example MLflow custom resource configur
 
 5. **mlflow_v1_mlflow_digest.yaml** - Digest-based images
    - Uses SHA256 image digests for reproducibility
-   - Shows both MLflow and kube-rbac-proxy with digests
+   - Shows MLflow image by digest
    - Includes instructions for obtaining digests
 
 **When to update samples:**

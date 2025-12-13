@@ -3,20 +3,6 @@ kind: MLflow
 metadata:
   name: mlflow
 spec:
-  # Kube RBAC Proxy configuration (authentication proxy)
-  kubeRbacProxy:
-    enabled: true
-    image:
-      image: "quay.io/opendatahub/odh-kube-auth-proxy:latest"
-      imagePullPolicy: IfNotPresent
-    resources:
-      requests:
-        cpu: "100m"
-        memory: "256Mi"
-      limits:
-        cpu: "100m"
-        memory: "256Mi"
-
   # MLflow container image
   image:
     image: quay.io/opendatahub/mlflow:master

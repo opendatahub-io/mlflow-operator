@@ -30,18 +30,6 @@ replacements:
     fieldPaths:
     - spec.template.spec.containers.[name=manager].env.[name=MLFLOW_IMAGE].value
 
-# Replace KUBE_AUTH_PROXY_IMAGE env var
-- source:
-    kind: ConfigMap
-    name: operator-params
-    fieldPath: data.KUBE_AUTH_PROXY_IMAGE
-  targets:
-  - select:
-      kind: Deployment
-      name: controller-manager
-    fieldPaths:
-    - spec.template.spec.containers.[name=manager].env.[name=KUBE_AUTH_PROXY_IMAGE].value
-
 # Replace GATEWAY_NAME env var
 - source:
     kind: ConfigMap

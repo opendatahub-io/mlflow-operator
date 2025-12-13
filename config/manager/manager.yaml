@@ -38,8 +38,6 @@ spec:
         env:
         - name: MLFLOW_IMAGE
           value: placeholder-mlflow-image
-        - name: KUBE_AUTH_PROXY_IMAGE
-          value: placeholder-kube-auth-proxy-image
         - name: GATEWAY_NAME
           value: placeholder-gateway-name
         - name: MLFLOW_URL

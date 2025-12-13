@@ -59,15 +59,10 @@ spec:
           persistentVolumeClaim:
             claimName: mlflow-pvc{{ .Values.resourceSuffix }}
         {{- end }}
-        {{- if and .Values.kubeRbacProxy .Values.kubeRbacProxy.enabled }}
-        - name: proxy-tls
+        - name: mlflow-tls
           secret:
-            secretName: {{ .Values.kubeRbacProxy.tls.secretName }}
+            secretName: {{ .Values.tls.secretName }}
             defaultMode: 420
-        - name: proxy-config
-          configMap:
-            name: mlflow-kube-rbac-proxy-config{{ .Values.resourceSuffix }}
-        {{- end }}
       containers:
         - name: mlflow
           image: {{ .Values.image.name }}
@@ -93,6 +88,7 @@ spec:
             - --host=0.0.0.0
             - --port={{ .Values.mlflow.port }}
             - --workers={{ .Values.mlflow.workers }}
+            - "--uvicorn-opts=--ssl-keyfile=/etc/tls/private/tls.key --ssl-certfile=/etc/tls/private/tls.crt --proxy-headers"
             {{- if .Values.mlflow.allowedHosts }}
             - --allowed-hosts
             - "{{ join "," .Values.mlflow.allowedHosts }}"
@@ -117,10 +113,8 @@ spec:
               value: {{ .Values.mlflow.registryStoreUri | quote }}
               {{- end }}
             {{- end }}
-            {{- if and .Values.kubeRbacProxy .Values.kubeRbacProxy.enabled }}
             - name: MLFLOW_K8S_AUTH_AUTHORIZATION_MODE
-              value: "subject_access_review"
-            {{- end }}
+              value: "self_subject_access_review"
             {{- range .Values.env }}
             - name: {{ .name }}
               {{- if .valueFrom }}
@@ -135,18 +129,21 @@ spec:
             {{- toYaml .Values.envFrom | nindent 12 }}
           {{- end }}
           ports:
-            - name: http
+            - name: https
               containerPort: {{ .Values.mlflow.port }}
           volumeMounts:
             {{- if .Values.storage.enabled }}
             - name: mlflow-storage
               mountPath: /mlflow
             {{- end }}
+            - name: mlflow-tls
+              mountPath: /etc/tls/private
+              readOnly: true
           livenessProbe:
             httpGet:
               path: /health
-              port: http
-              scheme: HTTP
+              port: https
+              scheme: HTTPS
             initialDelaySeconds: 30
             timeoutSeconds: 1
             periodSeconds: 10
@@ -155,8 +152,8 @@ spec:
           readinessProbe:
             httpGet:
               path: /health
-              port: http
-              scheme: HTTP
+              port: https
+              scheme: HTTPS
             initialDelaySeconds: 5
             timeoutSeconds: 1
             periodSeconds: 5
@@ -170,58 +167,3 @@ spec:
           resources:
             {{- toYaml . | nindent 12 }}
           {{- end }}
-        {{- if and .Values.kubeRbacProxy .Values.kubeRbacProxy.enabled }}
-        - name: kube-rbac-proxy
-          image: {{ .Values.kubeRbacProxy.image.name }}
-          {{- if .Values.kubeRbacProxy.image.imagePullPolicy }}
-          imagePullPolicy: {{ .Values.kubeRbacProxy.image.imagePullPolicy }}
-          {{- end }}
-          args:
-            - --secure-listen-address=0.0.0.0:8443
-            - --proxy-endpoints-port=8444
-            - --upstream=http://mlflow{{ .Values.resourceSuffix }}.{{ .Values.namespace }}.svc:{{ .Values.service.directPort }}/
-            - --tls-cert-file=/etc/tls/private/tls.crt
-            - --tls-private-key-file=/etc/tls/private/tls.key
-            - --config-file=/etc/kube-rbac-proxy/config.yaml
-            - --auth-header-fields-enabled
-            - --ignore-paths=/healthz,/health
-          ports:
-            - name: https
-              containerPort: 8443
-            - name: proxy-metrics
-              containerPort: 8444
-          volumeMounts:
-            - name: proxy-tls
-              mountPath: /etc/tls/private
-              readOnly: true
-            - name: proxy-config
-              mountPath: /etc/kube-rbac-proxy
-              readOnly: true
-          securityContext:
-            allowPrivilegeEscalation: false
-            readOnlyRootFilesystem: true
-          livenessProbe:
-            httpGet:
-              path: /healthz
-              port: proxy-metrics
-              scheme: HTTPS
-            initialDelaySeconds: 30
-            timeoutSeconds: 1
-            periodSeconds: 5
-            successThreshold: 1
-            failureThreshold: 3
-          readinessProbe:
-            httpGet:
-              path: /healthz
-              port: proxy-metrics
-              scheme: HTTPS
-            initialDelaySeconds: 5
-            timeoutSeconds: 1
-            periodSeconds: 5
-            successThreshold: 1
-            failureThreshold: 3
-          {{- with .Values.kubeRbacProxy.resources }}
-          resources:
-            {{- toYaml . | nindent 12 }}
-          {{- end }}
-        {{- end }}

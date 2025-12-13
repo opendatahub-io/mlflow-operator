@@ -21,22 +21,11 @@ commonLabels:
 # For labels that should be on all resources, use commonLabels
 podLabels: {}
 
-# Kube RBAC proxy sidecar (platform-agnostic authentication proxy)
-kubeRbacProxy:
-  enabled: true
-  image:
-    name: quay.io/opendatahub/odh-kube-auth-proxy:latest
-    # imagePullPolicy: IfNotPresent  # Optional: Override k8s defaults (IfNotPresent for most images, Always for :latest)
-  resources:
-    requests:
-      cpu: 100m
-      memory: 256Mi
-    limits:
-      cpu: 100m
-      memory: 256Mi
-  tls:
-    # Secret containing TLS certificate for kube-rbac-proxy (must have tls.crt and tls.key)
-    secretName: mlflow-tls
+# TLS configuration for the MLflow server (handled directly by uvicorn)
+tls:
+  # Secret containing TLS certificate and key (tls.crt, tls.key)
+  # On OpenShift, this is automatically generated via the service-ca annotation
+  secretName: mlflow-tls
 
 # MLflow deployment configuration
 replicaCount: 1
@@ -129,7 +118,7 @@ mlflow:
   # Defaults to 1. For high-traffic deployments, consider increasing pod replicas instead.
   workers: 1
   # Port for MLflow server
-  port: 5000
+  port: 8443
   # Allowed hosts (will be generated based on routes/services)
   allowedHosts: []
   # Static URL prefix for MLflow (e.g., "/mlflow" for proxied deployments)
@@ -142,20 +131,8 @@ mlflow:
 env:
   - name: MLFLOW_LOGGING_LEVEL
     value: INFO
-  # MLFLOW_K8S_AUTH_AUTHORIZATION_MODE is set automatically when kubeRbacProxy.enabled is true
-  # To override, add it here explicitly
-  # Example with valueFrom (secret reference):
-  # - name: DB_PASSWORD
-  #   valueFrom:
-  #     secretKeyRef:
-  #       name: db-secret
-  #       key: password
-  # Example with valueFrom (configmap reference):
-  # - name: APP_CONFIG
-  #   valueFrom:
-  #     configMapKeyRef:
-  #       name: app-config
-  #       key: config-value
+  # To override defaults, add env entries here. MLFLOW_K8S_AUTH_AUTHORIZATION_MODE
+  # is set to self_subject_access_review by default; add an entry below to change it.
 
 # Additional environment variables from secrets/configmaps
 envFrom: []
@@ -180,7 +157,6 @@ securityContext:
 service:
   type: ClusterIP
   port: 8443
-  directPort: 5000
   # Annotations to add to the service
   annotations: {}
 

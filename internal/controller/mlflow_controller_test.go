@@ -61,7 +61,6 @@ var _ = Describe("MLflow Controller", func() {
 			By("creating the custom resource for the Kind MLflow")
 			err = k8sClient.Get(ctx, typeNamespacedName, mlflow)
 			if err != nil && errors.IsNotFound(err) {
-				disabled := false
 				mlflowResource := &mlflowv1.MLflow{
 					ObjectMeta: metav1.ObjectMeta{
 						Name: resourceName,
@@ -71,9 +70,6 @@ var _ = Describe("MLflow Controller", func() {
 							val := "s3://default/artifacts"
 							return &val
 						}(),
-						KubeRbacProxy: &mlflowv1.KubeRbacProxyConfig{
-							Enabled: &disabled,
-						},
 						// Storage is required when using default sqlite backend
 						Storage: &corev1.PersistentVolumeClaimSpec{
 							AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
