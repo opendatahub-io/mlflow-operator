@@ -13,7 +13,7 @@ The MLflow Operator automates the deployment and lifecycle management of MLflow 
 - **Dual Deployment Modes**: Supports RHOAI and OpenDataHub deployment modes
 - **Helm Chart Based**: Uses Helm charts that can be deployed standalone or via the operator
 - **Environment Variable Passthrough**: Easy configuration of MLflow environment variables
-- **Authentication Proxy**: Optional kube-rbac-proxy sidecar for Kubernetes RBAC-based authentication
+- **Built-in Kubernetes Auth**: MLflow `kubernetes-auth` with `self_subject_access_review` and in-pod TLS termination
 - **OpenShift Integration**: Automatic TLS certificate provisioning via service-ca-operator
 - **Flexible Storage**: Support for local PVC, remote databases (PostgreSQL), and remote artifact storage (S3, etc.)
 - **Persistent Storage**: Automatic PVC creation with configurable size and storage class
@@ -79,8 +79,8 @@ The operator will automatically:
 - Deploy MLflow with the specified configuration
 - Set up persistent storage (PVC) if configured
 - Create ServiceAccount, RBAC resources (ClusterRole, ClusterRoleBinding)
-- Deploy kube-rbac-proxy sidecar if enabled
 - Configure TLS certificates (OpenShift service-ca or manual)
+- Run MLflow with Kubernetes auth enabled and TLS termination in-process
 - Update the CR status with deployment readiness
 
 ### Standalone Helm Deployment
@@ -96,51 +96,16 @@ Customize values:
 ```sh
 helm install mlflow . -n opendatahub --create-namespace \
   --set image.tag=v2.0.0 \
-  --set storage.size=20Gi \
-  --set kubeRbacProxy.enabled=true \
-  --set openShift.servingCert.enabled=false
+  --set storage.size=20Gi
 ```
 
 ## Configuration
 
 ### Authentication and Security
 
-#### kube-rbac-proxy (Platform-Agnostic)
+MLflow is deployed with the `kubernetes-auth` app enabled. The operator sets `MLFLOW_K8S_AUTH_AUTHORIZATION_MODE=self_subject_access_review`, so authorization checks are performed directly by MLflow using the caller's token—no special RBAC permissions are required beyond listing namespaces for the workspaces feature.
 
-The operator supports deploying a kube-rbac-proxy sidecar for Kubernetes RBAC-based authentication. This feature works on both OpenShift and vanilla Kubernetes.
-
-```yaml
-spec:
-  kubeRbacProxy:
-    enabled: true  # Default is true, can be omitted
-    image:
-      image: "quay.io/opendatahub/odh-kube-auth-proxy:latest"
-      imagePullPolicy: IfNotPresent
-    resources:
-      requests:
-        cpu: "100m"
-        memory: "256Mi"
-      limits:
-        cpu: "100m"
-        memory: "256Mi"
-```
-
-#### TLS Certificate Configuration
-
-TLS certificates are automatically provisioned using the OpenShift service-ca operator.
-The operator sets the `service.beta.openshift.io/serving-cert-secret-name` annotation on the MLflow service,
-which triggers automatic certificate generation in the `mlflow-tls` secret.
-
-No manual certificate configuration is required or supported.
-
-To disable kube-rbac-proxy (and thus TLS):
-```yaml
-spec:
-  kubeRbacProxy:
-    enabled: false
-```
-
-Note: kube-rbac-proxy is enabled by default to provide authentication and TLS termination.
+TLS is terminated inside the MLflow container using uvicorn options. Certificates come from the `mlflow-tls` secret, which is created automatically on OpenShift via the `service.beta.openshift.io/serving-cert-secret-name` annotation. If you need to provide your own certificates, place `tls.crt` and `tls.key` in a secret named `mlflow-tls` (or override `tls.secretName` in Helm values).
 
 ### Storage Configuration
 
@@ -195,7 +160,7 @@ kubectl create secret generic mlflow-db-credentials \
 ### Network Security
 
 The operator automatically creates a NetworkPolicy that:
-- **Ingress**: Allows traffic to port 8443 (kube-rbac-proxy) when enabled, or port 9443 (direct MLflow) when disabled
+- **Ingress**: Allows traffic to the MLflow HTTPS port (8443)
 - **Egress**: Allows all outbound traffic (for database connections, S3 access, etc.)
 
 The NetworkPolicy can be customized by modifying the Helm chart values or by creating your own NetworkPolicy.
@@ -203,7 +168,7 @@ The NetworkPolicy can be customized by modifying the Helm chart values or by cre
 ### Example Configurations
 
 See the [config/samples](./config/samples/) directory for complete examples:
-- `mlflow_v1_mlflow.yaml` - OpenShift deployment with local storage and kube-rbac-proxy
+- `mlflow_v1_mlflow.yaml` - OpenShift deployment with local storage and service-ca TLS
 - `mlflow_v1_mlflow_remote_storage.yaml` - Remote PostgreSQL + S3 storage with horizontal scaling
 
 ## Troubleshooting
@@ -216,7 +181,7 @@ See the [config/samples](./config/samples/) directory for complete examples:
 - Ensure the Service has the `service.beta.openshift.io/serving-cert-secret-name` annotation set
 
 **Cannot connect to MLflow**:
-- Check if kube-rbac-proxy is enabled - if so, you need to authenticate via Kubernetes RBAC
+- Ensure the client presents a valid Kubernetes bearer token (kubernetes-auth)
 - Verify the NetworkPolicy allows traffic from your source
 - Check Service and Pod status: `kubectl get svc,pods -n <namespace>`
 

@@ -3,13 +3,8 @@ kind: MLflow
 metadata:
   name: mlflow
 spec:
-  # Minimal configuration - direct access without kube-rbac-proxy
+  # Minimal configuration with local storage
   # Suitable for development/testing environments
-  # WARNING: No authentication/authorization - use only in trusted environments
-
-  # Disable kube-rbac-proxy for direct access to MLflow
-  kubeRbacProxy:
-    enabled: false
 
   # MLflow container image
   image:
