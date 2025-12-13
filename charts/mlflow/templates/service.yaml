@@ -16,22 +16,8 @@ spec:
   selector:
     app: mlflow
   ports:
-    {{- if and .Values.kubeRbacProxy .Values.kubeRbacProxy.enabled }}
-    # Public-facing port through kube-rbac-proxy
     - name: https
       protocol: TCP
       port: {{ .Values.service.port }}
       targetPort: https
-    # Internal port for kube-rbac-proxy upstream (MLflow direct)
-    - name: http-mlflow
-      protocol: TCP
-      port: {{ .Values.service.directPort }}
-      targetPort: http
-    {{- else }}
-    # Direct MLflow port when kube-rbac-proxy is disabled
-    - name: http
-      protocol: TCP
-      port: {{ .Values.service.port }}
-      targetPort: http
-    {{- end }}
   type: {{ .Values.service.type }}

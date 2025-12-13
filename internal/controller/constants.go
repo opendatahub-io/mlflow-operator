@@ -23,8 +23,8 @@ const (
 	ClusterRoleName = "mlflow"
 	// ServiceAccountName is the name of the service account for MLflow deployments
 	ServiceAccountName = "mlflow-sa"
-	// TLSSecretName is the default name for the TLS secret used by kube-rbac-proxy
+	// TLSSecretName is the default name for the TLS secret used by the MLflow server
 	TLSSecretName = "mlflow-tls"
-	// StaticPrefix is the URL prefix for MLflow when deployed via the operator (required for kube-rbac-proxy routing)
+	// StaticPrefix is the URL prefix for MLflow when deployed via the operator
 	StaticPrefix = "/mlflow"
 )

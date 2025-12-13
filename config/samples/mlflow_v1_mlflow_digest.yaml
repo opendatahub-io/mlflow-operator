@@ -6,21 +6,6 @@ spec:
   # Example using digest-based image references for reproducible deployments
   # Digest-based references ensure the exact same image is used every time
 
-  # Kube RBAC Proxy configuration with digest reference
-  kubeRbacProxy:
-    enabled: true
-    image:
-      # Example digest-based reference (replace with actual digest)
-      image: "quay.io/opendatahub/odh-kube-auth-proxy@sha256:1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef"
-      imagePullPolicy: IfNotPresent
-    resources:
-      requests:
-        cpu: "100m"
-        memory: "256Mi"
-      limits:
-        cpu: "100m"
-        memory: "256Mi"
-
   # MLflow container image with digest reference
   image:
     # Example digest-based reference (replace with actual digest)

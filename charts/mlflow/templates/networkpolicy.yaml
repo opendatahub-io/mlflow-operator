@@ -18,15 +18,8 @@ spec:
   ingress:
     # Allow ingress to the public-facing port
     - ports:
-        {{- if and .Values.kubeRbacProxy .Values.kubeRbacProxy.enabled }}
-        # When kube-rbac-proxy is enabled, only allow traffic to the proxy port
         - protocol: TCP
-          port: 8443  # kube-rbac-proxy port
-        {{- else }}
-        # When kube-rbac-proxy is disabled, allow direct access to MLflow
-        - protocol: TCP
-          port: {{ .Values.mlflow.port }}  # direct MLflow port
-        {{- end }}
+          port: {{ .Values.mlflow.port }}  # HTTPS port on MLflow container
       # Allow from all namespaces - can be restricted further if needed
       from: []
   egress:
