@@ -31,10 +31,6 @@ import (
 // +kubebuilder:validation:XValidation:rule="!has(self.artifactsDestination) || !self.artifactsDestination.startsWith('file://') || has(self.storage)",message="storage must be configured when artifactsDestination uses file-based storage (file:// prefix)"
 // +kubebuilder:validation:XValidation:rule="!has(self.artifactsDestination) || !self.artifactsDestination.startsWith('file://') || (has(self.serveArtifacts) && self.serveArtifacts)",message="serveArtifacts must be enabled when artifactsDestination uses file-based storage (file:// prefix)"
 type MLflowSpec struct {
-	// KubeRbacProxy specifies the kube-rbac-proxy sidecar configuration
-	// +optional
-	KubeRbacProxy *KubeRbacProxyConfig `json:"kubeRbacProxy,omitempty"`
-
 	// Image specifies the MLflow container image.
 	// If not specified, use the default image
 	// via the MLFLOW_IMAGE environment variable in the operator.
@@ -184,24 +180,6 @@ type MLflowSpec struct {
 	// Affinity specifies the pod's scheduling constraints
 	// +optional
 	Affinity *corev1.Affinity `json:"affinity,omitempty"`
-}
-
-// KubeRbacProxyConfig contains kube-rbac-proxy sidecar configuration
-type KubeRbacProxyConfig struct {
-	// Enabled determines whether kube-rbac-proxy sidecar should be deployed
-	// Defaults to true
-	// +kubebuilder:default=true
-	// +optional
-	Enabled *bool `json:"enabled,omitempty"`
-
-	// Image specifies the kube-rbac-proxy container image configuration.
-	// +optional
-	Image *ImageConfig `json:"image,omitempty"`
-
-	// Resources specifies the compute resources for the kube-rbac-proxy container.
-	// If not specified, defaults to: requests(cpu: 100m, memory: 256Mi), limits(cpu: 100m, memory: 256Mi)
-	// +optional
-	Resources *corev1.ResourceRequirements `json:"resources,omitempty"`
 }
 
 // ImageConfig contains container image configuration
