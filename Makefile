@@ -183,6 +183,29 @@ deploy: manifests kustomize ## Deploy controller to the K8s cluster specified in
 undeploy: kustomize ## Undeploy controller from the K8s cluster specified in ~/.kube/config. Call with ignore-not-found=true to ignore resource not found errors during deletion.
 	"$(KUSTOMIZE)" build config/overlays/dev | "$(KUBECTL)" delete --ignore-not-found=$(ignore-not-found) -f -
 
+# Platform deployment configuration
+ODH_GATEWAY_NAME ?= data-science-gateway
+ODH_GATEWAY_NAMESPACE ?= openshift-ingress
+PLATFORM ?= odh
+
+.PHONY: deploy-to-platform
+deploy-to-platform: manifests kustomize ## Deploy to Open Data Hub or Red Hat OpenShift AI platform. Requires ODH/RHOAI to be already installed.
+	@echo "Fetching gateway hostname from cluster..."
+	@GATEWAY_HOST=$$($(KUBECTL) get gateway $(ODH_GATEWAY_NAME) -n $(ODH_GATEWAY_NAMESPACE) -o jsonpath='{.spec.listeners[0].hostname}' 2>/dev/null) || \
+		{ echo "Error: Could not find gateway '$(ODH_GATEWAY_NAME)' in namespace '$(ODH_GATEWAY_NAMESPACE)'."; \
+		  echo "Make sure Open Data Hub or Red Hat OpenShift AI is installed and the gateway is created."; \
+		  exit 1; }; \
+	if [ -z "$$GATEWAY_HOST" ]; then \
+		echo "Error: Gateway hostname is empty. Check that the gateway is properly configured."; \
+		exit 1; \
+	fi; \
+	echo "Found gateway hostname: $$GATEWAY_HOST"; \
+	echo "Updating mlflow-url in config/base/params.env..."; \
+	sed -i.bak 's|^mlflow-url=.*|mlflow-url=https://'"$$GATEWAY_HOST"'|' config/base/params.env && rm -f config/base/params.env.bak; \
+	echo "Updated mlflow-url to: https://$$GATEWAY_HOST"
+	cd config/manager && "$(KUSTOMIZE)" edit set image controller=${IMG}
+	"$(KUSTOMIZE)" build config/overlays/$(PLATFORM) | "$(KUBECTL)" apply -f -
+
 ##@ Dependencies
 
 ## Location to install dependencies to
