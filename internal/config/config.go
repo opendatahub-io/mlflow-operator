@@ -50,7 +50,7 @@ func GetConfig() *OperatorConfig {
 		v.SetDefault("MLFLOW_IMAGE", "quay.io/opendatahub/mlflow:master")
 		v.SetDefault("GATEWAY_NAME", "data-science-gateway")
 		v.SetDefault("MLFLOW_URL", "https://mlflow.example.com")
-		v.SetDefault("SECTION_TITLE", "MLflow")
+		v.SetDefault("SECTION_TITLE", "Red Hat Applications")
 
 		instance = &OperatorConfig{
 			MLflowImage:  v.GetString("MLFLOW_IMAGE"),
