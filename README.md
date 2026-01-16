@@ -86,6 +86,26 @@ You can customize the gateway name and namespace if needed:
 make deploy-to-platform ODH_GATEWAY_NAME=my-gateway ODH_GATEWAY_NAMESPACE=my-namespace IMG=<some-registry>/mlflow-operator:tag
 ```
 
+**Option 4: Deploy to local Kind cluster**
+
+For local development and testing, you can deploy the MLflow operator to a Kind (Kubernetes IN Docker) cluster with various storage backend configurations:
+
+```sh
+# Deploy with default configuration (SQLite + file storage)
+make deploy-kind
+
+# Deploy with PostgreSQL backend
+make deploy-kind BACKEND_STORE=postgres REGISTRY_STORE=postgres
+
+# Deploy with S3 storage (using SeaweedFS)
+make deploy-kind ARTIFACT_STORAGE=s3
+
+# Deploy with full production-like setup
+make deploy-kind BACKEND_STORE=postgres REGISTRY_STORE=postgres ARTIFACT_STORAGE=s3
+```
+
+For detailed instructions, advanced configuration options, and troubleshooting, see the [Kind Deployment Guide](docs/kind-deployment.md).
+
 **Create MLflow instances**
 
 > **NOTE**: The target namespace must already exist. The operator does not create namespaces.

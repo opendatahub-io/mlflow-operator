@@ -1,0 +1,152 @@
+name: Deploy MLflow on Kind
+
+env:
+  NAMESPACE: 'opendatahub'
+  CLUSTER_NAME: 'mlflow'
+
+on:
+  workflow_dispatch:
+    inputs:
+      cluster_name:
+        description: 'K8s Cluster Name'
+        required: false
+        default: 'mlflow'
+
+      backend_store:
+        description: 'Backend store type'
+        required: false
+        default: 'sqlite'
+        type: choice
+        options:
+          - sqlite
+          - postgres
+
+      registry_store:
+        description: 'Backend registry type'
+        required: false
+        default: 'sqlite'
+        type: choice
+        options:
+          - sqlite
+          - postgres
+
+      artifact_storage:
+        description: 'Artifact storage type'
+        required: false
+        default: 'file'
+        type: choice
+        options:
+          - file
+          - s3
+
+      serve_artifacts:
+        description: 'Whether to serve artifacts'
+        required: false
+        default: true
+        type: boolean
+
+  push:
+    paths:
+      - '.github/workflows/deploy-mlflow-kind.yml'
+      - 'config/**'
+      - '.github/actions/deploy/**'
+      - 'cmd/**'
+      - 'internal/**'
+      - 'charts/**'
+      - 'go.mod'
+      - 'go.sum'
+    branches:
+      - main
+
+  pull_request:
+    paths:
+      - '.github/workflows/deploy-mlflow-kind.yml'
+      - 'config/**'
+      - '.github/actions/deploy/**'
+      - 'cmd/**'
+      - 'internal/**'
+      - 'charts/**'
+      - 'go.mod'
+      - 'go.sum'
+
+jobs:
+  deploy-mlflow:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      matrix:
+        k8s_version: [ "v1.34.0" ]
+        serve_artifacts: [ "true", "false" ]
+        artifact_storage: [ "file", "s3" ]
+        backend_store: [ "sqlite", "postgres" ]
+        registry_store: [ "sqlite", "postgres" ]
+        include:
+          - k8s_version: "v1.29.0"
+            backend_store: "sqlite"
+            artifact_storage: "file"
+            serve_artifacts: "true"
+            registry_store: "sqlite"
+          - k8s_version: "v1.29.0"
+            backend_store: "postgres"
+            artifact_storage: "s3"
+            serve_artifacts: "false"
+            registry_store: "postgres"
+      fail-fast: false # So that failure in 1 type of parameterized job does not cause other jobs to terminate prematurely
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Free up disk space
+        uses: kubeflow/pipelines/.github/actions/github-disk-cleanup@master
+
+      - name: Create k8s Kind Cluster
+        uses: helm/kind-action@v1.12.0
+        id: cluster-create
+        with:
+          version: v0.29.0
+          node_image: kindest/node:${{ matrix.k8s_version }}
+          cluster_name: ${{ inputs.cluster_name || env.CLUSTER_NAME }}
+          registry: 'true'
+
+      - name: Build and load MLflow operator image
+        id: build-operator
+        run: |
+          # Build the operator image and load it into Kind cluster
+          OPERATOR_IMG=kind-registry:5000/mlflow-operator:latest
+          docker build -t "$OPERATOR_IMG" .
+          docker push "$OPERATOR_IMG"
+          echo "operator_image=$OPERATOR_IMG" >> "$GITHUB_OUTPUT"
+
+      - name: Deploy MLflow
+        id: deploy-mlflow
+        uses: ./.github/actions/deploy
+        with:
+          namespace: ${{ env.NAMESPACE }}
+          mlflow_image: quay.io/${{ github.repository_owner == 'opendatahub-io' && 'opendatahub' || 'rhoai' }}/mlflow:${{ github.base_ref == 'main' && 'master' || github.base_ref || 'master' }}
+          mlflow_operator_image: ${{ steps.build-operator.outputs.operator_image }}
+          backend_store: ${{ inputs.backend_store || matrix.backend_store }}
+          artifact_storage: ${{ inputs.artifact_storage || matrix.artifact_storage }}
+          registry_store: ${{ inputs.registry_store || matrix.registry_store }}
+          serve_artifacts: ${{ inputs.serve_artifacts || matrix.serve_artifacts }}
+
+      - name: Verify deployment
+        run: |
+          echo "✅ MLflow deployed successfully!"
+          echo "📍 Namespace: ${{ steps.deploy-mlflow.outputs.namespace }}"
+          echo "🌐 MLflow URL: ${{ steps.deploy-mlflow.outputs.mlflow_url }}"
+
+          # Verify MLflow is running
+          kubectl get pods -n "${{ steps.deploy-mlflow.outputs.namespace }}"
+          kubectl get svc -n "${{ steps.deploy-mlflow.outputs.namespace }}"
+
+      - name: Port forward MLflow
+        if: ${{ steps.deploy-mlflow.outcome == 'success' }}
+        run: |
+          echo "🎯 Setting up port forwarding..."
+          kubectl port-forward service/mlflow 8080:8443 -n ${{ steps.deploy-mlflow.outputs.namespace }} &
+
+      - name: Run basic smoke tests
+        run: |
+          # Wait for MLflow to be fully ready
+          kubectl wait --for=condition=ready pod -l app=mlflow --timeout=300s -n "${{ steps.deploy-mlflow.outputs.namespace }}"

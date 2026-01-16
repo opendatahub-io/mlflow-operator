@@ -164,6 +164,13 @@ ifndef ignore-not-found
   ignore-not-found = false
 endif
 
+# Kind deployment configuration
+KIND_NAMESPACE ?= opendatahub
+BACKEND_STORE ?= sqlite
+REGISTRY_STORE ?= sqlite
+ARTIFACT_STORAGE ?= file
+SERVE_ARTIFACTS ?= true
+
 .PHONY: install
 install: manifests kustomize ## Install CRDs into the K8s cluster specified in ~/.kube/config.
 	@out="$$( "$(KUSTOMIZE)" build config/crd 2>/dev/null || true )"; \
@@ -205,6 +212,43 @@ deploy-to-platform: manifests kustomize ## Deploy to Open Data Hub or Red Hat Op
 	echo "Updated mlflow-url to: https://$$GATEWAY_HOST"
 	cd config/manager && "$(KUSTOMIZE)" edit set image controller=${IMG}
 	"$(KUSTOMIZE)" build config/overlays/$(PLATFORM) | "$(KUBECTL)" apply -f -
+
+.PHONY: deploy-kind
+deploy-kind: ## Deploy MLflow operator and instance to a Kind cluster with configurable storage backends. See docs/kind-deployment.md for details.
+	@echo "Deploying MLflow operator to Kind cluster..."
+	@echo "Configuration: namespace=$(KIND_NAMESPACE), backend=$(BACKEND_STORE), registry=$(REGISTRY_STORE), artifacts=$(ARTIFACT_STORAGE)"
+	./.github/actions/deploy/deploy.py \
+		--namespace $(KIND_NAMESPACE) \
+		--backend-store $(BACKEND_STORE) \
+		--registry-store $(REGISTRY_STORE) \
+		--artifact-storage $(ARTIFACT_STORAGE) \
+		--serve-artifacts $(SERVE_ARTIFACTS)
+
+.PHONY: undeploy-kind
+undeploy-kind: ## Remove MLflow deployment from Kind cluster
+	@echo "Removing MLflow deployment from namespace $(KIND_NAMESPACE)..."
+	-$(KUBECTL) delete mlflow mlflow -n $(KIND_NAMESPACE)
+	-$(KUBECTL) delete namespace $(KIND_NAMESPACE)
+
+.PHONY: help-kind
+help-kind: ## Show Kind deployment configuration options
+	@echo ""
+	@echo "Kind Deployment Configuration:"
+	@echo "  KIND_NAMESPACE    - Kubernetes namespace (default: opendatahub)"
+	@echo "  BACKEND_STORE     - Backend store type: sqlite, postgres (default: sqlite)"
+	@echo "  REGISTRY_STORE    - Registry store type: sqlite, postgres (default: sqlite)"
+	@echo "  ARTIFACT_STORAGE  - Artifact storage type: file, s3 (default: file)"
+	@echo "  SERVE_ARTIFACTS   - Whether to serve artifacts: true, false (default: true)"
+	@echo ""
+	@echo "Examples:"
+	@echo "  make deploy-kind                                    # Deploy with defaults (SQLite + File)"
+	@echo "  make deploy-kind BACKEND_STORE=postgres            # PostgreSQL backend"
+	@echo "  make deploy-kind ARTIFACT_STORAGE=s3               # S3 artifacts with SeaweedFS"
+	@echo "  make deploy-kind BACKEND_STORE=postgres ARTIFACT_STORAGE=s3  # Full setup"
+	@echo "  make deploy-kind KIND_NAMESPACE=my-mlflow          # Custom namespace"
+	@echo ""
+	@echo "For advanced usage, see docs/kind-deployment.md or use the script directly:"
+	@echo "  ./.github/actions/deploy/deploy.py --help"
 
 ##@ Dependencies
 
