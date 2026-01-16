@@ -212,6 +212,65 @@ type MLflowStatus struct {
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 }
 
+// MLflowConfigSpec defines the desired configuration for MLflow workspaces within a namespace.
+type MLflowConfigSpec struct {
+	// ArtifactRootPath is an optional relative path from the bucket root specified in
+	// the ArtifactRootSecret. When provided, this path is appended to the bucket URI
+	// from the secret to form the resolved artifact root.
+	//
+	// Example:
+	//   artifactRootSecret: "ds-team-s3-connection-secret"  # Contains bucket: ds-team-bucket
+	//   artifactRootPath: "experiments"
+	//   resolved artifact root: s3://ds-team-bucket/experiments
+	//
+	// +optional
+	ArtifactRootPath *string `json:"artifactRootPath,omitempty"`
+
+	// ArtifactRootSecret is the name of a Secret in this namespace that contains
+	// credentials and bucket information for accessing the artifact storage.
+	//
+	// The Secret must have the required keys for s3 compatible storage:
+	// Example Secret:
+	//   apiVersion: v1
+	//   kind: Secret
+	//   metadata:
+	//     name: ds-team-s3-connection-secret
+	//     namespace: ds-team-namespace
+	//   data:
+	//     AWS_ACCESS_KEY_ID: <base64-encoded>
+	//     AWS_SECRET_ACCESS_KEY: <base64-encoded>
+	//     AWS_S3_BUCKET: <base64-encoded>
+	//     AWS_S3_ENDPOINT: <base64-encoded>
+	//     AWS_DEFAULT_REGION: <base64-encoded>  # Optional (default region is not always required, e.g. minio)
+	//
+	// +kubebuilder:validation:MinLength=1
+	ArtifactRootSecret string `json:"artifactRootSecret"`
+}
+
+// +kubebuilder:object:root=true
+// +kubebuilder:resource:scope=Namespaced
+
+// MLflowConfig is a namespace-scoped configuration resource that allows
+// Kubernetes namespace owners to override the default artifact storage
+// for their namespace.
+type MLflowConfig struct {
+	metav1.TypeMeta `json:",inline"`
+	metav1.ObjectMeta `json:"metadata,omitempty"`
+
+	// spec defines the desired MLflow configuration for this namespace.
+	// +required
+	Spec MLflowConfigSpec `json:"spec"`
+}
+
+// +kubebuilder:object:root=true
+
+// MLflowConfigList contains a list of MLflowConfig resources.
+type MLflowConfigList struct {
+	metav1.TypeMeta `json:",inline"`
+	metav1.ListMeta `json:"metadata,omitempty"`
+	Items           []MLflowConfig `json:"items"`
+}
+
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
 // +kubebuilder:resource:scope=Cluster
@@ -245,5 +304,5 @@ type MLflowList struct {
 }
 
 func init() {
-	SchemeBuilder.Register(&MLflow{}, &MLflowList{})
+	SchemeBuilder.Register(&MLflow{}, &MLflowList{}, &MLflowConfig{}, &MLflowConfigList{})
 }

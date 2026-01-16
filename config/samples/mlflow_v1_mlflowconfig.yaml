@@ -1,0 +1,9 @@
+apiVersion: mlflow.opendatahub.io/v1
+kind: MLflowConfig
+metadata:
+  name: mlflowconfig-sample  
+spec:
+  # Override artifact storage for this namespace with custom bucket and path
+  # Secret 'data-science-team-s3-credentials' must exist in this namespace
+  artifactRootSecret: data-science-team-s3-credentials
+  artifactRootPath: experiments
