@@ -14,6 +14,7 @@ rules:
       - mlflow.opendatahub.io
     resources:
       - mlflows
+      - mlflowconfigs
     verbs:
       - get
       - list
@@ -51,6 +52,7 @@ rules:
     resources:
       - mlflows
       - mlflows/finalizers
+      - mlflowconfigs
     verbs:
       - create
       - delete
