@@ -1,0 +1,69 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.19.0
+  name: mlflowconfigs.mlflow.opendatahub.io
+spec:
+  group: mlflow.opendatahub.io
+  names:
+    kind: MLflowConfig
+    listKind: MLflowConfigList
+    plural: mlflowconfigs
+    singular: mlflowconfig
+  scope: Namespaced
+  versions:
+  - name: v1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          MLflowConfig is a namespace-scoped configuration resource that allows
+          Kubernetes namespace owners to override the default artifact storage
+          for their namespace.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: spec defines the desired MLflow configuration for this namespace.
+            properties:
+              artifactRootPath:
+                description: |-
+                  ArtifactRootPath is an optional relative path from the bucket root specified in
+                  the ArtifactRootSecret. When provided, this path is appended to the bucket URI
+                  from the secret to form the resolved artifact root.
+
+                  Example:
+                    artifactRootSecret: "data-science-team-s3-credentials"  # Contains bucket: data-science-team-bucket
+                    artifactRootPath: "experiments"
+                    resolved artifact root: s3://data-science-team-bucket/experiments
+                type: string
+              artifactRootSecret:
+                description: |-
+                  ArtifactRootSecret is the name of a Secret in this namespace that contains
+                  credentials and bucket information for accessing the artifact storage.
+                minLength: 1
+                type: string
+            required:
+            - artifactRootSecret
+            type: object
+        required:
+        - spec
+        type: object
+    served: true
+    storage: true
