@@ -1,0 +1,82 @@
+kind: Job
+apiVersion: batch/v1
+metadata:
+  name: init-seaweedfs
+spec:
+  template:
+    metadata:
+      name: init-seaweedfs
+    spec:
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+      restartPolicy: OnFailure
+      containers:
+      - name: init-seaweedfs
+        image: 'chrislusf/seaweedfs:3.85'
+        env:
+        - name: WEED_CLUSTER_DEFAULT
+          value: "sw"
+        - name: NAMESPACE
+          value: "$NAMESPACE"
+        - name: WEED_CLUSTER_SW_MASTER
+          value: "seaweedfs.$NAMESPACE:9333"
+        - name: S3_ADMIN_USER
+          value: "$S3_ADMIN_USER"
+        envFrom:
+        - secretRef:
+            name: aws-credentials
+        command:
+        - "/bin/sh"
+        - "-ec"
+        - |
+          # Wait for MinIO service to be ready
+          service_url="http://minio-service.$NAMESPACE:9000/status"
+          max_attempts=60
+          attempt=1
+
+          echo "Waiting for service at $service_url..."
+          while [ $attempt -le $max_attempts ]; do
+            if wget -q --spider "$service_url" >/dev/null 2>&1; then
+              echo "Service at $service_url is up!"
+              break
+            fi
+            echo "Attempt $attempt: Service not ready yet, retrying in 5s..."
+            sleep 5
+            attempt=$((attempt + 1))
+          done
+
+          if [ $attempt -gt $max_attempts ]; then
+            echo "Service at $service_url failed to become ready within 5 minutes"
+            exit 1
+          fi
+          echo "Creating S3 bucket..."
+          echo "s3.bucket.create --name mlpipeline" | /usr/bin/weed shell > /dev/null 2>&1
+          if [ $? -eq 0 ]; then
+            echo "Bucket created successfully"
+          else
+            echo "Failed to create bucket or bucket already exists"
+          fi
+          echo "Configuring S3 credentials..."
+          echo "s3.configure -user $S3_ADMIN_USER \
+                        -access_key $AWS_ACCESS_KEY_ID \
+                        -secret_key $AWS_SECRET_ACCESS_KEY \
+                        -actions Admin \
+                        -apply" | /usr/bin/weed shell > /dev/null 2>&1
+          if [ $? -eq 0 ]; then
+            echo "S3 credentials configured successfully"
+          else
+            echo "Failed to configure S3 credentials"
+            exit 1
+          fi
+        securityContext:  # Using restricted profile
+          allowPrivilegeEscalation: false
+          privileged: false
+          runAsNonRoot: true
+          # image defaults to root user
+          runAsUser: 1001
+          runAsGroup: 1001
+          capabilities:
+            drop:
+            - ALL
+      serviceAccountName: seaweedfs
