@@ -64,6 +64,16 @@ spec:
           secret:
             secretName: {{ .Values.tls.secretName }}
             defaultMode: 420
+        {{- if .Values.caBundleConfigMap.enabled }}
+        - name: ca-bundle
+          configMap:
+            name: {{ .Values.caBundleConfigMap.name }}
+            optional: true
+            items:
+              - key: {{ .Values.caBundleConfigMap.key }}
+                path: custom-ca-bundle.crt
+        {{- end }}
+
       containers:
         - name: mlflow
           image: {{ .Values.image.name }}
@@ -129,6 +139,14 @@ spec:
               value: {{ .value | quote }}
               {{- end }}
             {{- end }}
+            {{- if .Values.caBundleConfigMap.enabled }}
+            - name: REQUESTS_CA_BUNDLE  # TODO(gfrasca): Check if this is needed
+              value: "{{ .Values.caBundleConfigMap.mountPath }}/{{ .Values.caBundleConfigMap.fileName }}"
+            - name: SSL_CERT_FILE
+              value: "{{ .Values.caBundleConfigMap.mountPath }}/{{ .Values.caBundleConfigMap.fileName }}"
+            - name: CURL_CA_BUNDLE  # TODO(gfrasca): Check if this is needed
+              value: "{{ .Values.caBundleConfigMap.mountPath }}/{{ .Values.caBundleConfigMap.fileName }}"
+            {{- end }}
           {{- if .Values.envFrom }}
           envFrom:
             {{- toYaml .Values.envFrom | nindent 12 }}
@@ -144,6 +162,13 @@ spec:
             - name: mlflow-tls
               mountPath: /etc/tls/private
               readOnly: true
+            {{- if .Values.caBundleConfigMap.enabled }}
+            # Custom CA bundle - mounted directly to cert directory
+            - name: ca-bundle
+              mountPath: /etc/pki/tls/certs/custom-ca-bundle.crt
+              subPath: custom-ca-bundle.crt
+              readOnly: true
+            {{- end }}
           livenessProbe:
             httpGet:
               path: {{ printf "%s/health" $healthPrefix }}

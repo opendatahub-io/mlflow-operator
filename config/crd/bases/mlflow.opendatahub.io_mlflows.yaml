@@ -1016,6 +1016,24 @@ spec:
                 - key
                 type: object
                 x-kubernetes-map-type: atomic
+              caBundleConfigMap:
+                description: |-
+                  CABundleConfigMap specifies a ConfigMap containing a CA certificate bundle.
+                  The bundle will be mounted into the MLflow container and configured for use
+                  with HTTPS connections (PostgreSQL with TLS, S3 with custom certs, etc.).
+                properties:
+                  key:
+                    description: Key is the key in the ConfigMap that contains the
+                      CA bundle data
+                    type: string
+                  name:
+                    description: Name is the name of the ConfigMap containing the
+                      CA bundle
+                    type: string
+                required:
+                - key
+                - name
+                type: object
               defaultArtifactRoot:
                 description: |-
                   DefaultArtifactRoot is the default artifact root path for MLflow runs on the server.
