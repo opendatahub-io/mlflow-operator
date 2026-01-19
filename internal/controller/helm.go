@@ -117,6 +117,15 @@ func (h *HelmRenderer) mlflowToHelmValues(mlflow *mlflowv1.MLflow, namespace str
 
 	values["tls"] = tlsValues
 
+	// User-provided CA bundle configuration
+	if mlflow.Spec.CABundleConfigMap != nil {
+		values["caBundleConfigMap"] = map[string]interface{}{
+			"enabled": true,
+			"name":    mlflow.Spec.CABundleConfigMap.Name,
+			"key":     mlflow.Spec.CABundleConfigMap.Key,
+		}
+	}
+
 	// Use config from environment variables as default, can be overridden by CR spec
 	mlflowImage := cfg.MLflowImage
 	if mlflowImage == "" {
