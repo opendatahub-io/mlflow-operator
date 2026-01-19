@@ -164,3 +164,18 @@ service:
 nodeSelector: {}
 tolerations: []
 affinity: {}
+
+# CA Bundle configuration for TLS verification
+caBundleConfigMap:
+  enabled: false
+  name: ""
+  key: ""
+
+# ODH/RHOAI Trusted CA Bundle
+# This is automatically detected and mounted by the operator if present
+# The ConfigMap is expected to have keys: "ca-bundle.crt" and/or "odh-ca-bundle.crt"
+# Ref: https://github.com/opendatahub-io/architecture-decision-records/pull/28
+odhTrustedCABundle:
+  enabled: false  # Set to true by operator when ConfigMap is detected
+  configMapName: odh-trusted-ca-bundle
+  volumeName: odh-trusted-ca-bundle
