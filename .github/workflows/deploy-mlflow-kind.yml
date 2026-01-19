@@ -68,7 +68,7 @@ jobs:
         uses: ./.github/actions/deploy
         with:
           namespace: ${{ env.NAMESPACE }}
-          target_branch: ${{ github.head_ref || github.ref_name }}
+          target_branch: ${{ github.base_ref || 'master' }}
           backend_store: ${{ inputs.backend_store || 'sqlite' }}
           artifact_storage: ${{ inputs.artifact_storage || 'file' }}
 
