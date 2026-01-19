@@ -1,0 +1,21 @@
+{
+  "opendatahub": {
+    "admin-user": "cluster-admin",
+    "data-scientist": "edit",
+    "ml-engineer": "edit",
+    "data-analyst": "view",
+    "guest": "view-no-mlflow"
+  },
+  "workspace-b": {
+    "team-lead": "admin",
+    "developer": "edit",
+    "intern": "view",
+    "external-auditor": "view-no-mlflow"
+  },
+  "research-lab": {
+    "principal-investigator": "admin",
+    "postdoc": "edit",
+    "grad-student": "view",
+    "mlflow-service": "mlflow-only"
+  }
+}

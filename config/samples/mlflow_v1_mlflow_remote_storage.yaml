@@ -15,7 +15,7 @@ metadata:
 spec:
   # MLflow container image
   image:
-    image: quay.io/opendatahub/mlflow:master
+    image: quay.io/vmudadla/mlflow:latest
     imagePullPolicy: Always
 
   # Number of replicas - can scale horizontally with remote storage
@@ -41,12 +41,12 @@ spec:
   # registryStoreUri: defaults to backendStoreUri if not specified
 
   # Remote S3 storage for artifacts
-  artifactsDestination: "s3://my-mlflow-bucket/artifacts"
+  artifactsDestination: "s3://rhods-dsp-dev/artifacts"
 
   # Default artifact root - where MLflow stores artifacts for runs that don't specify a location
   # If not specified, defaults to artifactsDestination value
   # You can set this to a different location or subdirectory for better organization
-  defaultArtifactRoot: "s3://my-mlflow-bucket/artifacts/runs"
+  defaultArtifactRoot: "s3://rhods-dsp-dev/artifacts/runs"
 
   # Enable artifact serving through MLflow REST API
   # Clients can log/retrieve artifacts via MLflow instead of direct S3 access
@@ -66,4 +66,4 @@ spec:
     - name: MLFLOW_LOGGING_LEVEL
       value: INFO
     - name: AWS_DEFAULT_REGION
-      value: us-east-1
+      value: us-east-2
