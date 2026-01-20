@@ -62,6 +62,7 @@ type MLflowReconciler struct {
 // +kubebuilder:rbac:groups="",resources=secrets,resourceNames=mlflow-artifact-connection,verbs=get
 // +kubebuilder:rbac:groups=mlflow.kubeflow.org,resources=mlflowconfigs,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=namespaces,verbs=get;list;watch
+// +kubebuilder:rbac:groups="",resources=configmaps,verbs=get;list;watch
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterroles,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterrolebindings,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=console.openshift.io,resources=consolelinks,verbs=get;list;watch;create;update;patch;delete
@@ -96,13 +97,32 @@ func (r *MLflowReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		return ctrl.Result{}, nil
 	}
 
-	// Render Helm chart
+	// Check if ODH trusted CA bundle ConfigMap exists in target namespace
+	odhTrustedCABundleExists := false
+	odhCABundleConfigMap := &corev1.ConfigMap{}
+	err = r.Get(ctx, types.NamespacedName{
+		Name:      OdhTrustedCABundleConfigMapName,
+		Namespace: targetNamespace,
+	}, odhCABundleConfigMap)
+	if err == nil {
+		// ODH trusted CA bundle ConfigMap exists
+		odhTrustedCABundleExists = true
+		log.Info("Found ODH trusted CA bundle ConfigMap", "name", OdhTrustedCABundleConfigMapName, "namespace", targetNamespace)
+	} else if !errors.IsNotFound(err) {
+		// Real error (not just trusted CA bundle ConfigMap NotFound) - log and continue
+		log.Error(err, "Failed to check for ODH trusted CA bundle ConfigMap")
+	}
+
+	// Render the Helm chart
 	helmChartPath := r.ChartPath
 	if helmChartPath == "" {
 		helmChartPath = chartPath
 	}
 	renderer := NewHelmRenderer(helmChartPath)
-	objects, err := renderer.RenderChart(mlflow, targetNamespace)
+	renderOpts := RenderOptions{
+		OdhTrustedCABundleExists: odhTrustedCABundleExists,
+	}
+	objects, err := renderer.RenderChart(mlflow, targetNamespace, renderOpts)
 	if err != nil {
 		log.Error(err, "Failed to render Helm chart")
 		meta.SetStatusCondition(&mlflow.Status.Conditions, metav1.Condition{
