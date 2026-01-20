@@ -95,7 +95,7 @@ func TestMlflowToHelmValues_Storage(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			g := gomega.NewWithT(t)
 
-			values, err := renderer.mlflowToHelmValues(tt.mlflow, "test-namespace")
+			values, err := renderer.mlflowToHelmValues(tt.mlflow, "test-namespace", RenderOptions{})
 			g.Expect(err).NotTo(HaveOccurred())
 
 			storage, ok := values["storage"].(map[string]interface{})
@@ -160,7 +160,7 @@ func TestMlflowToHelmValues_Image(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			g := gomega.NewWithT(t)
 
-			values, err := renderer.mlflowToHelmValues(tt.mlflow, "test-namespace")
+			values, err := renderer.mlflowToHelmValues(tt.mlflow, "test-namespace", RenderOptions{})
 			g.Expect(err).NotTo(HaveOccurred())
 
 			image, ok := values["image"].(map[string]interface{})
@@ -342,7 +342,7 @@ func TestMlflowToHelmValues_MLflowConfig(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			g := gomega.NewWithT(t)
 
-			values, err := renderer.mlflowToHelmValues(tt.mlflow, "test-namespace")
+			values, err := renderer.mlflowToHelmValues(tt.mlflow, "test-namespace", RenderOptions{})
 			g.Expect(err).NotTo(HaveOccurred())
 
 			mlflowConfig, ok := values["mlflow"].(map[string]interface{})
@@ -414,7 +414,7 @@ func TestMlflowToHelmValues_StaticPrefix(t *testing.T) {
 		Spec:       mlflowv1.MLflowSpec{},
 	}
 
-	values, err := renderer.mlflowToHelmValues(mlflow, "test-namespace")
+	values, err := renderer.mlflowToHelmValues(mlflow, "test-namespace", RenderOptions{})
 	g.Expect(err).NotTo(HaveOccurred())
 
 	mlflowConfig, ok := values["mlflow"].(map[string]interface{})
@@ -498,7 +498,7 @@ func TestMlflowToHelmValues_Env(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			g := gomega.NewWithT(t)
 
-			values, err := renderer.mlflowToHelmValues(tt.mlflow, "test-namespace")
+			values, err := renderer.mlflowToHelmValues(tt.mlflow, "test-namespace", RenderOptions{})
 			g.Expect(err).NotTo(HaveOccurred())
 
 			env, ok := values["env"].([]any)
@@ -578,7 +578,7 @@ func TestMlflowToHelmValues_EnvFrom(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			g := gomega.NewWithT(t)
 
-			values, err := renderer.mlflowToHelmValues(tt.mlflow, "test-namespace")
+			values, err := renderer.mlflowToHelmValues(tt.mlflow, "test-namespace", RenderOptions{})
 			g.Expect(err).NotTo(HaveOccurred())
 
 			if tt.wantEnvFromCount == 0 {
@@ -649,7 +649,7 @@ func TestMlflowToHelmValues_Resources(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			g := gomega.NewWithT(t)
 
-			values, err := renderer.mlflowToHelmValues(tt.mlflow, "test-namespace")
+			values, err := renderer.mlflowToHelmValues(tt.mlflow, "test-namespace", RenderOptions{})
 			g.Expect(err).NotTo(HaveOccurred())
 
 			resources, ok := values["resources"].(map[string]interface{})
@@ -715,7 +715,7 @@ func TestMlflowToHelmValues_Replicas(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			g := gomega.NewWithT(t)
 
-			values, err := renderer.mlflowToHelmValues(tt.mlflow, "test-namespace")
+			values, err := renderer.mlflowToHelmValues(tt.mlflow, "test-namespace", RenderOptions{})
 			g.Expect(err).NotTo(HaveOccurred())
 
 			if got := values["replicaCount"].(int32); got != tt.wantReplicas {
@@ -735,7 +735,7 @@ func TestMlflowToHelmValues_Namespace(t *testing.T) {
 	}
 
 	testNamespace := "custom-namespace"
-	values, err := renderer.mlflowToHelmValues(mlflow, testNamespace)
+	values, err := renderer.mlflowToHelmValues(mlflow, testNamespace, RenderOptions{})
 	g.Expect(err).NotTo(HaveOccurred())
 
 	if got := values["namespace"].(string); got != testNamespace {
@@ -776,7 +776,7 @@ func TestMlflowToHelmValues_ResourceSuffix(t *testing.T) {
 				Spec:       mlflowv1.MLflowSpec{},
 			}
 
-			values, err := renderer.mlflowToHelmValues(mlflow, "test-namespace")
+			values, err := renderer.mlflowToHelmValues(mlflow, "test-namespace", RenderOptions{})
 			g.Expect(err).NotTo(HaveOccurred())
 
 			if got := values["resourceSuffix"].(string); got != tt.wantResourceSuffix {
@@ -820,7 +820,7 @@ func TestRenderChart_EnvVars(t *testing.T) {
 		},
 	}
 
-	objs, err := renderer.RenderChart(mlflow, "test-ns")
+	objs, err := renderer.RenderChart(mlflow, "test-ns", RenderOptions{})
 	if err != nil {
 		t.Fatalf("RenderChart() error = %v", err)
 	}
@@ -1144,7 +1144,7 @@ func TestRenderChart(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			objs, err := renderer.RenderChart(tt.mlflow, tt.namespace)
+			objs, err := renderer.RenderChart(tt.mlflow, tt.namespace, RenderOptions{})
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("RenderChart() error = %v, wantErr %v", err, tt.wantErr)
 			}
