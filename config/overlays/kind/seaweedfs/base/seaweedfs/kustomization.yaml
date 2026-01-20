@@ -12,4 +12,10 @@ resources:
 - minio-service.yaml
 - mlflow-aws-secret.yaml
 
-# Using envsubst for parameter substitution instead of kustomize replacements
+# Create ConfigMap from params.env for environment variable substitution
+configMapGenerator:
+- name: seaweedfs-params
+  envs:
+  - params.env
+  options:
+    disableNameSuffixHash: true

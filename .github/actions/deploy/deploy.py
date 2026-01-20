@@ -146,15 +146,10 @@ class MLflowDeployer:
         # Ensure the script is executable
         self.run_command(f"chmod +x {generate_tls_script}", "Making TLS generation script executable")
 
-        # Generate certificate and key files in the kind overlay directory
+        # Generate certificate and key files using the updated script
         self.run_command(
-            f"{generate_tls_script} cert > {kind_overlay}/tls.crt",
-            "Generating TLS certificate"
-        )
-
-        self.run_command(
-            f"{generate_tls_script} key > {kind_overlay}/tls.key",
-            "Generating TLS private key"
+            f"{generate_tls_script} generate",
+            "Generating TLS certificate and private key"
         )
 
         # Verify the files were created

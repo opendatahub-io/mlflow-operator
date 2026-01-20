@@ -50,3 +50,5 @@ secretGenerator:
   files:
   - tls.crt
   - tls.key
+  options:
+    disableNameSuffixHash: true

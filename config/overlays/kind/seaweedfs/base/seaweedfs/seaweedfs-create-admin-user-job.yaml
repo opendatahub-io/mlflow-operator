@@ -18,13 +18,18 @@ spec:
         - name: WEED_CLUSTER_DEFAULT
           value: "sw"
         - name: NAMESPACE
-          value: "$NAMESPACE"
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
         - name: WEED_CLUSTER_SW_MASTER
-          value: "seaweedfs.$NAMESPACE:9333"
+          value: "seaweedfs.$(NAMESPACE):9333"
         - name: WEED_CLUSTER_SW_FILER
-          value: "seaweedfs.$NAMESPACE:8888"
+          value: "seaweedfs.$(NAMESPACE):8888"
         - name: S3_ADMIN_USER
-          value: "$S3_ADMIN_USER"
+          valueFrom:
+            configMapKeyRef:
+              name: seaweedfs-params
+              key: S3_ADMIN_USER
         envFrom:
         - secretRef:
             name: aws-credentials
