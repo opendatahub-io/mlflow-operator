@@ -4,6 +4,7 @@ metadata:
   name: seaweedfs
 spec:
   ingress:
+  # Allow traffic from namespaces with the profile label
   - from:
     - namespaceSelector:
         matchExpressions:
@@ -15,6 +16,7 @@ spec:
     - port: 8333
     - port: 8888
     - port: 9333
+  # Allow traffic from istio-system
   - from:
     - namespaceSelector:
         matchExpressions:
@@ -22,6 +24,13 @@ spec:
           operator: In
           values:
           - istio-system
+  # Allow traffic from the same namespace (for init job)
+  - from:
+    - podSelector: {}
+    ports:
+    - port: 8333
+    - port: 8888
+    - port: 9333
   podSelector:
     matchExpressions:
     - key: app
