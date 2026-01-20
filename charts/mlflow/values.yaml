@@ -40,11 +40,11 @@ serviceAccount:
 # Resources for MLflow container
 resources:
   requests:
-    cpu: 250m
-    memory: 512Mi
-  limits:
     cpu: "1"
-    memory: 1Gi
+    memory: 2Gi
+  limits:
+    cpu: "4"
+    memory: 3Gi
 
 # Persistent storage
 # Only required if using file-based or SQLite backend/registry stores or file-based artifacts.
