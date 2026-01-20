@@ -39,7 +39,7 @@ replacements:
   targets:
   - select:
       kind: Deployment
-      name: controller-manager
+      name: mlflow-operator-controller-manager
     fieldPaths:
     - spec.template.spec.containers.[name=manager].image
 
