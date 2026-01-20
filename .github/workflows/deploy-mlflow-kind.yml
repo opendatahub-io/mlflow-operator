@@ -102,7 +102,7 @@ jobs:
         uses: ./.github/actions/deploy
         with:
           namespace: ${{ env.NAMESPACE }}
-          mlflow_image: quay.io/${{ github.repository_owner == 'opendatahub-io' && 'opendatahub' || 'rhoai' }}/mlflow:${{ github.base_ref == 'main' && 'master' || github.base_ref || 'master' }}
+          mlflow_image: 'quay.io/vmudadla/mlflow:latest'
           mlflow_operator_image: ${{ steps.build-operator.outputs.operator_image }}
           backend_store: ${{ inputs.backend_store || matrix.backend_store }}
           artifact_storage: ${{ inputs.artifact_storage || matrix.artifact_storage }}
