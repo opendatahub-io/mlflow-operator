@@ -1033,6 +1033,52 @@ func TestRenderChart(t *testing.T) {
 			},
 		},
 		{
+			name: "deployment should include static prefix in health probes",
+			mlflow: &mlflowv1.MLflow{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "test-mlflow",
+				},
+				Spec: mlflowv1.MLflowSpec{
+					BackendStoreURI:      ptr("sqlite:////mlflow/mlflow.db"),
+					RegistryStoreURI:     ptr("sqlite:////mlflow/mlflow.db"),
+					ArtifactsDestination: ptr("file:///mlflow/artifacts"),
+				},
+			},
+			namespace: "test-ns",
+			wantErr:   false,
+			validateObjs: func(t *testing.T, objs []*unstructured.Unstructured) {
+				for _, obj := range objs {
+					if obj.GetKind() != deploymentKind {
+						continue
+					}
+
+					containers, found, err := unstructured.NestedSlice(obj.Object, "spec", "template", "spec", "containers")
+					if err != nil || !found || len(containers) == 0 {
+						t.Fatalf("Failed to get containers from deployment: found=%v, err=%v", found, err)
+					}
+
+					container := containers[0].(map[string]interface{})
+					expectedPath := StaticPrefix + "/health"
+
+					livenessPath, found, err := unstructured.NestedString(container, "livenessProbe", "httpGet", "path")
+					if err != nil || !found {
+						t.Fatalf("Failed to get livenessProbe path: found=%v, err=%v", found, err)
+					}
+					if livenessPath != expectedPath {
+						t.Errorf("livenessProbe path = %s, want %s", livenessPath, expectedPath)
+					}
+
+					readinessPath, found, err := unstructured.NestedString(container, "readinessProbe", "httpGet", "path")
+					if err != nil || !found {
+						t.Fatalf("Failed to get readinessProbe path: found=%v, err=%v", found, err)
+					}
+					if readinessPath != expectedPath {
+						t.Errorf("readinessProbe path = %s, want %s", readinessPath, expectedPath)
+					}
+				}
+			},
+		},
+		{
 			name: "deployment should have allowed hosts configured",
 			mlflow: &mlflowv1.MLflow{
 				ObjectMeta: metav1.ObjectMeta{

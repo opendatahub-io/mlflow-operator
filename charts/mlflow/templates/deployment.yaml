@@ -1,3 +1,4 @@
+{{- $healthPrefix := .Values.mlflow.staticPrefix | trimSuffix "/" -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -141,7 +142,7 @@ spec:
               readOnly: true
           livenessProbe:
             httpGet:
-              path: /health
+              path: {{ printf "%s/health" $healthPrefix }}
               port: https
               scheme: HTTPS
             initialDelaySeconds: 30
@@ -151,7 +152,7 @@ spec:
             failureThreshold: 3
           readinessProbe:
             httpGet:
-              path: /health
+              path: {{ printf "%s/health" $healthPrefix }}
               port: https
               scheme: HTTPS
             initialDelaySeconds: 5
