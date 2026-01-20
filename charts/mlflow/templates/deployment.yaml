@@ -73,6 +73,12 @@ spec:
               - key: {{ .Values.caBundleConfigMap.key }}
                 path: custom-ca-bundle.crt
         {{- end }}
+        {{- if .Values.odhTrustedCABundle.enabled }}
+        - name: {{ .Values.odhTrustedCABundle.volumeName }}
+          configMap:
+            name: {{ .Values.odhTrustedCABundle.configMapName }}
+            optional: true
+        {{- end }}
 
       containers:
         - name: mlflow
@@ -139,13 +145,11 @@ spec:
               value: {{ .value | quote }}
               {{- end }}
             {{- end }}
-            {{- if .Values.caBundleConfigMap.enabled }}
-            - name: REQUESTS_CA_BUNDLE  # TODO(gfrasca): Check if this is needed
-              value: "{{ .Values.caBundleConfigMap.mountPath }}/{{ .Values.caBundleConfigMap.fileName }}"
-            - name: SSL_CERT_FILE
-              value: "{{ .Values.caBundleConfigMap.mountPath }}/{{ .Values.caBundleConfigMap.fileName }}"
-            - name: CURL_CA_BUNDLE  # TODO(gfrasca): Check if this is needed
-              value: "{{ .Values.caBundleConfigMap.mountPath }}/{{ .Values.caBundleConfigMap.fileName }}"
+            {{- if or .Values.caBundleConfigMap.enabled .Values.odhTrustedCABundle.enabled }}
+            # CA bundle configuration - supports both platform and user-provided certificates
+            # SSL_CERT_DIR points to a directory where all certificate files are mounted
+            - name: SSL_CERT_DIR
+              value: {{ .Values.sslCertDir | quote }}
             {{- end }}
           {{- if .Values.envFrom }}
           envFrom:
@@ -167,6 +171,14 @@ spec:
             - name: ca-bundle
               mountPath: /etc/pki/tls/certs/custom-ca-bundle.crt
               subPath: custom-ca-bundle.crt
+              readOnly: true
+            {{- end }}
+            {{- if .Values.odhTrustedCABundle.enabled }}
+            # ODH/RHOAI platform CA bundle - mount ConfigMap as directory
+            # This ConfigMap may contain ca-bundle.crt and/or odh-ca-bundle.crt
+            # All keys in the ConfigMap become files in the mounted directory
+            - name: {{ .Values.odhTrustedCABundle.volumeName }}
+              mountPath: /etc/pki/tls/certs/platform
               readOnly: true
             {{- end }}
           livenessProbe:
