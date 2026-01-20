@@ -91,7 +91,7 @@ func TestMlflowToHelmValues_Storage(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			values := renderer.mlflowToHelmValues(tt.mlflow, "test-namespace")
+			values := renderer.mlflowToHelmValues(tt.mlflow, "test-namespace", RenderOptions{})
 
 			storage, ok := values["storage"].(map[string]interface{})
 			if !ok {
@@ -153,7 +153,7 @@ func TestMlflowToHelmValues_Image(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			values := renderer.mlflowToHelmValues(tt.mlflow, "test-namespace")
+			values := renderer.mlflowToHelmValues(tt.mlflow, "test-namespace", RenderOptions{})
 
 			image, ok := values["image"].(map[string]interface{})
 			if !ok {
@@ -332,7 +332,7 @@ func TestMlflowToHelmValues_MLflowConfig(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			values := renderer.mlflowToHelmValues(tt.mlflow, "test-namespace")
+			values := renderer.mlflowToHelmValues(tt.mlflow, "test-namespace", RenderOptions{})
 
 			mlflowConfig, ok := values["mlflow"].(map[string]interface{})
 			if !ok {
@@ -401,7 +401,7 @@ func TestMlflowToHelmValues_StaticPrefix(t *testing.T) {
 		Spec:       mlflowv1.MLflowSpec{},
 	}
 
-	values := renderer.mlflowToHelmValues(mlflow, "test-namespace")
+	values := renderer.mlflowToHelmValues(mlflow, "test-namespace", RenderOptions{})
 
 	mlflowConfig, ok := values["mlflow"].(map[string]interface{})
 	if !ok {
@@ -482,7 +482,7 @@ func TestMlflowToHelmValues_Env(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			values := renderer.mlflowToHelmValues(tt.mlflow, "test-namespace")
+			values := renderer.mlflowToHelmValues(tt.mlflow, "test-namespace", RenderOptions{})
 
 			env, ok := values["env"].([]map[string]interface{})
 			if !ok {
@@ -558,7 +558,7 @@ func TestMlflowToHelmValues_EnvFrom(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			values := renderer.mlflowToHelmValues(tt.mlflow, "test-namespace")
+			values := renderer.mlflowToHelmValues(tt.mlflow, "test-namespace", RenderOptions{})
 
 			if tt.wantEnvFromCount == 0 {
 				if _, exists := values["envFrom"]; exists {
@@ -626,7 +626,7 @@ func TestMlflowToHelmValues_Resources(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			values := renderer.mlflowToHelmValues(tt.mlflow, "test-namespace")
+			values := renderer.mlflowToHelmValues(tt.mlflow, "test-namespace", RenderOptions{})
 
 			resources, ok := values["resources"].(map[string]interface{})
 			if !tt.wantResourcesSet {
@@ -689,7 +689,7 @@ func TestMlflowToHelmValues_Replicas(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			values := renderer.mlflowToHelmValues(tt.mlflow, "test-namespace")
+			values := renderer.mlflowToHelmValues(tt.mlflow, "test-namespace", RenderOptions{})
 
 			if got := values["replicaCount"].(int32); got != tt.wantReplicas {
 				t.Errorf("replicaCount = %v, want %v", got, tt.wantReplicas)
@@ -707,7 +707,7 @@ func TestMlflowToHelmValues_Namespace(t *testing.T) {
 	}
 
 	testNamespace := "custom-namespace"
-	values := renderer.mlflowToHelmValues(mlflow, testNamespace)
+	values := renderer.mlflowToHelmValues(mlflow, testNamespace, RenderOptions{})
 
 	if got := values["namespace"].(string); got != testNamespace {
 		t.Errorf("namespace = %v, want %v", got, testNamespace)
@@ -746,7 +746,7 @@ func TestMlflowToHelmValues_ResourceSuffix(t *testing.T) {
 				Spec:       mlflowv1.MLflowSpec{},
 			}
 
-			values := renderer.mlflowToHelmValues(mlflow, "test-namespace")
+			values := renderer.mlflowToHelmValues(mlflow, "test-namespace", RenderOptions{})
 
 			if got := values["resourceSuffix"].(string); got != tt.wantResourceSuffix {
 				t.Errorf("resourceSuffix = %v, want %v", got, tt.wantResourceSuffix)
@@ -876,7 +876,7 @@ func TestRenderChart_EnvVars(t *testing.T) {
 		},
 	}
 
-	objs, err := renderer.RenderChart(mlflow, "test-ns")
+	objs, err := renderer.RenderChart(mlflow, "test-ns", RenderOptions{})
 	if err != nil {
 		t.Fatalf("RenderChart() error = %v", err)
 	}
@@ -1154,7 +1154,7 @@ func TestRenderChart(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			objs, err := renderer.RenderChart(tt.mlflow, tt.namespace)
+			objs, err := renderer.RenderChart(tt.mlflow, tt.namespace, RenderOptions{})
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("RenderChart() error = %v, wantErr %v", err, tt.wantErr)
 			}
