@@ -26,7 +26,7 @@ class MLflowDeployer:
             self.args.s3_endpoint = f"http://minio-service.{self.args.namespace}.svc.cluster.local:9000"
 
         if not self.args.postgres_host:
-            self.args.postgres_host = f"postgres.{self.args.namespace}.svc.cluster.local"
+            self.args.postgres_host = f"postgres-service.{self.args.namespace}.svc.cluster.local"
 
         print(f"Repository root: {self.repo_root}")
         print(f"Target namespace: {self.args.namespace}")
@@ -932,10 +932,10 @@ def main():
     # PostgreSQL configuration
     parser.add_argument("--postgres-host", default="")
     parser.add_argument("--postgres-port", default="5432")
-    parser.add_argument("--postgres-user", default="mlflow")
-    parser.add_argument("--postgres-password", default="password")
-    parser.add_argument("--postgres-backend-db", default="mlflow")
-    parser.add_argument("--postgres-registry-db", default="mlflow_registry")
+    parser.add_argument("--postgres-user", default="postgres")
+    parser.add_argument("--postgres-password", default="mysecretpassword")
+    parser.add_argument("--postgres-backend-db", default="mydatabase")
+    parser.add_argument("--postgres-registry-db", default="mydatabase")
 
     # S3 configuration
     parser.add_argument("--s3-bucket", default="mlpipeline")

@@ -75,22 +75,22 @@ inputs:
   postgres_user:
     description: 'PostgreSQL username'
     required: false
-    default: 'mlflow'
+    default: 'postgres'
 
   postgres_password:
     description: 'PostgreSQL password'
     required: false
-    default: 'password'
+    default: 'mysecretpassword'
 
   postgres_backend_db:
     description: 'PostgreSQL database name for backend store'
     required: false
-    default: 'mlflow'
+    default: 'mydatabase'
 
   postgres_registry_db:
     description: 'PostgreSQL database name for registry store'
     required: false
-    default: 'mlflow_registry'
+    default: 'mydatabase'
 
   s3_access_key:
     description: 'S3 access key ID'
