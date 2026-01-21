@@ -36,10 +36,9 @@ import (
 )
 
 const (
-	defaultMLflowImage     = "quay.io/opendatahub/mlflow:odh-stable"
-	defaultStorageSize     = "2Gi"
-	defaultBackendStoreURI = "sqlite:////mlflow/mlflow.db"
-	defaultArtifactsDest   = "file:///mlflow/artifacts"
+	defaultMLflowImage   = "quay.io/opendatahub/mlflow:odh-stable"
+	defaultStorageSize   = "2Gi"
+	defaultArtifactsDest = "file:///mlflow/artifacts"
 )
 
 // getResourceSuffix returns the resource suffix for naming MLflow resources.
@@ -192,7 +191,7 @@ func (h *HelmRenderer) mlflowToHelmValues(mlflow *mlflowv1.MLflow, namespace str
 		"accessMode":       accessMode,
 	}
 
-	backendStoreURI := defaultBackendStoreURI
+	backendStoreURI := ""
 	artifactsDest := defaultArtifactsDest
 
 	// BackendStoreURI: prefer secret ref over direct value
@@ -214,7 +213,7 @@ func (h *HelmRenderer) mlflowToHelmValues(mlflow *mlflowv1.MLflow, namespace str
 	// RegistryStoreURI: defaults to backendStoreUri when omitted (per API contract)
 	// Prefer secret ref over direct value
 	var registryStoreURIFrom map[string]interface{}
-	registryStoreURI := backendStoreURI // Default to backend URI
+	registryStoreURI := backendStoreURI // Default to backend URI when provided
 	if mlflow.Spec.RegistryStoreURIFrom != nil {
 		registryStoreURIFrom = map[string]interface{}{
 			"secretKeyRef": map[string]interface{}{
