@@ -32,10 +32,12 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/util/retry"
 	ctrl "sigs.k8s.io/controller-runtime"
+	controllerbuilder "sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 
@@ -159,7 +161,7 @@ func (r *MLflowReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	if err == nil {
 		// ODH trusted CA bundle ConfigMap exists
 		odhTrustedCABundleExists = true
-		log.Info("Found ODH trusted CA bundle ConfigMap", "name", OdhTrustedCABundleConfigMapName, "namespace", targetNamespace)
+		log.V(1).Info("Found ODH trusted CA bundle ConfigMap", "name", OdhTrustedCABundleConfigMapName, "namespace", targetNamespace)
 	} else if !errors.IsNotFound(err) {
 		// Real error (not just trusted CA bundle ConfigMap NotFound) - log and continue
 		log.Error(err, "Failed to check for ODH trusted CA bundle ConfigMap")
@@ -383,7 +385,17 @@ func (r *MLflowReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		// 2. Owns() only triggers on controller owner references
 		// This handler enqueues all MLflow instances listed in the owner references
 		Watches(&rbacv1.ClusterRole{}, handler.EnqueueRequestsFromMapFunc(r.clusterRoleToMLflowRequests)).
-		Owns(&rbacv1.ClusterRoleBinding{})
+		Owns(&rbacv1.ClusterRoleBinding{}).
+		// Watch odh-trusted-ca-bundle ConfigMap to trigger reconciliation when it appears/disappears
+		// Note: We don't restart pods on content changes - kubelet automatically updates mounted ConfigMaps
+		// This watch ensures we update the Deployment spec when the ConfigMap existence changes
+		Watches(
+			&corev1.ConfigMap{},
+			handler.EnqueueRequestsFromMapFunc(r.configMapToMLflowRequests),
+			controllerbuilder.WithPredicates(predicate.NewPredicateFuncs(func(obj client.Object) bool {
+				return obj.GetName() == OdhTrustedCABundleConfigMapName
+			})),
+		)
 
 	// Conditionally watch ConsoleLink if available in the cluster
 	if r.ConsoleLinkAvailable {
@@ -422,6 +434,36 @@ func (r *MLflowReconciler) clusterRoleToMLflowRequests(ctx context.Context, obj 
 				},
 			})
 		}
+	}
+	return requests
+}
+
+// configMapToMLflowRequests maps ConfigMap events to MLflow reconcile requests.
+// When the odh-trusted-ca-bundle ConfigMap is created/deleted, we need to reconcile
+// all MLflow instances in that namespace to update their Deployment spec.
+// Note: Content changes don't require pod restarts - kubelet auto-updates mounted ConfigMaps.
+func (r *MLflowReconciler) configMapToMLflowRequests(ctx context.Context, obj client.Object) []reconcile.Request {
+	log := logf.FromContext(ctx)
+
+	// List all MLflow instances in the same namespace as the ConfigMap
+	mlflowList := &mlflowv1.MLflowList{}
+	if err := r.List(ctx, mlflowList); err != nil {
+		log.Error(err, "Failed to list MLflow instances for ConfigMap watch")
+		return nil
+	}
+
+	requests := make([]reconcile.Request, 0, len(mlflowList.Items))
+	for _, mlflow := range mlflowList.Items {
+		log.V(1).Info("Enqueueing MLflow reconciliation due to odh-trusted-ca-bundle change",
+			"mlflow", mlflow.Name,
+			"configmap", obj.GetName(),
+			"configmap-namespace", obj.GetNamespace())
+		requests = append(requests, reconcile.Request{
+			NamespacedName: types.NamespacedName{
+				Name:      mlflow.Name,
+				Namespace: mlflow.Namespace,
+			},
+		})
 	}
 	return requests
 }
