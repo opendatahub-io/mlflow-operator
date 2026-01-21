@@ -159,6 +159,8 @@ TLS is terminated inside the MLflow container using uvicorn options. Certificate
 
 ### Storage Configuration
 
+`backendStoreUri` (or `backendStoreUriFrom`) is required and must be set explicitly. Avoid relying on implicit defaults to prevent data loss with ephemeral storage.
+
 #### Local Storage (Development/Testing)
 ```yaml
 spec:

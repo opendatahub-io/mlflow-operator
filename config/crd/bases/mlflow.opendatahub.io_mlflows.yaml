@@ -988,7 +988,7 @@ spec:
                   Examples:
                     - "sqlite:////mlflow/mlflow.db" (requires Storage to be configured)
                   Note: For URIs containing credentials, prefer using BackendStoreURIFrom for security.
-                  If not specified, defaults to "sqlite:////mlflow/mlflow.db"
+                  This must be set explicitly unless BackendStoreURIFrom is provided.
                 type: string
               backendStoreUriFrom:
                 description: |-
@@ -2044,6 +2044,9 @@ spec:
                 file-based storage (file:// prefix)
               rule: '!has(self.defaultArtifactRoot) || !self.defaultArtifactRoot.startsWith(''file://'')
                 || (has(self.serveArtifacts) && self.serveArtifacts)'
+            - message: backendStoreUri or backendStoreUriFrom must be set
+              rule: (has(self.backendStoreUri) && size(self.backendStoreUri) > 0)
+                || has(self.backendStoreUriFrom)
             - message: backendStoreUri and backendStoreUriFrom are mutually exclusive
               rule: '!(has(self.backendStoreUri) && has(self.backendStoreUriFrom))'
             - message: registryStoreUri and registryStoreUriFrom are mutually exclusive
