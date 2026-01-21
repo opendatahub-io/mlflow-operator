@@ -134,7 +134,7 @@ var _ = Describe("MLflow Controller", func() {
 				Namespace: controllerReconciler.Namespace,
 			}, httpRoute)).To(Succeed())
 
-			Expect(httpRoute.Spec.Rules).To(HaveLen(2))
+			Expect(httpRoute.Spec.Rules).To(HaveLen(3))
 
 			apiRule := httpRoute.Spec.Rules[0]
 			Expect(apiRule.Matches).To(HaveLen(1))
@@ -158,7 +158,29 @@ var _ = Describe("MLflow Controller", func() {
 			Expect(apiBackend.BackendRef.Weight).NotTo(BeNil())
 			Expect(*apiBackend.BackendRef.Weight).To(Equal(int32(1)))
 
-			rootRule := httpRoute.Spec.Rules[1]
+			v1Rule := httpRoute.Spec.Rules[1]
+			Expect(v1Rule.Matches).To(HaveLen(1))
+			Expect(v1Rule.Matches[0].Path).NotTo(BeNil())
+			Expect(v1Rule.Matches[0].Path.Value).NotTo(BeNil())
+			Expect(*v1Rule.Matches[0].Path.Value).To(Equal("/" + ResourceName + "/v1"))
+
+			Expect(v1Rule.Filters).To(HaveLen(1))
+			Expect(v1Rule.Filters[0].Type).To(Equal(gatewayv1.HTTPRouteFilterURLRewrite))
+			Expect(v1Rule.Filters[0].URLRewrite).NotTo(BeNil())
+			Expect(v1Rule.Filters[0].URLRewrite.Path).NotTo(BeNil())
+			Expect(v1Rule.Filters[0].URLRewrite.Path.Type).To(Equal(gatewayv1.PrefixMatchHTTPPathModifier))
+			Expect(v1Rule.Filters[0].URLRewrite.Path.ReplacePrefixMatch).NotTo(BeNil())
+			Expect(*v1Rule.Filters[0].URLRewrite.Path.ReplacePrefixMatch).To(Equal("/v1"))
+
+			Expect(v1Rule.BackendRefs).To(HaveLen(1))
+			v1Backend := v1Rule.BackendRefs[0]
+			Expect(v1Backend.BackendRef.BackendObjectReference.Name).To(Equal(gatewayv1.ObjectName(ResourceName)))
+			Expect(v1Backend.BackendRef.Port).NotTo(BeNil())
+			Expect(int(*v1Backend.BackendRef.Port)).To(Equal(8443))
+			Expect(v1Backend.BackendRef.Weight).NotTo(BeNil())
+			Expect(*v1Backend.BackendRef.Weight).To(Equal(int32(1)))
+
+			rootRule := httpRoute.Spec.Rules[2]
 			Expect(rootRule.Matches).To(HaveLen(1))
 			Expect(rootRule.Matches[0].Path).NotTo(BeNil())
 			Expect(rootRule.Matches[0].Path.Value).NotTo(BeNil())
