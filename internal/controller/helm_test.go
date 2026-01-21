@@ -1155,6 +1155,124 @@ func TestRenderChart(t *testing.T) {
 	}
 }
 
+func TestMlflowToHelmValues_CABundle(t *testing.T) {
+	renderer := &HelmRenderer{}
+
+	// Test: no CA bundles configured
+	values := renderer.mlflowToHelmValues(&mlflowv1.MLflow{
+		ObjectMeta: metav1.ObjectMeta{Name: "mlflow"},
+		Spec:       mlflowv1.MLflowSpec{},
+	}, "test-ns", RenderOptions{OdhTrustedCABundleExists: false})
+
+	odhBundle := values["odhTrustedCABundle"].(map[string]interface{})
+	if odhBundle["enabled"].(bool) != false {
+		t.Error("odhTrustedCABundle should be disabled when ConfigMap doesn't exist")
+	}
+
+	// Test: user-provided CA bundle
+	values = renderer.mlflowToHelmValues(&mlflowv1.MLflow{
+		ObjectMeta: metav1.ObjectMeta{Name: "mlflow"},
+		Spec: mlflowv1.MLflowSpec{
+			CABundleConfigMap: &mlflowv1.CABundleConfigMapSpec{Name: "my-ca", Key: "ca.crt"},
+		},
+	}, "test-ns", RenderOptions{OdhTrustedCABundleExists: false})
+
+	userBundle := values["caBundleConfigMap"].(map[string]interface{})
+	if userBundle["enabled"].(bool) != true || userBundle["name"].(string) != "my-ca" {
+		t.Error("caBundleConfigMap should be enabled with correct name")
+	}
+
+	// Test: both CA bundles enabled
+	values = renderer.mlflowToHelmValues(&mlflowv1.MLflow{
+		ObjectMeta: metav1.ObjectMeta{Name: "mlflow"},
+		Spec: mlflowv1.MLflowSpec{
+			CABundleConfigMap: &mlflowv1.CABundleConfigMapSpec{Name: "my-ca", Key: "ca.crt"},
+		},
+	}, "test-ns", RenderOptions{OdhTrustedCABundleExists: true})
+
+	userBundle = values["caBundleConfigMap"].(map[string]interface{})
+	odhBundle = values["odhTrustedCABundle"].(map[string]interface{})
+	if userBundle["enabled"].(bool) != true || odhBundle["enabled"].(bool) != true {
+		t.Error("both CA bundles should be enabled when both are configured")
+	}
+}
+
+func TestRenderChart_CABundle(t *testing.T) {
+	renderer := NewHelmRenderer("../../charts/mlflow")
+
+	// Test with both CA bundles enabled - the most comprehensive case
+	mlflow := &mlflowv1.MLflow{
+		ObjectMeta: metav1.ObjectMeta{Name: "mlflow"},
+		Spec: mlflowv1.MLflowSpec{
+			CABundleConfigMap: &mlflowv1.CABundleConfigMapSpec{Name: "my-ca", Key: "ca.crt"},
+		},
+	}
+
+	objs, err := renderer.RenderChart(mlflow, "test-ns", RenderOptions{OdhTrustedCABundleExists: true})
+	if err != nil {
+		t.Fatalf("RenderChart() error = %v", err)
+	}
+
+	// Find the Deployment
+	var deployment *unstructured.Unstructured
+	for _, obj := range objs {
+		if obj.GetKind() == deploymentKind {
+			deployment = obj
+			break
+		}
+	}
+	if deployment == nil {
+		t.Fatal("Deployment not found")
+	}
+
+	// Check SSL_CERT_DIR env var exists
+	containers, _, _ := unstructured.NestedSlice(deployment.Object, "spec", "template", "spec", "containers")
+	container := containers[0].(map[string]interface{})
+	envVars, _, _ := unstructured.NestedSlice(container, "env")
+	foundSSLCertDir := false
+	for _, env := range envVars {
+		if env.(map[string]interface{})["name"] == "SSL_CERT_DIR" {
+			foundSSLCertDir = true
+			break
+		}
+	}
+	if !foundSSLCertDir {
+		t.Error("SSL_CERT_DIR env var not found")
+	}
+
+	// Check both volume mounts exist
+	volumeMounts, _, _ := unstructured.NestedSlice(container, "volumeMounts")
+	foundCustom, foundODH := false, false
+	for _, vm := range volumeMounts {
+		name := vm.(map[string]interface{})["name"].(string)
+		if name == "ca-bundle" {
+			foundCustom = true
+		}
+		if name == OdhTrustedCABundleConfigMapName {
+			foundODH = true
+		}
+	}
+	if !foundCustom {
+		t.Error("custom CA bundle volume mount not found")
+	}
+	if !foundODH {
+		t.Error("ODH CA bundle volume mount not found")
+	}
+
+	// Check volumes have optional: true
+	volumes, _, _ := unstructured.NestedSlice(deployment.Object, "spec", "template", "spec", "volumes")
+	for _, vol := range volumes {
+		volMap := vol.(map[string]interface{})
+		name := volMap["name"].(string)
+		if name == "ca-bundle" || name == OdhTrustedCABundleConfigMapName {
+			configMap, _, _ := unstructured.NestedMap(volMap, "configMap")
+			if optional, ok := configMap["optional"].(bool); !ok || !optional {
+				t.Errorf("volume %s should have optional: true", name)
+			}
+		}
+	}
+}
+
 // Helper function to create pointers
 func ptr[T any](v T) *T {
 	return &v
