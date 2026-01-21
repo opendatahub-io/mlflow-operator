@@ -97,6 +97,58 @@ func (r *MLflowReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		return ctrl.Result{}, nil
 	}
 
+	// Validate user-provided CA bundle ConfigMap if specified
+	if mlflow.Spec.CABundleConfigMap != nil {
+		customCABundleConfigMap := &corev1.ConfigMap{}
+		err = r.Get(ctx, types.NamespacedName{
+			Name:      mlflow.Spec.CABundleConfigMap.Name,
+			Namespace: targetNamespace,
+		}, customCABundleConfigMap)
+		if err != nil {
+			var msg string
+			if errors.IsNotFound(err) {
+				msg = fmt.Sprintf("CA bundle ConfigMap %q not found in namespace %q", mlflow.Spec.CABundleConfigMap.Name, targetNamespace)
+			} else {
+				msg = fmt.Sprintf("Failed to get CA bundle ConfigMap %q: %v", mlflow.Spec.CABundleConfigMap.Name, err)
+			}
+			log.Error(err, msg)
+			meta.SetStatusCondition(&mlflow.Status.Conditions, metav1.Condition{
+				Type:    "Available",
+				Status:  metav1.ConditionFalse,
+				Reason:  "CABundleConfigMapError",
+				Message: msg,
+			})
+			if statusErr := r.Status().Update(ctx, mlflow); statusErr != nil {
+				log.Error(statusErr, "Failed to update MLflow status")
+			}
+			return ctrl.Result{}, fmt.Errorf("%s", msg)
+		}
+		// ConfigMap exists, check if the key exists
+		if _, ok := customCABundleConfigMap.Data[mlflow.Spec.CABundleConfigMap.Key]; !ok {
+			availableKeys := make([]string, 0, len(customCABundleConfigMap.Data))
+			for k := range customCABundleConfigMap.Data {
+				availableKeys = append(availableKeys, k)
+			}
+			msg := fmt.Sprintf("CA bundle ConfigMap %q exists but key %q not found (available keys: %v)",
+				mlflow.Spec.CABundleConfigMap.Name, mlflow.Spec.CABundleConfigMap.Key, availableKeys)
+			log.Error(nil, msg)
+			meta.SetStatusCondition(&mlflow.Status.Conditions, metav1.Condition{
+				Type:    "Available",
+				Status:  metav1.ConditionFalse,
+				Reason:  "CABundleKeyNotFound",
+				Message: msg,
+			})
+			if statusErr := r.Status().Update(ctx, mlflow); statusErr != nil {
+				log.Error(statusErr, "Failed to update MLflow status")
+			}
+			return ctrl.Result{}, fmt.Errorf("%s", msg)
+		}
+		log.V(1).Info("Found custom CA bundle ConfigMap with valid key",
+			"configmap", mlflow.Spec.CABundleConfigMap.Name,
+			"key", mlflow.Spec.CABundleConfigMap.Key,
+			"namespace", targetNamespace)
+	}
+
 	// Check if ODH trusted CA bundle ConfigMap exists in target namespace
 	odhTrustedCABundleExists := false
 	odhCABundleConfigMap := &corev1.ConfigMap{}
