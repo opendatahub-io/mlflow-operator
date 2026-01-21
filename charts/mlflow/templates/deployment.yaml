@@ -71,32 +71,44 @@ spec:
           imagePullPolicy: {{ .Values.image.imagePullPolicy }}
           {{- end }}
           command:
-            - mlflow
+            - /bin/sh
+            - -c
           args:
-            - server
-            {{- if .Values.mlflow.serveArtifacts }}
-            - --serve-artifacts
-            - --artifacts-destination={{ .Values.mlflow.artifactsDestination }}
-            {{- else }}
-            - --no-serve-artifacts
-            {{- end }}
-            {{- if .Values.mlflow.defaultArtifactRoot }}
-            - --default-artifact-root={{ .Values.mlflow.defaultArtifactRoot }}
-            {{- end }}
-            - --app-name=kubernetes-auth
-            - --enable-workspaces
-            - --workspace-store-uri={{ .Values.mlflow.workspaceStoreUri }}
-            - --host=0.0.0.0
-            - --port={{ .Values.mlflow.port }}
-            - --workers={{ .Values.mlflow.workers }}
-            - "--uvicorn-opts=--ssl-keyfile=/etc/tls/private/tls.key --ssl-certfile=/etc/tls/private/tls.crt --proxy-headers"
-            {{- if .Values.mlflow.allowedHosts }}
-            - --allowed-hosts
-            - "{{ join "," .Values.mlflow.allowedHosts }}"
-            {{- end }}
-            {{- if .Values.mlflow.staticPrefix }}
-            - --static-prefix={{ .Values.mlflow.staticPrefix }}
-            {{- end }}
+            - |
+              set -e
+              child=""
+              trap '[ -n "$child" ] && kill -TERM $child' TERM INT
+              mlflow server \
+                {{- if .Values.mlflow.serveArtifacts }}
+                --serve-artifacts \
+                --artifacts-destination={{ .Values.mlflow.artifactsDestination }} \
+                {{- else }}
+                --no-serve-artifacts \
+                {{- end }}
+                {{- if .Values.mlflow.defaultArtifactRoot }}
+                --default-artifact-root={{ .Values.mlflow.defaultArtifactRoot }} \
+                {{- end }}
+                --app-name=kubernetes-auth \
+                --enable-workspaces \
+                --workspace-store-uri={{ .Values.mlflow.workspaceStoreUri }} \
+                --host=0.0.0.0 \
+                --port={{ .Values.mlflow.port }} \
+                --workers={{ .Values.mlflow.workers }} \
+                "--uvicorn-opts=--ssl-keyfile=/etc/tls/private/tls.key --ssl-certfile=/etc/tls/private/tls.crt --proxy-headers" \
+                {{- if .Values.mlflow.allowedHosts }}
+                --allowed-hosts "{{ join "," .Values.mlflow.allowedHosts }}" \
+                {{- end }}
+                {{- if .Values.mlflow.staticPrefix }}
+                --static-prefix={{ .Values.mlflow.staticPrefix }} \
+                {{- end }}
+                &
+              child=$!
+              set +e
+              wait $child
+              rc=$?
+              set -e
+              # Exit 0 for SIGTERM (143) or SIGINT (130), otherwise propagate exit code
+              if [ $rc -eq 143 ] || [ $rc -eq 130 ]; then exit 0; else exit $rc; fi
           env:
             - name: MLFLOW_DISABLE_TELEMETRY
               value: "true"
