@@ -125,6 +125,8 @@ helm install mlflow . -n opendatahub --create-namespace \
 
 MLflow is deployed with the `kubernetes-auth` app enabled. The operator sets `MLFLOW_K8S_AUTH_AUTHORIZATION_MODE=self_subject_access_review`, so authorization checks are performed directly by MLflow using the caller's token—no special RBAC permissions are required beyond listing namespaces for the workspaces feature.
 
+The deployment always sets `MLFLOW_DISABLE_TELEMETRY=true` and `MLFLOW_SERVER_ENABLE_JOB_EXECUTION=false` to disable telemetry and job execution by default.
+
 TLS is terminated inside the MLflow container using uvicorn options. Certificates come from the `mlflow-tls` secret, which is created automatically on OpenShift via the `service.beta.openshift.io/serving-cert-secret-name` annotation. If you need to provide your own certificates, place `tls.crt` and `tls.key` in a secret named `mlflow-tls` (or override `tls.secretName` in Helm values).
 
 ### Storage Configuration

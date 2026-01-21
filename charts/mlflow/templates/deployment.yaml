@@ -98,6 +98,10 @@ spec:
             - --static-prefix={{ .Values.mlflow.staticPrefix }}
             {{- end }}
           env:
+            - name: MLFLOW_DISABLE_TELEMETRY
+              value: "true"
+            - name: MLFLOW_SERVER_ENABLE_JOB_EXECUTION
+              value: "false"
             - name: MLFLOW_BACKEND_STORE_URI
               {{- if .Values.mlflow.backendStoreUriFrom }}
               valueFrom:
