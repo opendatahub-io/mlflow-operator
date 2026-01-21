@@ -95,6 +95,51 @@ func (r *MLflowReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		return ctrl.Result{}, nil
 	}
 
+	// Validate user-provided CA bundle ConfigMap if specified
+	if mlflow.Spec.CABundleConfigMap != nil {
+		validCABundle := false
+		customCABundleConfigMap := &corev1.ConfigMap{}
+		err = r.Get(ctx, types.NamespacedName{
+			Name:      mlflow.Spec.CABundleConfigMap.Name,
+			Namespace: targetNamespace,
+		}, customCABundleConfigMap)
+		if err != nil {
+			if errors.IsNotFound(err) {
+				log.Info("Warning: Custom CA bundle ConfigMap not found, MLflow will start without custom certificates",
+					"configmap", mlflow.Spec.CABundleConfigMap.Name,
+					"namespace", targetNamespace)
+			} else {
+				log.Error(err, "Failed to check for custom CA bundle ConfigMap",
+					"configmap", mlflow.Spec.CABundleConfigMap.Name,
+					"namespace", targetNamespace)
+			}
+		} else {
+			// ConfigMap exists, check if the key exists
+			if _, ok := customCABundleConfigMap.Data[mlflow.Spec.CABundleConfigMap.Key]; !ok {
+				// Get available keys for helpful error message
+				availableKeys := make([]string, 0, len(customCABundleConfigMap.Data))
+				for k := range customCABundleConfigMap.Data {
+					availableKeys = append(availableKeys, k)
+				}
+				log.Info("Warning: Custom CA bundle ConfigMap exists but key not found, MLflow will start without custom certificates",
+					"configmap", mlflow.Spec.CABundleConfigMap.Name,
+					"key", mlflow.Spec.CABundleConfigMap.Key,
+					"namespace", targetNamespace,
+					"available-keys", availableKeys)
+			} else {
+				validCABundle = true
+				log.V(1).Info("Found custom CA bundle ConfigMap with valid key",
+					"configmap", mlflow.Spec.CABundleConfigMap.Name,
+					"key", mlflow.Spec.CABundleConfigMap.Key,
+					"namespace", targetNamespace)
+			}
+		}
+		if !validCABundle {
+			// Avoid enabling the mount when it would break pod startup
+			mlflow.Spec.CABundleConfigMap = nil
+		}
+	}
+
 	// Check if ODH trusted CA bundle ConfigMap exists in target namespace
 	odhTrustedCABundleExists := false
 	odhCABundleConfigMap := &corev1.ConfigMap{}
