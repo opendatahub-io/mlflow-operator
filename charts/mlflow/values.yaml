@@ -58,10 +58,11 @@ storage:
 # MLflow server configuration
 mlflow:
   # Backend store URI (where MLflow stores experiment and run metadata)
-  # Default uses SQLite which requires storage.enabled: true
+  # Set this explicitly or use backendStoreUriFrom instead.
+  # Example (requires storage.enabled: true): sqlite:////mlflow/mlflow.db
   # For production, use remote DB: postgresql://user:pass@host:5432/mlflow
-  # Note: For URIs containing credentials, use backendStoreUriFrom instead
-  backendStoreUri: "sqlite:////mlflow/mlflow.db"
+  # Note: For URIs containing credentials, use backendStoreUriFrom.
+  backendStoreUri: ""
 
   # Backend store URI from secret (preferred for URIs with credentials)
   # Takes precedence over backendStoreUri if both are set

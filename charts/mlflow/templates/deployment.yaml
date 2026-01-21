@@ -165,7 +165,7 @@ spec:
               {{- else }}
               value: {{ .Values.mlflow.backendStoreUri | quote }}
               {{- end }}
-            {{- if .Values.mlflow.registryStoreUri }}
+            {{- if or .Values.mlflow.registryStoreUri .Values.mlflow.registryStoreUriFrom }}
             - name: MLFLOW_REGISTRY_STORE_URI
               {{- if .Values.mlflow.registryStoreUriFrom }}
               valueFrom:

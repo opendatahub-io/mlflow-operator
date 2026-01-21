@@ -24,6 +24,7 @@ import (
 // MLflowSpec defines the desired state of MLflow
 // +kubebuilder:validation:XValidation:rule="has(self.defaultArtifactRoot) || (has(self.serveArtifacts) && self.serveArtifacts)",message="defaultArtifactRoot must be set when serveArtifacts is not true"
 // +kubebuilder:validation:XValidation:rule="!has(self.defaultArtifactRoot) || !self.defaultArtifactRoot.startsWith('file://') || (has(self.serveArtifacts) && self.serveArtifacts)",message="serveArtifacts must be enabled when defaultArtifactRoot uses file-based storage (file:// prefix)"
+// +kubebuilder:validation:XValidation:rule="(has(self.backendStoreUri) && size(self.backendStoreUri) > 0) || has(self.backendStoreUriFrom)",message="backendStoreUri or backendStoreUriFrom must be set"
 // +kubebuilder:validation:XValidation:rule="!(has(self.backendStoreUri) && has(self.backendStoreUriFrom))",message="backendStoreUri and backendStoreUriFrom are mutually exclusive"
 // +kubebuilder:validation:XValidation:rule="!(has(self.registryStoreUri) && has(self.registryStoreUriFrom))",message="registryStoreUri and registryStoreUriFrom are mutually exclusive"
 // +kubebuilder:validation:XValidation:rule="!has(self.backendStoreUri) || (!self.backendStoreUri.startsWith('sqlite://') && !self.backendStoreUri.startsWith('file://')) || has(self.storage)",message="storage must be configured when using file-based backend store (sqlite:// or file:// prefix)"
@@ -73,7 +74,7 @@ type MLflowSpec struct {
 	// Examples:
 	//   - "sqlite:////mlflow/mlflow.db" (requires Storage to be configured)
 	// Note: For URIs containing credentials, prefer using BackendStoreURIFrom for security.
-	// If not specified, defaults to "sqlite:////mlflow/mlflow.db"
+	// This must be set explicitly unless BackendStoreURIFrom is provided.
 	// +optional
 	BackendStoreURI *string `json:"backendStoreUri,omitempty"`
 
