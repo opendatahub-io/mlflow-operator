@@ -32,6 +32,9 @@ rules:
       - experiments
       - registeredmodels
       - jobs
+      - gatewaysecrets
+      - gatewayendpoints
+      - gatewaymodeldefinitions
     verbs:
       - get
       - list
@@ -63,7 +66,18 @@ rules:
       - experiments
       - registeredmodels
       - jobs
+      - gatewaysecrets
+      - gatewayendpoints
+      - gatewaymodeldefinitions
     verbs:
       - create
       - update
       - delete
+  - apiGroups:
+      - mlflow.kubeflow.org
+    resources:
+      - gatewaysecrets/use
+      - gatewayendpoints/use
+      - gatewaymodeldefinitions/use
+    verbs:
+      - create
