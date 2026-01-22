@@ -162,6 +162,11 @@ type MLflowSpec struct {
 	// +optional
 	PodLabels map[string]string `json:"podLabels,omitempty"`
 
+	// PodAnnotations are annotations to add only to the MLflow pod, not to other resources.
+	// Use this for pod-specific annotations like Prometheus scraping or sidecar configuration.
+	// +optional
+	PodAnnotations map[string]string `json:"podAnnotations,omitempty"`
+
 	// PodSecurityContext specifies the security context for the MLflow pod
 	// +optional
 	PodSecurityContext *corev1.PodSecurityContext `json:"podSecurityContext,omitempty"`

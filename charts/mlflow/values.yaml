@@ -21,6 +21,10 @@ commonLabels:
 # For labels that should be on all resources, use commonLabels
 podLabels: {}
 
+# Pod-specific annotations applied only to the MLflow pod
+# Use this for pod-specific metadata like Prometheus scraping, sidecars, etc.
+podAnnotations: {}
+
 # TLS configuration for the MLflow server (handled directly by uvicorn)
 tls:
   # Secret containing TLS certificate and key (tls.crt, tls.key)

@@ -1229,6 +1229,13 @@ spec:
                 description: NodeSelector is a selector which must be true for the
                   pod to fit on a node
                 type: object
+              podAnnotations:
+                additionalProperties:
+                  type: string
+                description: |-
+                  PodAnnotations are annotations to add only to the MLflow pod, not to other resources.
+                  Use this for pod-specific annotations like Prometheus scraping or sidecar configuration.
+                type: object
               podLabels:
                 additionalProperties:
                   type: string

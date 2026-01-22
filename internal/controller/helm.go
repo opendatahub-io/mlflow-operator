@@ -120,6 +120,14 @@ func (h *HelmRenderer) mlflowToHelmValues(mlflow *mlflowv1.MLflow, namespace str
 		values["podLabels"] = podLabels
 	}
 
+	if len(mlflow.Spec.PodAnnotations) > 0 {
+		podAnnotations := make(map[string]interface{})
+		for k, v := range mlflow.Spec.PodAnnotations {
+			podAnnotations[k] = v
+		}
+		values["podAnnotations"] = podAnnotations
+	}
+
 	cfg := config.GetConfig()
 	tlsSecretName := TLSSecretName
 
