@@ -3,6 +3,11 @@ description: 'Deploy MLflow operator and create MLflow instance on a Kind cluste
 author: 'MLflow Operator Team'
 
 inputs:
+  python_version:
+    description: 'Version of python to be used when running the deploy script'
+    required: false
+    default: '3.11'
+
   namespace:
     description: 'Kubernetes namespace to deploy MLflow'
     required: false
@@ -127,7 +132,7 @@ runs:
     - name: Set up Python
       uses: actions/setup-python@v4
       with:
-        python-version: '3.11'
+        python-version: ${{ inputs.python_version }}
 
     - name: Install dependencies
       shell: bash
