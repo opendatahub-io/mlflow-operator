@@ -54,6 +54,14 @@ Build and push your image:
 make docker-build docker-push IMG=<some-registry>/mlflow-operator:tag
 ```
 
+> **Building on Apple Silicon**: Use `docker-buildx` with CGO disabled to avoid QEMU emulation issues:
+>
+> ```sh
+> CGO_ENABLED=0 PLATFORMS=linux/amd64 make docker-buildx IMG=<some-registry>/mlflow-operator:tag
+> ```
+>
+> This builds without FIPS support, which is acceptable for local development. Production images are built on amd64 CI runners with FIPS enabled.
+
 Install the CRDs:
 ```sh
 make install
