@@ -1,0 +1,166 @@
+name: 'Deploy MLflow on Kind'
+description: 'Deploy MLflow operator and create MLflow instance on a Kind cluster with configurable storage options'
+author: 'MLflow Operator Team'
+
+inputs:
+  namespace:
+    description: 'Kubernetes namespace to deploy MLflow'
+    required: false
+    default: 'opendatahub'
+
+  target_branch:
+    description: 'Target branch for MLflow image (used for PR builds)'
+    required: false
+    default: 'master'
+
+  mlflow_image:
+    description: 'Full MLflow image name and tag'
+    required: false
+    default: 'quay.io/opendatahub/mlflow:master'
+
+  mlflow_operator_image:
+    description: 'Full MLflow operator image name and tag'
+    required: false
+    default: 'quay.io/opendatahub/mlflow-operator:main'
+
+  backend_store:
+    description: 'Backend store type for experiment metadata'
+    required: false
+    default: 'sqlite'
+    # Options: sqlite, postgres
+
+  registry_store:
+    description: 'Registry store type for model registry metadata'
+    required: false
+    default: 'sqlite'
+    # Options: sqlite, postgres
+
+  artifact_storage:
+    description: 'Artifact storage type'
+    required: false
+    default: 'file'
+    # Options: file, s3
+
+  serve_artifacts:
+    description: 'Whether MLflow should serve artifacts via REST API'
+    required: false
+    default: 'true'
+    # Options: true, false
+
+  backend_store_uri:
+    description: 'Custom backend store URI (overrides backend_store default)'
+    required: false
+    default: 'sqlite:////mlflow/mlflow.db'
+
+  registry_store_uri:
+    description: 'Custom registry store URI (overrides registry_store default)'
+    required: false
+    default: 'sqlite:////mlflow/mlflow.db'
+
+  artifacts_destination:
+    description: 'Custom artifacts destination (overrides artifact_storage default)'
+    required: false
+    default: 'file:///mlflow/artifacts'
+
+  postgres_host:
+    description: 'PostgreSQL host (when using postgres stores, auto-generated if empty)'
+    required: false
+    default: ''
+
+  postgres_port:
+    description: 'PostgreSQL port'
+    required: false
+    default: '5432'
+
+  postgres_user:
+    description: 'PostgreSQL username'
+    required: false
+    default: 'postgres'
+
+  postgres_password:
+    description: 'PostgreSQL password'
+    required: false
+    default: 'mysecretpassword'
+
+  postgres_backend_db:
+    description: 'PostgreSQL database name for backend store'
+    required: false
+    default: 'mydatabase'
+
+  postgres_registry_db:
+    description: 'PostgreSQL database name for registry store'
+    required: false
+    default: 'mydatabase'
+
+  s3_access_key:
+    description: 'S3 access key ID'
+    required: false
+    default: 'minio'
+
+  s3_secret_key:
+    description: 'S3 secret access key'
+    required: false
+    default: 'minio123'
+
+  s3_bucket:
+    description: 'S3 bucket name (when using s3 storage)'
+    required: false
+    default: 'mlpipeline'
+
+  s3_endpoint:
+    description: 'S3 endpoint URL (auto-generated if empty, for non-AWS S3 compatible services like SeaweedFS)'
+    required: false
+    default: ''
+
+outputs:
+  mlflow_url:
+    description: 'MLflow service URL for port forwarding'
+    value: ${{ steps.deploy.outputs.mlflow_url }}
+
+  namespace:
+    description: 'Namespace where MLflow was deployed'
+    value: ${{ steps.deploy.outputs.namespace }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+
+    - name: Install dependencies
+      shell: bash
+      run: |
+        pip install pyyaml kubernetes
+
+    - name: Deploy MLflow
+      id: deploy
+      shell: bash
+      run: |
+        cd ${{ github.action_path }}
+        python deploy.py \
+          --namespace "${{ inputs.namespace }}" \
+          --mlflow-image "${{ inputs.mlflow_image }}" \
+          --mlflow-operator-image "${{ inputs.mlflow_operator_image }}" \
+          --backend-store "${{ inputs.backend_store }}" \
+          --registry-store "${{ inputs.registry_store }}" \
+          --artifact-storage "${{ inputs.artifact_storage }}" \
+          --serve-artifacts "${{ inputs.serve_artifacts }}" \
+          --backend-store-uri "${{ inputs.backend_store_uri }}" \
+          --registry-store-uri "${{ inputs.registry_store_uri }}" \
+          --artifacts-destination "${{ inputs.artifacts_destination }}" \
+          --postgres-host "${{ inputs.postgres_host }}" \
+          --postgres-port "${{ inputs.postgres_port }}" \
+          --postgres-user "${{ inputs.postgres_user }}" \
+          --postgres-password "${{ inputs.postgres_password }}" \
+          --postgres-backend-db "${{ inputs.postgres_backend_db }}" \
+          --postgres-registry-db "${{ inputs.postgres_registry_db }}" \
+          --s3-bucket "${{ inputs.s3_bucket }}" \
+          --s3-access-key "${{ inputs.s3_access_key }}" \
+          --s3-secret-key "${{ inputs.s3_secret_key }}" \
+          --s3-endpoint "${{ inputs.s3_endpoint }}"
+
+branding:
+  icon: 'cloud'
+  color: 'blue'

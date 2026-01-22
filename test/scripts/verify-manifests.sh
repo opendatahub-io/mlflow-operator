@@ -112,6 +112,13 @@ VALIDATED_OVERLAYS=()
 
 for overlay in config/overlays/*/; do
     overlay_name=$(basename "$overlay")
+
+    # Skip kind overlay as it requires runtime TLS certificate generation
+    if [ "$overlay_name" = "kind" ]; then
+        echo "Skipping overlay: $overlay_name (requires runtime certificate generation)"
+        continue
+    fi
+
     echo "Building overlay: $overlay_name"
     if bin/kustomize build "$overlay" > /dev/null 2>&1; then
         echo -e "${GREEN}✓ $overlay_name builds successfully${NC}"
