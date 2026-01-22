@@ -186,6 +186,17 @@ type MLflowSpec struct {
 	// Affinity specifies the pod's scheduling constraints
 	// +optional
 	Affinity *corev1.Affinity `json:"affinity,omitempty"`
+
+	// ExtraAllowedHosts is a list of additional hostnames that the MLflow server should accept.
+	// By default, the operator automatically generates allowed hosts based on the service DNS names
+	// (e.g., "mlflow.namespace.svc.cluster.local", "mlflow.namespace.svc", "mlflow.namespace", "mlflow").
+	// Use this field to add additional hostnames such as external routes, ingress hosts, or
+	// custom DNS names that clients may use to access the MLflow server.
+	// Examples:
+	//   - "mlflow.example.com" (external DNS name)
+	//   - "mlflow-route-myproject.apps.cluster.example.com" (OpenShift Route)
+	// +optional
+	ExtraAllowedHosts []string `json:"extraAllowedHosts,omitempty"`
 }
 
 // ImageConfig contains container image configuration
