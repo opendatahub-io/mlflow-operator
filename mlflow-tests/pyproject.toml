@@ -1,0 +1,37 @@
+[project]
+name = "mlflow-tests"
+version = "0.1.0"
+description = "Comprehensive MLflow testing with Kubernetes integration"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "kubernetes>=35.0.0",
+    "mlflow[auth] @ git+https://github.com/opendatahub-io/mlflow@master",
+    "pytest>=9.0.2",
+    "Flask-WTF<2",
+    "boto3>=1.42.40"
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.metadata]
+allow-direct-references = true
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/mlflow_tests"]
+
+[tool.uv]
+package = true
+
+[tool.pytest.ini_options]
+markers = [
+    "Artifacts: Test artifact operations and S3 storage verification",
+    "Experiments: Test experiment RBAC and management operations",
+    "Models: Test registered model RBAC and management operations",
+]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]

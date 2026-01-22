@@ -3,6 +3,11 @@ description: 'Deploy MLflow operator and create MLflow instance on a Kind cluste
 author: 'MLflow Operator Team'
 
 inputs:
+  python_version:
+    description: 'Version of python to be used when running the deploy script'
+    required: false
+    default: '3.11'
+
   namespace:
     description: 'Kubernetes namespace to deploy MLflow'
     required: false
@@ -121,13 +126,17 @@ outputs:
     description: 'Namespace where MLflow was deployed'
     value: ${{ steps.deploy.outputs.namespace }}
 
+  s3_endpoint:
+    description: 'S3 endpoint URL used for artifact storage'
+    value: ${{ steps.deploy.outputs.s3_endpoint }}
+
 runs:
   using: 'composite'
   steps:
     - name: Set up Python
       uses: actions/setup-python@v4
       with:
-        python-version: '3.11'
+        python-version: ${{ inputs.python_version }}
 
     - name: Install dependencies
       shell: bash
