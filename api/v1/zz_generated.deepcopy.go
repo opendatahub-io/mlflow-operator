@@ -328,6 +328,11 @@ func (in *MLflowSpec) DeepCopyInto(out *MLflowSpec) {
 		*out = new(corev1.Affinity)
 		(*in).DeepCopyInto(*out)
 	}
+	if in.ExtraAllowedHosts != nil {
+		in, out := &in.ExtraAllowedHosts, &out.ExtraAllowedHosts
+		*out = make([]string, len(*in))
+		copy(*out, *in)
+	}
 	if in.CABundleConfigMap != nil {
 		in, out := &in.CABundleConfigMap, &out.CABundleConfigMap
 		*out = new(CABundleConfigMapSpec)

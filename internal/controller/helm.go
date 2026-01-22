@@ -297,8 +297,19 @@ func (h *HelmRenderer) mlflowToHelmValues(mlflow *mlflowv1.MLflow, namespace str
 		defaultArtifactRoot = *mlflow.Spec.DefaultArtifactRoot
 	}
 
-	// Wildcard to allow all hosts
-	allowedHosts := []string{"*"}
+	// Build allowedHosts from service DNS names and user-provided extra hosts
+	// Service DNS format: <service>.<namespace>.svc.cluster.local (and shorter variants)
+	serviceName := ResourceName + getResourceSuffix(mlflow.Name)
+	allowedHosts := []string{
+		serviceName + "." + namespace + ".svc.cluster.local",
+		serviceName + "." + namespace + ".svc",
+		serviceName + "." + namespace,
+		serviceName,
+	}
+	// Append user-provided extra hosts (e.g., external routes, ingress hosts)
+	if len(mlflow.Spec.ExtraAllowedHosts) > 0 {
+		allowedHosts = append(allowedHosts, mlflow.Spec.ExtraAllowedHosts...)
+	}
 
 	// Defaults to false, but MUST be true when using file-based artifact storage
 	serveArtifacts := false

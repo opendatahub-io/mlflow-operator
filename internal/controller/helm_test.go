@@ -17,6 +17,7 @@ limitations under the License.
 package controller
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/onsi/gomega"   // nolint:staticcheck // Named import for gomega.NewWithT; dual import for readability
@@ -28,6 +29,11 @@ import (
 
 	mlflowv1 "github.com/opendatahub-io/mlflow-operator/api/v1"
 )
+
+// contains checks if str contains substr
+func contains(str, substr string) bool {
+	return strings.Contains(str, substr)
+}
 
 const (
 	deploymentKind      = "Deployment"
@@ -1058,7 +1064,7 @@ func TestRenderChart(t *testing.T) {
 			},
 		},
 		{
-			name: "deployment should have allowed hosts configured",
+			name: "deployment should have allowed hosts from service DNS names",
 			mlflow: &mlflowv1.MLflow{
 				ObjectMeta: metav1.ObjectMeta{
 					Name: "test-mlflow",
@@ -1086,16 +1092,32 @@ func TestRenderChart(t *testing.T) {
 							t.Fatalf("Failed to get args from container: found=%v, err=%v", found, err)
 						}
 
-						// Check for --allowed-hosts arg
+						// Check for --allowed-hosts arg with service DNS names
+						// Service name is mlflow-test-mlflow for CR named "test-mlflow"
+						expectedHosts := []string{
+							"mlflow-test-mlflow.test-ns.svc.cluster.local",
+							"mlflow-test-mlflow.test-ns.svc",
+							"mlflow-test-mlflow.test-ns",
+							"mlflow-test-mlflow",
+						}
 						hasAllowedHosts := false
 						for i, arg := range args {
 							if arg == "--allowed-hosts" {
 								hasAllowedHosts = true
-								// Next arg should be the comma-separated list
 								if i+1 < len(args) {
 									hosts := args[i+1]
 									if hosts == "" {
 										t.Error("--allowed-hosts flag present but hosts list is empty")
+									}
+									// Verify all expected hosts are present
+									for _, expected := range expectedHosts {
+										if !contains(hosts, expected) {
+											t.Errorf("Expected host %q not found in allowed hosts: %s", expected, hosts)
+										}
+									}
+									// Verify wildcard is NOT present
+									if contains(hosts, "*") {
+										t.Error("Wildcard '*' should not be in allowed hosts")
 									}
 									t.Logf("Allowed hosts: %s", hosts)
 								}
@@ -1116,6 +1138,71 @@ func TestRenderChart(t *testing.T) {
 						}
 						if !hasStaticPrefixArg {
 							t.Errorf("%s not found in deployment args", staticPrefixArg)
+						}
+					}
+				}
+			},
+		},
+		{
+			name: "deployment should include extraAllowedHosts",
+			mlflow: &mlflowv1.MLflow{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "mlflow",
+				},
+				Spec: mlflowv1.MLflowSpec{
+					BackendStoreURI:      ptr("sqlite:////mlflow/mlflow.db"),
+					RegistryStoreURI:     ptr("sqlite:////mlflow/mlflow.db"),
+					ArtifactsDestination: ptr("file:///mlflow/artifacts"),
+					ExtraAllowedHosts: []string{
+						"mlflow.example.com",
+						"mlflow-route.apps.cluster.example.com",
+					},
+				},
+			},
+			namespace: "opendatahub",
+			wantErr:   false,
+			validateObjs: func(t *testing.T, objs []*unstructured.Unstructured) {
+				for _, obj := range objs {
+					if obj.GetKind() == deploymentKind {
+						containers, found, err := unstructured.NestedSlice(obj.Object, "spec", "template", "spec", "containers")
+						if err != nil || !found || len(containers) == 0 {
+							t.Fatalf("Failed to get containers from deployment: found=%v, err=%v", found, err)
+						}
+
+						container := containers[0].(map[string]interface{})
+						args, found, err := unstructured.NestedStringSlice(container, "args")
+						if err != nil || !found {
+							t.Fatalf("Failed to get args from container: found=%v, err=%v", found, err)
+						}
+
+						// Check for --allowed-hosts arg with both service DNS names and extra hosts
+						// Service name is "mlflow" for CR named "mlflow" (no suffix)
+						expectedHosts := []string{
+							"mlflow.opendatahub.svc.cluster.local",
+							"mlflow.opendatahub.svc",
+							"mlflow.opendatahub",
+							"mlflow",
+							"mlflow.example.com",
+							"mlflow-route.apps.cluster.example.com",
+						}
+						for i, arg := range args {
+							if arg == "--allowed-hosts" {
+								if i+1 < len(args) {
+									hosts := args[i+1]
+									// Verify all expected hosts are present
+									for _, expected := range expectedHosts {
+										if !contains(hosts, expected) {
+											t.Errorf("Expected host %q not found in allowed hosts: %s", expected, hosts)
+										}
+									}
+									// Verify wildcard is NOT present
+									if contains(hosts, "*") {
+										t.Error("Wildcard '*' should not be in allowed hosts")
+									}
+									t.Logf("Allowed hosts: %s", hosts)
+								}
+								break
+							}
 						}
 					}
 				}
