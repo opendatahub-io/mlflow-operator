@@ -15,6 +15,11 @@ endif
 # tools. (i.e. podman)
 CONTAINER_TOOL ?= docker
 
+# CGO_ENABLED controls whether CGO is enabled during the build.
+# Default is 1 (enabled) for FIPS compliance. Set to 0 for local builds on
+# Apple Silicon when cross-compiling to linux/amd64.
+CGO_ENABLED ?= 1
+
 # Setting SHELL to bash allows bash commands to be executed by recipes.
 # Options are set to exit when a recipe line exits non-zero or a piped command fails.
 SHELL = /usr/bin/env bash -o pipefail
@@ -154,7 +159,7 @@ docker-buildx: ## Build and push docker image for the manager for cross-platform
 	sed -e '1 s/\(^FROM\)/FROM --platform=\$$\{BUILDPLATFORM\}/; t' -e ' 1,// s//FROM --platform=\$$\{BUILDPLATFORM\}/' Dockerfile > Dockerfile.cross
 	- $(CONTAINER_TOOL) buildx create --name mlflow-operator-builder
 	$(CONTAINER_TOOL) buildx use mlflow-operator-builder
-	- $(CONTAINER_TOOL) buildx build --push --platform=$(PLATFORMS) --tag ${IMG} -f Dockerfile.cross .
+	- $(CONTAINER_TOOL) buildx build --push --platform=$(PLATFORMS) --build-arg CGO_ENABLED=$(CGO_ENABLED) --tag ${IMG} -f Dockerfile.cross .
 	- $(CONTAINER_TOOL) buildx rm mlflow-operator-builder
 	rm Dockerfile.cross
 
