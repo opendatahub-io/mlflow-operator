@@ -53,15 +53,3 @@ replacements:
       name: controller-manager
     fieldPaths:
     - spec.template.spec.containers.[name=manager].env.[name=MLFLOW_URL].value
-
-# Replace SECTION_TITLE env var
-- source:
-    kind: ConfigMap
-    name: operator-params
-    fieldPath: data.section-title
-  targets:
-  - select:
-      kind: Deployment
-      name: controller-manager
-    fieldPaths:
-    - spec.template.spec.containers.[name=manager].env.[name=SECTION_TITLE].value
