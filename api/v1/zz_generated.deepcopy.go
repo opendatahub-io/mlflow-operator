@@ -199,6 +199,13 @@ func (in *MLflowSpec) DeepCopyInto(out *MLflowSpec) {
 			(*out)[key] = val
 		}
 	}
+	if in.PodAnnotations != nil {
+		in, out := &in.PodAnnotations, &out.PodAnnotations
+		*out = make(map[string]string, len(*in))
+		for key, val := range *in {
+			(*out)[key] = val
+		}
+	}
 	if in.PodSecurityContext != nil {
 		in, out := &in.PodSecurityContext, &out.PodSecurityContext
 		*out = new(corev1.PodSecurityContext)
@@ -227,6 +234,11 @@ func (in *MLflowSpec) DeepCopyInto(out *MLflowSpec) {
 		in, out := &in.Affinity, &out.Affinity
 		*out = new(corev1.Affinity)
 		(*in).DeepCopyInto(*out)
+	}
+	if in.ExtraAllowedHosts != nil {
+		in, out := &in.ExtraAllowedHosts, &out.ExtraAllowedHosts
+		*out = make([]string, len(*in))
+		copy(*out, *in)
 	}
 }
 
