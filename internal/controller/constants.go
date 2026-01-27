@@ -27,4 +27,14 @@ const (
 	TLSSecretName = "mlflow-tls"
 	// StaticPrefix is the URL prefix for MLflow when deployed via the operator
 	StaticPrefix = "/mlflow"
+
+	// OdhTrustedCABundleConfigMapName is the well-known ConfigMap name for ODH/RHOAI platform CA bundle
+	// This is a contract with ODH Platform: https://github.com/opendatahub-io/architecture-decision-records/pull/28
+	OdhTrustedCABundleConfigMapName = "odh-trusted-ca-bundle"
+
+	// Default path to mount individual CA Bundles
+	DefaultSSLCertDir = "/etc/pki/tls/certs"
+
+	// Path to mount the ODH/RHOAI platform CA bundle if provided
+	OdhTrustedCABundleMountPath = "/etc/pki/tls/certs/platform"
 )

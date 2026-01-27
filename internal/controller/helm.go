@@ -56,6 +56,12 @@ type HelmRenderer struct {
 	chartPath string
 }
 
+// RenderOptions contains additional context needed for rendering
+type RenderOptions struct {
+	// OdhTrustedCABundleExists indicates if the odh-trusted-ca-bundle ConfigMap exists in the target namespace
+	OdhTrustedCABundleExists bool
+}
+
 // NewHelmRenderer creates a new HelmRenderer
 func NewHelmRenderer(chartPath string) *HelmRenderer {
 	return &HelmRenderer{
@@ -64,7 +70,7 @@ func NewHelmRenderer(chartPath string) *HelmRenderer {
 }
 
 // RenderChart renders the Helm chart with the given values
-func (h *HelmRenderer) RenderChart(mlflow *mlflowv1.MLflow, namespace string) ([]*unstructured.Unstructured, error) {
+func (h *HelmRenderer) RenderChart(mlflow *mlflowv1.MLflow, namespace string, opts RenderOptions) ([]*unstructured.Unstructured, error) {
 	// Load the Helm chart
 	loadedChart, err := loader.Load(h.chartPath)
 	if err != nil {
@@ -72,7 +78,7 @@ func (h *HelmRenderer) RenderChart(mlflow *mlflowv1.MLflow, namespace string) ([
 	}
 
 	// Convert MLflow spec to Helm values
-	values := h.mlflowToHelmValues(mlflow, namespace)
+	values := h.mlflowToHelmValues(mlflow, namespace, opts)
 
 	// Render the chart
 	rendered, err := h.renderTemplates(loadedChart, values, namespace)
@@ -84,7 +90,7 @@ func (h *HelmRenderer) RenderChart(mlflow *mlflowv1.MLflow, namespace string) ([
 }
 
 // mlflowToHelmValues converts MLflow CR spec to Helm values
-func (h *HelmRenderer) mlflowToHelmValues(mlflow *mlflowv1.MLflow, namespace string) map[string]interface{} {
+func (h *HelmRenderer) mlflowToHelmValues(mlflow *mlflowv1.MLflow, namespace string, opts RenderOptions) map[string]interface{} {
 	values := make(map[string]interface{})
 
 	values["namespace"] = namespace
@@ -113,6 +119,29 @@ func (h *HelmRenderer) mlflowToHelmValues(mlflow *mlflowv1.MLflow, namespace str
 	}
 
 	values["tls"] = tlsValues
+
+	// User-provided CA bundle configuration
+	if mlflow.Spec.CABundleConfigMap != nil {
+		values["caBundleConfigMap"] = map[string]interface{}{
+			"enabled": true,
+			"name":    mlflow.Spec.CABundleConfigMap.Name,
+			"key":     mlflow.Spec.CABundleConfigMap.Key,
+		}
+	}
+
+	// Enable ODH trusted CA bundle if ConfigMap exists in the target namespace
+	// This is mounted alongside any user-provided bundle for maximum compatibility
+	values["odhTrustedCABundle"] = map[string]interface{}{
+		"enabled":       opts.OdhTrustedCABundleExists,
+		"configMapName": OdhTrustedCABundleConfigMapName,
+		"volumeName":    OdhTrustedCABundleConfigMapName,
+	}
+
+	sslCertDir := DefaultSSLCertDir
+	if opts.OdhTrustedCABundleExists {
+		sslCertDir += ":" + OdhTrustedCABundleMountPath
+	}
+	values["sslCertDir"] = sslCertDir
 
 	// Use config from environment variables as default, can be overridden by CR spec
 	mlflowImage := cfg.MLflowImage
