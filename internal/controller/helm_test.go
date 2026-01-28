@@ -19,6 +19,8 @@ package controller
 import (
 	"testing"
 
+	"github.com/onsi/gomega"   // nolint:staticcheck // Named import for gomega.NewWithT; dual import for readability
+	. "github.com/onsi/gomega" // Dot import for matchers like HaveOccurred
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -91,7 +93,10 @@ func TestMlflowToHelmValues_Storage(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			values := renderer.mlflowToHelmValues(tt.mlflow, "test-namespace")
+			g := gomega.NewWithT(t)
+
+			values, err := renderer.mlflowToHelmValues(tt.mlflow, "test-namespace")
+			g.Expect(err).NotTo(HaveOccurred())
 
 			storage, ok := values["storage"].(map[string]interface{})
 			if !ok {
@@ -153,7 +158,10 @@ func TestMlflowToHelmValues_Image(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			values := renderer.mlflowToHelmValues(tt.mlflow, "test-namespace")
+			g := gomega.NewWithT(t)
+
+			values, err := renderer.mlflowToHelmValues(tt.mlflow, "test-namespace")
+			g.Expect(err).NotTo(HaveOccurred())
 
 			image, ok := values["image"].(map[string]interface{})
 			if !ok {
@@ -332,7 +340,10 @@ func TestMlflowToHelmValues_MLflowConfig(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			values := renderer.mlflowToHelmValues(tt.mlflow, "test-namespace")
+			g := gomega.NewWithT(t)
+
+			values, err := renderer.mlflowToHelmValues(tt.mlflow, "test-namespace")
+			g.Expect(err).NotTo(HaveOccurred())
 
 			mlflowConfig, ok := values["mlflow"].(map[string]interface{})
 			if !ok {
@@ -394,6 +405,8 @@ func TestMlflowToHelmValues_MLflowConfig(t *testing.T) {
 }
 
 func TestMlflowToHelmValues_StaticPrefix(t *testing.T) {
+	g := gomega.NewWithT(t)
+
 	renderer := &HelmRenderer{}
 
 	mlflow := &mlflowv1.MLflow{
@@ -401,7 +414,8 @@ func TestMlflowToHelmValues_StaticPrefix(t *testing.T) {
 		Spec:       mlflowv1.MLflowSpec{},
 	}
 
-	values := renderer.mlflowToHelmValues(mlflow, "test-namespace")
+	values, err := renderer.mlflowToHelmValues(mlflow, "test-namespace")
+	g.Expect(err).NotTo(HaveOccurred())
 
 	mlflowConfig, ok := values["mlflow"].(map[string]interface{})
 	if !ok {
@@ -482,9 +496,12 @@ func TestMlflowToHelmValues_Env(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			values := renderer.mlflowToHelmValues(tt.mlflow, "test-namespace")
+			g := gomega.NewWithT(t)
 
-			env, ok := values["env"].([]map[string]interface{})
+			values, err := renderer.mlflowToHelmValues(tt.mlflow, "test-namespace")
+			g.Expect(err).NotTo(HaveOccurred())
+
+			env, ok := values["env"].([]any)
 			if !ok {
 				t.Fatal("env not found in values or wrong type")
 			}
@@ -497,10 +514,11 @@ func TestMlflowToHelmValues_Env(t *testing.T) {
 			if tt.wantEnvName != "" {
 				found := false
 				for _, e := range env {
-					if e["name"] == tt.wantEnvName {
+					envMap := e.(map[string]any)
+					if envMap["name"] == tt.wantEnvName {
 						found = true
-						if e["value"] != tt.wantEnvVal {
-							t.Errorf("env[%s] = %v, want %v", tt.wantEnvName, e["value"], tt.wantEnvVal)
+						if envMap["value"] != tt.wantEnvVal {
+							t.Errorf("env[%s] = %v, want %v", tt.wantEnvName, envMap["value"], tt.wantEnvVal)
 						}
 						break
 					}
@@ -558,7 +576,10 @@ func TestMlflowToHelmValues_EnvFrom(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			values := renderer.mlflowToHelmValues(tt.mlflow, "test-namespace")
+			g := gomega.NewWithT(t)
+
+			values, err := renderer.mlflowToHelmValues(tt.mlflow, "test-namespace")
+			g.Expect(err).NotTo(HaveOccurred())
 
 			if tt.wantEnvFromCount == 0 {
 				if _, exists := values["envFrom"]; exists {
@@ -567,7 +588,7 @@ func TestMlflowToHelmValues_EnvFrom(t *testing.T) {
 				return
 			}
 
-			envFrom, ok := values["envFrom"].([]map[string]interface{})
+			envFrom, ok := values["envFrom"].([]any)
 			if !ok {
 				t.Fatal("envFrom not found in values or wrong type")
 			}
@@ -626,7 +647,10 @@ func TestMlflowToHelmValues_Resources(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			values := renderer.mlflowToHelmValues(tt.mlflow, "test-namespace")
+			g := gomega.NewWithT(t)
+
+			values, err := renderer.mlflowToHelmValues(tt.mlflow, "test-namespace")
+			g.Expect(err).NotTo(HaveOccurred())
 
 			resources, ok := values["resources"].(map[string]interface{})
 			if !tt.wantResourcesSet {
@@ -689,7 +713,10 @@ func TestMlflowToHelmValues_Replicas(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			values := renderer.mlflowToHelmValues(tt.mlflow, "test-namespace")
+			g := gomega.NewWithT(t)
+
+			values, err := renderer.mlflowToHelmValues(tt.mlflow, "test-namespace")
+			g.Expect(err).NotTo(HaveOccurred())
 
 			if got := values["replicaCount"].(int32); got != tt.wantReplicas {
 				t.Errorf("replicaCount = %v, want %v", got, tt.wantReplicas)
@@ -699,6 +726,7 @@ func TestMlflowToHelmValues_Replicas(t *testing.T) {
 }
 
 func TestMlflowToHelmValues_Namespace(t *testing.T) {
+	g := gomega.NewWithT(t)
 	renderer := &HelmRenderer{}
 
 	mlflow := &mlflowv1.MLflow{
@@ -707,7 +735,8 @@ func TestMlflowToHelmValues_Namespace(t *testing.T) {
 	}
 
 	testNamespace := "custom-namespace"
-	values := renderer.mlflowToHelmValues(mlflow, testNamespace)
+	values, err := renderer.mlflowToHelmValues(mlflow, testNamespace)
+	g.Expect(err).NotTo(HaveOccurred())
 
 	if got := values["namespace"].(string); got != testNamespace {
 		t.Errorf("namespace = %v, want %v", got, testNamespace)
@@ -741,102 +770,17 @@ func TestMlflowToHelmValues_ResourceSuffix(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			g := gomega.NewWithT(t)
 			mlflow := &mlflowv1.MLflow{
 				ObjectMeta: metav1.ObjectMeta{Name: tt.crName},
 				Spec:       mlflowv1.MLflowSpec{},
 			}
 
-			values := renderer.mlflowToHelmValues(mlflow, "test-namespace")
+			values, err := renderer.mlflowToHelmValues(mlflow, "test-namespace")
+			g.Expect(err).NotTo(HaveOccurred())
 
 			if got := values["resourceSuffix"].(string); got != tt.wantResourceSuffix {
 				t.Errorf("resourceSuffix = %v, want %v", got, tt.wantResourceSuffix)
-			}
-		})
-	}
-}
-
-func TestConvertResources(t *testing.T) {
-	renderer := &HelmRenderer{}
-
-	tests := []struct {
-		name      string
-		resources *corev1.ResourceRequirements
-		wantKeys  []string
-	}{
-		{
-			name: "resources with requests and limits",
-			resources: &corev1.ResourceRequirements{
-				Requests: corev1.ResourceList{
-					corev1.ResourceCPU:    resource.MustParse("100m"),
-					corev1.ResourceMemory: resource.MustParse("256Mi"),
-				},
-				Limits: corev1.ResourceList{
-					corev1.ResourceCPU:    resource.MustParse("500m"),
-					corev1.ResourceMemory: resource.MustParse("1Gi"),
-				},
-			},
-			wantKeys: []string{"requests", "limits"},
-		},
-		{
-			name: "resources with only requests",
-			resources: &corev1.ResourceRequirements{
-				Requests: corev1.ResourceList{
-					corev1.ResourceCPU: resource.MustParse("100m"),
-				},
-			},
-			wantKeys: []string{"requests"},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := renderer.convertResources(tt.resources)
-
-			for _, key := range tt.wantKeys {
-				if _, exists := result[key]; !exists {
-					t.Errorf("expected key %s not found in result", key)
-				}
-			}
-		})
-	}
-}
-
-func TestConvertEnvVarSource(t *testing.T) {
-	renderer := &HelmRenderer{}
-
-	tests := []struct {
-		name   string
-		source *corev1.EnvVarSource
-		want   string // Expected key in result
-	}{
-		{
-			name: "secretKeyRef",
-			source: &corev1.EnvVarSource{
-				SecretKeyRef: &corev1.SecretKeySelector{
-					LocalObjectReference: corev1.LocalObjectReference{Name: "my-secret"},
-					Key:                  "password",
-				},
-			},
-			want: "secretKeyRef",
-		},
-		{
-			name: "configMapKeyRef",
-			source: &corev1.EnvVarSource{
-				ConfigMapKeyRef: &corev1.ConfigMapKeySelector{
-					LocalObjectReference: corev1.LocalObjectReference{Name: "my-config"},
-					Key:                  "config-key",
-				},
-			},
-			want: "configMapKeyRef",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := renderer.convertEnvVarSource(tt.source)
-
-			if _, exists := result[tt.want]; !exists {
-				t.Errorf("expected key %s not found in result", tt.want)
 			}
 		})
 	}
