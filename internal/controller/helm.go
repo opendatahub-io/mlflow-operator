@@ -465,7 +465,7 @@ func (h *HelmRenderer) renderTemplates(c *chart.Chart, values map[string]interfa
 		}
 
 		// Parse YAML documents (may contain multiple documents separated by ---)
-		decoder := yaml.NewYAMLOrJSONDecoder(bytes.NewBufferString(content), 4096)
+		decoder := yaml.NewYAMLToJSONDecoder(bytes.NewBufferString(content))
 		for {
 			obj := &unstructured.Unstructured{}
 			err := decoder.Decode(obj)
