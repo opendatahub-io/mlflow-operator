@@ -28,6 +28,7 @@ import (
 	"helm.sh/helm/v3/pkg/engine"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/yaml"
 
 	mlflowv1 "github.com/opendatahub-io/mlflow-operator/api/v1"
@@ -71,8 +72,10 @@ func (h *HelmRenderer) RenderChart(mlflow *mlflowv1.MLflow, namespace string) ([
 		return nil, fmt.Errorf("failed to load chart: %w", err)
 	}
 
-	// Convert MLflow spec to Helm values
-	values := h.mlflowToHelmValues(mlflow, namespace)
+	values, err := h.mlflowToHelmValues(mlflow, namespace)
+	if err != nil {
+		return nil, fmt.Errorf("failed to convert MLflow spec to Helm values: %w", err)
+	}
 
 	// Render the chart
 	rendered, err := h.renderTemplates(loadedChart, values, namespace)
@@ -84,7 +87,7 @@ func (h *HelmRenderer) RenderChart(mlflow *mlflowv1.MLflow, namespace string) ([
 }
 
 // mlflowToHelmValues converts MLflow CR spec to Helm values
-func (h *HelmRenderer) mlflowToHelmValues(mlflow *mlflowv1.MLflow, namespace string) map[string]interface{} {
+func (h *HelmRenderer) mlflowToHelmValues(mlflow *mlflowv1.MLflow, namespace string) (map[string]interface{}, error) {
 	values := make(map[string]interface{})
 
 	values["namespace"] = namespace
@@ -146,7 +149,11 @@ func (h *HelmRenderer) mlflowToHelmValues(mlflow *mlflowv1.MLflow, namespace str
 	values["replicaCount"] = replicas
 
 	if mlflow.Spec.Resources != nil {
-		values["resources"] = h.convertResources(mlflow.Spec.Resources)
+		resourcesMap, err := runtime.DefaultUnstructuredConverter.ToUnstructured(mlflow.Spec.Resources)
+		if err != nil {
+			return nil, fmt.Errorf("failed to convert resources: %w", err)
+		}
+		values["resources"] = resourcesMap
 	}
 
 	// Storage - only enabled if explicitly configured
@@ -276,39 +283,27 @@ func (h *HelmRenderer) mlflowToHelmValues(mlflow *mlflowv1.MLflow, namespace str
 
 	values["mlflow"] = mlflowConfig
 
-	env := make([]map[string]interface{}, 0, len(mlflow.Spec.Env))
+	env := make([]interface{}, 0, len(mlflow.Spec.Env))
 
 	// Add custom env vars from spec
-	for _, e := range mlflow.Spec.Env {
-		envVar := map[string]interface{}{
-			"name": e.Name,
+	for i, e := range mlflow.Spec.Env {
+		envMap, err := runtime.DefaultUnstructuredConverter.ToUnstructured(&e)
+		if err != nil {
+			return nil, fmt.Errorf("failed to convert env[%d]: %w", i, err)
 		}
-		if e.Value != "" {
-			envVar["value"] = e.Value
-		}
-		if e.ValueFrom != nil {
-			envVar["valueFrom"] = h.convertEnvVarSource(e.ValueFrom)
-		}
-		env = append(env, envVar)
+		env = append(env, envMap)
 	}
 
 	values["env"] = env
 
 	if len(mlflow.Spec.EnvFrom) > 0 {
-		envFrom := make([]map[string]interface{}, 0, len(mlflow.Spec.EnvFrom))
-		for _, ef := range mlflow.Spec.EnvFrom {
-			envFromItem := make(map[string]interface{})
-			if ef.ConfigMapRef != nil {
-				envFromItem["configMapRef"] = map[string]interface{}{
-					"name": ef.ConfigMapRef.Name,
-				}
+		envFrom := make([]interface{}, 0, len(mlflow.Spec.EnvFrom))
+		for i, ef := range mlflow.Spec.EnvFrom {
+			envFromMap, err := runtime.DefaultUnstructuredConverter.ToUnstructured(&ef)
+			if err != nil {
+				return nil, fmt.Errorf("failed to convert envFrom[%d]: %w", i, err)
 			}
-			if ef.SecretRef != nil {
-				envFromItem["secretRef"] = map[string]interface{}{
-					"name": ef.SecretRef.Name,
-				}
-			}
-			envFrom = append(envFrom, envFromItem)
+			envFrom = append(envFrom, envFromMap)
 		}
 		values["envFrom"] = envFrom
 	}
@@ -374,7 +369,7 @@ func (h *HelmRenderer) mlflowToHelmValues(mlflow *mlflowv1.MLflow, namespace str
 		values["affinity"] = map[string]interface{}{}
 	}
 
-	return values
+	return values, nil
 }
 
 // renderTemplates renders the Helm templates with the given values
@@ -430,53 +425,4 @@ func (h *HelmRenderer) renderTemplates(c *chart.Chart, values map[string]interfa
 	}
 
 	return objects, nil
-}
-
-// convertResources converts Kubernetes ResourceRequirements to Helm values format
-func (h *HelmRenderer) convertResources(resources *corev1.ResourceRequirements) map[string]interface{} {
-	result := make(map[string]interface{})
-
-	if resources.Requests != nil {
-		requests := make(map[string]interface{})
-		if cpu, ok := resources.Requests[corev1.ResourceCPU]; ok {
-			requests["cpu"] = cpu.String()
-		}
-		if memory, ok := resources.Requests[corev1.ResourceMemory]; ok {
-			requests["memory"] = memory.String()
-		}
-		result["requests"] = requests
-	}
-
-	if resources.Limits != nil {
-		limits := make(map[string]interface{})
-		if cpu, ok := resources.Limits[corev1.ResourceCPU]; ok {
-			limits["cpu"] = cpu.String()
-		}
-		if memory, ok := resources.Limits[corev1.ResourceMemory]; ok {
-			limits["memory"] = memory.String()
-		}
-		result["limits"] = limits
-	}
-
-	return result
-}
-
-// convertEnvVarSource converts EnvVarSource to Helm values format
-func (h *HelmRenderer) convertEnvVarSource(source *corev1.EnvVarSource) map[string]interface{} {
-	result := make(map[string]interface{})
-
-	if source.SecretKeyRef != nil {
-		result["secretKeyRef"] = map[string]interface{}{
-			"name": source.SecretKeyRef.Name,
-			"key":  source.SecretKeyRef.Key,
-		}
-	}
-	if source.ConfigMapKeyRef != nil {
-		result["configMapKeyRef"] = map[string]interface{}{
-			"name": source.ConfigMapKeyRef.Name,
-			"key":  source.ConfigMapKeyRef.Key,
-		}
-	}
-
-	return result
 }
