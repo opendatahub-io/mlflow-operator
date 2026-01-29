@@ -30,9 +30,14 @@ import (
 	mlflowv1 "github.com/opendatahub-io/mlflow-operator/api/v1"
 )
 
-// contains checks if str contains substr
-func contains(str, substr string) bool {
-	return strings.Contains(str, substr)
+// contains checks if the comma-separated hosts string contains an exact match for the target host.
+func contains(hosts, target string) bool {
+	for host := range strings.SplitSeq(hosts, ",") {
+		if strings.TrimSpace(host) == target {
+			return true
+		}
+	}
+	return false
 }
 
 const (
@@ -1094,11 +1099,15 @@ func TestRenderChart(t *testing.T) {
 
 						// Check for --allowed-hosts arg with service DNS names
 						// Service name is mlflow-test-mlflow for CR named "test-mlflow"
+						// Also includes gateway hostname from MLFLOW_URL config (default: mlflow.example.com)
 						expectedHosts := []string{
 							"mlflow-test-mlflow.test-ns.svc.cluster.local",
 							"mlflow-test-mlflow.test-ns.svc",
 							"mlflow-test-mlflow.test-ns",
 							"mlflow-test-mlflow",
+							"localhost",
+							"127.0.0.1",
+							"mlflow.example.com",
 						}
 						hasAllowedHosts := false
 						for i, arg := range args {
@@ -1182,6 +1191,8 @@ func TestRenderChart(t *testing.T) {
 							"mlflow.opendatahub.svc",
 							"mlflow.opendatahub",
 							"mlflow",
+							"localhost",
+							"127.0.0.1",
 							"mlflow.example.com",
 							"mlflow-route.apps.cluster.example.com",
 						}

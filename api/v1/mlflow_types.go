@@ -189,7 +189,9 @@ type MLflowSpec struct {
 
 	// ExtraAllowedHosts is a list of additional hostnames that the MLflow server should accept.
 	// By default, the operator automatically generates allowed hosts based on the service DNS names
-	// (e.g., "mlflow.namespace.svc.cluster.local", "mlflow.namespace.svc", "mlflow.namespace", "mlflow").
+	// (e.g., "mlflow.namespace.svc.cluster.local", "mlflow.namespace.svc", "mlflow.namespace", "mlflow"),
+	// plus "localhost" and "127.0.0.1" for port-forwarding and debugging scenarios,
+	// plus the gateway hostname from the MLFLOW_URL configuration for UI access.
 	// Use this field to add additional hostnames such as external routes, ingress hosts, or
 	// custom DNS names that clients may use to access the MLflow server.
 	// Examples:

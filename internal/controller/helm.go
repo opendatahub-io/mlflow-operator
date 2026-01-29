@@ -20,6 +20,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"net/url"
 	"path/filepath"
 
 	"helm.sh/helm/v3/pkg/chart"
@@ -299,12 +300,28 @@ func (h *HelmRenderer) mlflowToHelmValues(mlflow *mlflowv1.MLflow, namespace str
 
 	// Build allowedHosts from service DNS names and user-provided extra hosts
 	// Service DNS format: <service>.<namespace>.svc.cluster.local (and shorter variants)
+	// Also includes localhost for port-forwarding and in-pod debugging scenarios
 	serviceName := ResourceName + getResourceSuffix(mlflow.Name)
 	allowedHosts := []string{
 		serviceName + "." + namespace + ".svc.cluster.local",
 		serviceName + "." + namespace + ".svc",
 		serviceName + "." + namespace,
 		serviceName,
+		"localhost",
+		"127.0.0.1",
+	}
+	// Add gateway hostname from MLFLOW_URL config (for UI access via gateway)
+	// Use Hostname() to strip port, fall back to raw URL for scheme-less inputs
+	if cfg.MLflowURL != "" {
+		var gatewayHost string
+		if parsedURL, err := url.Parse(cfg.MLflowURL); err == nil {
+			gatewayHost = parsedURL.Hostname()
+		}
+		// Fall back to raw URL for scheme-less inputs (e.g., "gateway.example.com")
+		if gatewayHost == "" {
+			gatewayHost = cfg.MLflowURL
+		}
+		allowedHosts = append(allowedHosts, gatewayHost)
 	}
 	// Append user-provided extra hosts (e.g., external routes, ingress hosts)
 	if len(mlflow.Spec.ExtraAllowedHosts) > 0 {
