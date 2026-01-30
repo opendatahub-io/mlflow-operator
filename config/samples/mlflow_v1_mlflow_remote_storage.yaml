@@ -67,3 +67,9 @@ spec:
       value: INFO
     - name: AWS_DEFAULT_REGION
       value: us-east-1
+
+  # Custom CA Bundle (Optional)
+  # For connecting to services with self-signed certificates or private CAs
+  # caBundleConfigMap:
+  #   name: mlflow-ca-bundle
+  #   key: ca-bundle.crt
