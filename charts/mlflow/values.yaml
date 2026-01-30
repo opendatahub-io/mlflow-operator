@@ -64,8 +64,10 @@ mlflow:
   # Backend store URI (where MLflow stores experiment and run metadata)
   # Set this explicitly or use backendStoreUriFrom instead.
   # Example (requires storage.enabled: true): sqlite:////mlflow/mlflow.db
-  # For production, use remote DB: postgresql://user:pass@host:5432/mlflow
-  # Note: For URIs containing credentials, use backendStoreUriFrom.
+  # Note: The /mlflow path is where the PVC is mounted in the container.
+  # For production, use a remote DB: postgresql://db-host:5432/mlflow
+  # Important: For URIs containing credentials, use backendStoreUriFrom to
+  # supply the URI via a Kubernetes Secret instead of writing credentials inline.
   backendStoreUri: ""
 
   # Backend store URI from secret (preferred for URIs with credentials)
