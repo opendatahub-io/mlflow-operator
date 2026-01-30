@@ -180,6 +180,23 @@ type MLflowSpec struct {
 	// Affinity specifies the pod's scheduling constraints
 	// +optional
 	Affinity *corev1.Affinity `json:"affinity,omitempty"`
+
+	// CABundleConfigMap specifies a ConfigMap containing a CA certificate bundle.
+	// The bundle will be mounted into the MLflow container and configured for use
+	// with HTTPS connections (PostgreSQL with TLS, S3 with custom certs, etc.).
+	// +optional
+	CABundleConfigMap *CABundleConfigMapSpec `json:"caBundleConfigMap,omitempty"`
+}
+
+// CABundleConfigMapSpec specifies a ConfigMap containing a CA bundle
+type CABundleConfigMapSpec struct {
+	// Name is the name of the ConfigMap containing the CA bundle
+	// +kubebuilder:validation:Required
+	Name string `json:"name"`
+
+	// Key is the key in the ConfigMap that contains the CA bundle data
+	// +kubebuilder:validation:Required
+	Key string `json:"key"`
 }
 
 // ImageConfig contains container image configuration
