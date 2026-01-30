@@ -151,20 +151,20 @@ func (r *MLflowReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 			"namespace", targetNamespace)
 	}
 
-	// Check if ODH trusted CA bundle ConfigMap exists in target namespace
-	odhTrustedCABundleExists := false
-	odhCABundleConfigMap := &corev1.ConfigMap{}
+	// Check if platform CA bundle ConfigMap exists in target namespace
+	platformCABundleExists := false
+	platformCABundleConfigMap := &corev1.ConfigMap{}
 	err = r.Get(ctx, types.NamespacedName{
-		Name:      OdhTrustedCABundleConfigMapName,
+		Name:      PlatformTrustedCABundleConfigMapName,
 		Namespace: targetNamespace,
-	}, odhCABundleConfigMap)
+	}, platformCABundleConfigMap)
 	if err == nil {
-		// ODH trusted CA bundle ConfigMap exists
-		odhTrustedCABundleExists = true
-		log.V(1).Info("Found ODH trusted CA bundle ConfigMap", "name", OdhTrustedCABundleConfigMapName, "namespace", targetNamespace)
+		// Platform CA bundle ConfigMap exists
+		platformCABundleExists = true
+		log.V(1).Info("Found platform CA bundle ConfigMap", "name", PlatformTrustedCABundleConfigMapName, "namespace", targetNamespace)
 	} else if !errors.IsNotFound(err) {
-		// Real error (not just trusted CA bundle ConfigMap NotFound) - log and continue
-		log.Error(err, "Failed to check for ODH trusted CA bundle ConfigMap")
+		// Real error (not just ConfigMap NotFound) - log and continue
+		log.Error(err, "Failed to check for platform CA bundle ConfigMap")
 	}
 
 	// Render the Helm chart
@@ -174,7 +174,7 @@ func (r *MLflowReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	}
 	renderer := NewHelmRenderer(helmChartPath)
 	renderOpts := RenderOptions{
-		OdhTrustedCABundleExists: odhTrustedCABundleExists,
+		PlatformTrustedCABundleExists: platformCABundleExists,
 	}
 	objects, err := renderer.RenderChart(mlflow, targetNamespace, renderOpts)
 	if err != nil {
@@ -386,14 +386,14 @@ func (r *MLflowReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		// This handler enqueues all MLflow instances listed in the owner references
 		Watches(&rbacv1.ClusterRole{}, handler.EnqueueRequestsFromMapFunc(r.clusterRoleToMLflowRequests)).
 		Owns(&rbacv1.ClusterRoleBinding{}).
-		// Watch odh-trusted-ca-bundle ConfigMap to trigger reconciliation when it appears/disappears
+		// Watch platform CA bundle ConfigMap to trigger reconciliation when it appears/disappears
 		// Note: We don't restart pods on content changes - kubelet automatically updates mounted ConfigMaps
 		// This watch ensures we update the Deployment spec when the ConfigMap existence changes
 		Watches(
 			&corev1.ConfigMap{},
 			handler.EnqueueRequestsFromMapFunc(r.configMapToMLflowRequests),
 			controllerbuilder.WithPredicates(predicate.NewPredicateFuncs(func(obj client.Object) bool {
-				return obj.GetName() == OdhTrustedCABundleConfigMapName
+				return obj.GetName() == PlatformTrustedCABundleConfigMapName
 			})),
 		)
 
@@ -439,7 +439,7 @@ func (r *MLflowReconciler) clusterRoleToMLflowRequests(ctx context.Context, obj 
 }
 
 // configMapToMLflowRequests maps ConfigMap events to MLflow reconcile requests.
-// When the odh-trusted-ca-bundle ConfigMap is created/deleted, we need to reconcile
+// When the platform CA bundle ConfigMap is created/deleted, we need to reconcile
 // all MLflow instances in that namespace to update their Deployment spec.
 // Note: Content changes don't require pod restarts - kubelet auto-updates mounted ConfigMaps.
 func (r *MLflowReconciler) configMapToMLflowRequests(ctx context.Context, obj client.Object) []reconcile.Request {
@@ -454,7 +454,7 @@ func (r *MLflowReconciler) configMapToMLflowRequests(ctx context.Context, obj cl
 
 	requests := make([]reconcile.Request, 0, len(mlflowList.Items))
 	for _, mlflow := range mlflowList.Items {
-		log.V(1).Info("Enqueueing MLflow reconciliation due to odh-trusted-ca-bundle change",
+		log.V(1).Info("Enqueueing MLflow reconciliation due to platform CA bundle change",
 			"mlflow", mlflow.Name,
 			"configmap", obj.GetName(),
 			"configmap-namespace", obj.GetNamespace())

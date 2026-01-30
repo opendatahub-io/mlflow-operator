@@ -59,8 +59,8 @@ type HelmRenderer struct {
 
 // RenderOptions contains additional context needed for rendering
 type RenderOptions struct {
-	// OdhTrustedCABundleExists indicates if the odh-trusted-ca-bundle ConfigMap exists in the target namespace
-	OdhTrustedCABundleExists bool
+	// PlatformTrustedCABundleExists indicates if the platform CA bundle ConfigMap exists in the target namespace
+	PlatformTrustedCABundleExists bool
 }
 
 // NewHelmRenderer creates a new HelmRenderer
@@ -134,17 +134,27 @@ func (h *HelmRenderer) mlflowToHelmValues(mlflow *mlflowv1.MLflow, namespace str
 
 	// Enable ODH trusted CA bundle if ConfigMap exists in the target namespace
 	// This is mounted alongside any user-provided bundle for maximum compatibility
-	values["odhTrustedCABundle"] = map[string]interface{}{
-		"enabled":       opts.OdhTrustedCABundleExists,
-		"configMapName": OdhTrustedCABundleConfigMapName,
-		"volumeName":    OdhTrustedCABundleConfigMapName,
+	values["platformCABundle"] = map[string]interface{}{
+		"enabled":        opts.PlatformTrustedCABundleExists,
+		"configMapName":  PlatformTrustedCABundleConfigMapName,
+		"volumeName":     PlatformTrustedCABundleVolumeName,
+		"mountPath":      PlatformTrustedCABundleMountPath,
+		"filePath":       PlatformTrustedCABundleFilePath,
+		"extraFilePath":  PlatformTrustedCABundleExtraFilePath,
 	}
 
-	sslCertDir := DefaultSSLCertDir
-	if opts.OdhTrustedCABundleExists {
-		sslCertDir += ":" + OdhTrustedCABundleMountPath
+	// Determine if we need the CA bundle init container
+	// The init container combines system CAs with any custom/platform CA bundles
+	caBundlesEnabled := mlflow.Spec.CABundleConfigMap != nil || opts.PlatformTrustedCABundleExists
+
+	// CA bundle configuration - the final bundle that combines system + platform + custom CAs
+	// When enabled, an init container creates a single PEM file containing all CA certificates
+	values["caBundle"] = map[string]interface{}{
+		"enabled":          caBundlesEnabled,
+		"mountPath":        CombinedCABundleMountPath,
+		"filePath":         CombinedCABundleFilePath,
+		"systemBundlePath": SystemCABundlePath,
 	}
-	values["sslCertDir"] = sslCertDir
 
 	// Use config from environment variables as default, can be overridden by CR spec
 	mlflowImage := cfg.MLflowImage

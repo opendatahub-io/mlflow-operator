@@ -166,16 +166,32 @@ tolerations: []
 affinity: {}
 
 # CA Bundle configuration for TLS verification
+# User-provided CA bundle from a ConfigMap
 caBundleConfigMap:
   enabled: false
   name: ""
   key: ""
 
-# ODH/RHOAI Trusted CA Bundle
+# Platform CA Bundle (e.g., ODH/RHOAI trusted CA bundle)
 # This is automatically detected and mounted by the operator if present
 # The ConfigMap is expected to have keys: "ca-bundle.crt" and/or "odh-ca-bundle.crt"
 # Ref: https://github.com/opendatahub-io/architecture-decision-records/pull/28
-odhTrustedCABundle:
+platformCABundle:
   enabled: false  # Set to true by operator when ConfigMap is detected
   configMapName: odh-trusted-ca-bundle
-  volumeName: odh-trusted-ca-bundle
+  volumeName: platform-ca-bundle
+  mountPath: /etc/pki/tls/certs/platform
+  filePath: /etc/pki/tls/certs/platform/ca-bundle.crt        # Main CA bundle
+  extraFilePath: /etc/pki/tls/certs/platform/odh-ca-bundle.crt  # Additional platform certs
+
+# CA Bundle configuration
+# When enabled, an init container creates a single PEM file that includes:
+# - System CA certificates from the base image (/etc/pki/tls/certs/ca-bundle.crt)
+# - Platform CA bundle (if present)
+# - User-provided custom CA bundle (if configured)
+# This file is used by all Python libraries (boto3, requests, psycopg2, etc.)
+caBundle:
+  enabled: false  # Set to true by operator when any CA source is configured
+  mountPath: /etc/pki/tls/certs/combined
+  filePath: /etc/pki/tls/certs/combined/ca-bundle.crt
+  systemBundlePath: /etc/pki/tls/certs/ca-bundle.crt

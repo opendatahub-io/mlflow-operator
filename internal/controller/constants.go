@@ -28,13 +28,37 @@ const (
 	// StaticPrefix is the URL prefix for MLflow when deployed via the operator
 	StaticPrefix = "/mlflow"
 
-	// OdhTrustedCABundleConfigMapName is the well-known ConfigMap name for ODH/RHOAI platform CA bundle
+	// PlatformTrustedCABundleConfigMapName is the well-known ConfigMap name for platform CA bundle
 	// This is a contract with ODH Platform: https://github.com/opendatahub-io/architecture-decision-records/pull/28
-	OdhTrustedCABundleConfigMapName = "odh-trusted-ca-bundle"
+	PlatformTrustedCABundleConfigMapName = "odh-trusted-ca-bundle"
 
-	// Default path to mount individual CA Bundles
-	DefaultSSLCertDir = "/etc/pki/tls/certs"
+	// PlatformTrustedCABundleVolumeName is the volume name for the platform CA bundle
+	PlatformTrustedCABundleVolumeName = "platform-ca-bundle"
 
-	// Path to mount the ODH/RHOAI platform CA bundle if provided
-	OdhTrustedCABundleMountPath = "/etc/pki/tls/certs/platform"
+	// PlatformTrustedCABundleKey is the key in the platform CA bundle ConfigMap that contains the main CA bundle
+	PlatformTrustedCABundleKey = "ca-bundle.crt"
+
+	// PlatformTrustedCABundleExtraKey is the key for additional platform-specific CA certificates
+	PlatformTrustedCABundleExtraKey = "odh-ca-bundle.crt"
+
+	// PlatformTrustedCABundleMountPath is where the platform CA bundle is mounted
+	PlatformTrustedCABundleMountPath = "/etc/pki/tls/certs/platform"
+
+	// PlatformTrustedCABundleFilePath is the full file path to the main platform CA bundle
+	PlatformTrustedCABundleFilePath = PlatformTrustedCABundleMountPath + "/" + PlatformTrustedCABundleKey
+
+	// PlatformTrustedCABundleExtraFilePath is the full file path to additional platform CA certificates
+	PlatformTrustedCABundleExtraFilePath = PlatformTrustedCABundleMountPath + "/" + PlatformTrustedCABundleExtraKey
+
+	// CustomCABundleMountPath is the path where user-provided CA bundles are mounted
+	CustomCABundleMountPath = "/etc/pki/tls/certs/custom-ca-bundle.crt"
+
+	// CombinedCABundleMountPath is the directory where the init container writes the combined CA bundle
+	CombinedCABundleMountPath = "/etc/pki/tls/certs/combined"
+
+	// CombinedCABundleFilePath is the full path to the combined CA bundle file
+	CombinedCABundleFilePath = CombinedCABundleMountPath + "/ca-bundle.crt"
+
+	// SystemCABundlePath is the default system CA bundle path on RHEL-based images
+	SystemCABundlePath = "/etc/pki/tls/certs/ca-bundle.crt"
 )
