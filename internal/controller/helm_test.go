@@ -30,7 +30,8 @@ import (
 )
 
 const (
-	deploymentKind = "Deployment"
+	deploymentKind              = "Deployment"
+	combinedCABundledVolumeName = "combined-ca-bundle"
 )
 
 func TestMlflowToHelmValues_Storage(t *testing.T) {
@@ -1159,10 +1160,13 @@ func TestMlflowToHelmValues_CABundle(t *testing.T) {
 	renderer := &HelmRenderer{}
 
 	// Test: no CA bundles configured
-	values := renderer.mlflowToHelmValues(&mlflowv1.MLflow{
+	values, err := renderer.mlflowToHelmValues(&mlflowv1.MLflow{
 		ObjectMeta: metav1.ObjectMeta{Name: "mlflow"},
 		Spec:       mlflowv1.MLflowSpec{},
 	}, "test-ns", RenderOptions{PlatformTrustedCABundleExists: false})
+	if err != nil {
+		t.Fatalf("mlflowToHelmValues() error = %v", err)
+	}
 
 	platformBundle := values["platformCABundle"].(map[string]interface{})
 	if platformBundle["enabled"].(bool) != false {
@@ -1175,12 +1179,15 @@ func TestMlflowToHelmValues_CABundle(t *testing.T) {
 	}
 
 	// Test: user-provided CA bundle only
-	values = renderer.mlflowToHelmValues(&mlflowv1.MLflow{
+	values, err = renderer.mlflowToHelmValues(&mlflowv1.MLflow{
 		ObjectMeta: metav1.ObjectMeta{Name: "mlflow"},
 		Spec: mlflowv1.MLflowSpec{
 			CABundleConfigMap: &mlflowv1.CABundleConfigMapSpec{Name: "my-ca", Key: "ca.crt"},
 		},
 	}, "test-ns", RenderOptions{PlatformTrustedCABundleExists: false})
+	if err != nil {
+		t.Fatalf("mlflowToHelmValues() error = %v", err)
+	}
 
 	userBundle := values["caBundleConfigMap"].(map[string]interface{})
 	if userBundle["enabled"].(bool) != true || userBundle["name"].(string) != "my-ca" {
@@ -1196,10 +1203,13 @@ func TestMlflowToHelmValues_CABundle(t *testing.T) {
 	}
 
 	// Test: ODH CA bundle only (no user-provided)
-	values = renderer.mlflowToHelmValues(&mlflowv1.MLflow{
+	values, err = renderer.mlflowToHelmValues(&mlflowv1.MLflow{
 		ObjectMeta: metav1.ObjectMeta{Name: "mlflow"},
 		Spec:       mlflowv1.MLflowSpec{},
 	}, "test-ns", RenderOptions{PlatformTrustedCABundleExists: true})
+	if err != nil {
+		t.Fatalf("mlflowToHelmValues() error = %v", err)
+	}
 
 	platformBundle = values["platformCABundle"].(map[string]interface{})
 	if platformBundle["enabled"].(bool) != true {
@@ -1215,12 +1225,15 @@ func TestMlflowToHelmValues_CABundle(t *testing.T) {
 	}
 
 	// Test: both CA bundles enabled - combined bundle is used
-	values = renderer.mlflowToHelmValues(&mlflowv1.MLflow{
+	values, err = renderer.mlflowToHelmValues(&mlflowv1.MLflow{
 		ObjectMeta: metav1.ObjectMeta{Name: "mlflow"},
 		Spec: mlflowv1.MLflowSpec{
 			CABundleConfigMap: &mlflowv1.CABundleConfigMapSpec{Name: "my-ca", Key: "ca.crt"},
 		},
 	}, "test-ns", RenderOptions{PlatformTrustedCABundleExists: true})
+	if err != nil {
+		t.Fatalf("mlflowToHelmValues() error = %v", err)
+	}
 
 	userBundle = values["caBundleConfigMap"].(map[string]interface{})
 	platformBundle = values["platformCABundle"].(map[string]interface{})
@@ -1315,7 +1328,7 @@ func TestRenderChart_CABundle(t *testing.T) {
 	foundCombined, foundCustom, foundODH := false, false, false
 	for _, vm := range volumeMounts {
 		name := vm.(map[string]interface{})["name"].(string)
-		if name == "combined-ca-bundle" {
+		if name == combinedCABundledVolumeName {
 			foundCombined = true
 		}
 		if name == "ca-bundle" {
@@ -1326,7 +1339,7 @@ func TestRenderChart_CABundle(t *testing.T) {
 		}
 	}
 	if !foundCombined {
-		t.Error("combined-ca-bundle volume mount not found on main container")
+		t.Errorf("%s volume mount not found on main container", combinedCABundledVolumeName)
 	}
 	if !foundCustom {
 		t.Error("custom CA bundle volume mount not found")
@@ -1341,11 +1354,11 @@ func TestRenderChart_CABundle(t *testing.T) {
 	for _, vol := range volumes {
 		volMap := vol.(map[string]interface{})
 		name := volMap["name"].(string)
-		if name == "combined-ca-bundle" {
+		if name == combinedCABundledVolumeName {
 			foundCombinedVolume = true
 			// Should be an emptyDir
 			if _, ok := volMap["emptyDir"]; !ok {
-				t.Error("combined-ca-bundle volume should be an emptyDir")
+				t.Errorf("%s volume should be an emptyDir", combinedCABundledVolumeName)
 			}
 		}
 		if name == "ca-bundle" || name == PlatformTrustedCABundleVolumeName {
@@ -1356,7 +1369,7 @@ func TestRenderChart_CABundle(t *testing.T) {
 		}
 	}
 	if !foundCombinedVolume {
-		t.Error("combined-ca-bundle volume not found")
+		t.Errorf("%s volume not found", combinedCABundledVolumeName)
 	}
 }
 
@@ -1451,8 +1464,8 @@ func TestRenderChart_NoCABundle(t *testing.T) {
 	volumes, _, _ := unstructured.NestedSlice(deployment.Object, "spec", "template", "spec", "volumes")
 	for _, vol := range volumes {
 		volMap := vol.(map[string]interface{})
-		if volMap["name"].(string) == "combined-ca-bundle" {
-			t.Error("combined-ca-bundle volume should not exist when no CA bundles are configured")
+		if volMap["name"].(string) == combinedCABundledVolumeName {
+			t.Errorf("%s volume should not exist when no CA bundles are configured", combinedCABundledVolumeName)
 		}
 	}
 
