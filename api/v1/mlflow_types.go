@@ -183,7 +183,7 @@ type MLflowSpec struct {
 
 	// CABundleConfigMap specifies a ConfigMap containing a CA certificate bundle.
 	// The bundle will be mounted into the MLflow container and configured for use
-	// with HTTPS connections (PostgreSQL with TLS, S3 with custom certs, etc.).
+	// with TLS connections (e.g. PostgreSQL SSL, S3 with custom certificates).
 	// +optional
 	CABundleConfigMap *CABundleConfigMapSpec `json:"caBundleConfigMap,omitempty"`
 }
@@ -192,10 +192,12 @@ type MLflowSpec struct {
 type CABundleConfigMapSpec struct {
 	// Name is the name of the ConfigMap containing the CA bundle
 	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MinLength=1
 	Name string `json:"name"`
 
 	// Key is the key in the ConfigMap that contains the CA bundle data
 	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MinLength=1
 	Key string `json:"key"`
 }
 
@@ -271,7 +273,7 @@ type MLflowConfigSpec struct {
 // Kubernetes namespace owners to override the default artifact storage
 // for their namespace.
 type MLflowConfig struct {
-	metav1.TypeMeta `json:",inline"`
+	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
 
 	// spec defines the desired MLflow configuration for this namespace.

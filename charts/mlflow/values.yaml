@@ -195,3 +195,6 @@ caBundle:
   mountPath: /etc/pki/tls/certs/combined
   filePath: /etc/pki/tls/certs/combined/ca-bundle.crt
   systemBundlePath: /etc/pki/tls/certs/ca-bundle.crt
+  # Seconds between checks for CA bundle ConfigMap changes
+  # A sidecar container watches for changes and regenerates the bundle in-place
+  watchInterval: 30

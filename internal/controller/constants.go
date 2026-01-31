@@ -50,9 +50,6 @@ const (
 	// PlatformTrustedCABundleExtraFilePath is the full file path to additional platform CA certificates
 	PlatformTrustedCABundleExtraFilePath = PlatformTrustedCABundleMountPath + "/" + PlatformTrustedCABundleExtraKey
 
-	// CustomCABundleMountPath is the path where user-provided CA bundles are mounted
-	CustomCABundleMountPath = "/etc/pki/tls/certs/custom-ca-bundle.crt"
-
 	// CombinedCABundleMountPath is the directory where the init container writes the combined CA bundle
 	CombinedCABundleMountPath = "/etc/pki/tls/certs/combined"
 

@@ -135,12 +135,12 @@ func (h *HelmRenderer) mlflowToHelmValues(mlflow *mlflowv1.MLflow, namespace str
 	// Enable ODH trusted CA bundle if ConfigMap exists in the target namespace
 	// This is mounted alongside any user-provided bundle for maximum compatibility
 	values["platformCABundle"] = map[string]interface{}{
-		"enabled":        opts.PlatformTrustedCABundleExists,
-		"configMapName":  PlatformTrustedCABundleConfigMapName,
-		"volumeName":     PlatformTrustedCABundleVolumeName,
-		"mountPath":      PlatformTrustedCABundleMountPath,
-		"filePath":       PlatformTrustedCABundleFilePath,
-		"extraFilePath":  PlatformTrustedCABundleExtraFilePath,
+		"enabled":       opts.PlatformTrustedCABundleExists,
+		"configMapName": PlatformTrustedCABundleConfigMapName,
+		"volumeName":    PlatformTrustedCABundleVolumeName,
+		"mountPath":     PlatformTrustedCABundleMountPath,
+		"filePath":      PlatformTrustedCABundleFilePath,
+		"extraFilePath": PlatformTrustedCABundleExtraFilePath,
 	}
 
 	// Determine if we need the CA bundle init container
