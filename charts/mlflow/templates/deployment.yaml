@@ -86,8 +86,8 @@ spec:
         {{- end }}
 
       {{- if .Values.caBundle.enabled }}
-      # Init container that combines system CA bundle with custom/platform CA bundles
-      # This ensures all CA certificates (system + custom) are available in a single file
+      # Init container that creates initial combined CA bundle
+      # The sidecar container will update it when ConfigMaps change
       initContainers:
         - name: combine-ca-bundles
           image: {{ .Values.image.name }}
@@ -98,48 +98,7 @@ spec:
             - /bin/sh
             - -c
             - |
-              set -e
-              COMBINED_BUNDLE="{{ .Values.caBundle.filePath }}"
-              SYSTEM_BUNDLE="{{ .Values.caBundle.systemBundlePath }}"
-
-              # Start with system CA bundle if it exists
-              if [ -f "$SYSTEM_BUNDLE" ]; then
-                echo "# System CA bundle" > "$COMBINED_BUNDLE"
-                cat "$SYSTEM_BUNDLE" >> "$COMBINED_BUNDLE"
-                echo "" >> "$COMBINED_BUNDLE"
-              else
-                echo "# Combined CA bundle" > "$COMBINED_BUNDLE"
-              fi
-
-              {{- if .Values.platformCABundle.enabled }}
-              # Append platform CA bundle if it exists
-              PLATFORM_BUNDLE="{{ .Values.platformCABundle.filePath }}"
-              if [ -f "$PLATFORM_BUNDLE" ]; then
-                echo "# Platform CA bundle" >> "$COMBINED_BUNDLE"
-                cat "$PLATFORM_BUNDLE" >> "$COMBINED_BUNDLE"
-                echo "" >> "$COMBINED_BUNDLE"
-              fi
-              # Also check for additional platform-specific certs
-              PLATFORM_EXTRA="{{ .Values.platformCABundle.extraFilePath }}"
-              if [ -f "$PLATFORM_EXTRA" ]; then
-                echo "# Platform additional CA bundle" >> "$COMBINED_BUNDLE"
-                cat "$PLATFORM_EXTRA" >> "$COMBINED_BUNDLE"
-                echo "" >> "$COMBINED_BUNDLE"
-              fi
-              {{- end }}
-
-              {{- if .Values.caBundleConfigMap.enabled }}
-              # Append user-provided custom CA bundle if it exists
-              CUSTOM_BUNDLE="/custom-certs/custom-ca-bundle.crt"
-              if [ -f "$CUSTOM_BUNDLE" ]; then
-                echo "# Custom CA bundle" >> "$COMBINED_BUNDLE"
-                cat "$CUSTOM_BUNDLE" >> "$COMBINED_BUNDLE"
-                echo "" >> "$COMBINED_BUNDLE"
-              fi
-              {{- end }}
-
-              echo "Combined CA bundle created at $COMBINED_BUNDLE"
-              echo "Certificate count: $(grep -c 'BEGIN CERTIFICATE' "$COMBINED_BUNDLE" || echo 0)"
+{{ include "mlflow.caBundleScript" . | indent 14 }}
           volumeMounts:
             - name: combined-ca-bundle
               mountPath: {{ .Values.caBundle.mountPath }}
@@ -252,6 +211,12 @@ spec:
             # PGSSLROOTCERT: psycopg2 for PostgreSQL backend
             - name: PGSSLROOTCERT
               value: {{ .Values.caBundle.filePath | quote }}
+            # MLFLOW_MYSQL_CA: MySQL CA bundle for MySQL backend
+            - name: MLFLOW_MYSQL_CA
+              value: {{ .Values.caBundle.filePath | quote }}
+            # MLFLOW_S3_IGNORE_TLS: Explicitly require TLS verification for S3 storage
+            - name: MLFLOW_S3_IGNORE_TLS
+              value: "false"
             {{- end }}
           {{- if .Values.envFrom }}
           envFrom:
@@ -282,13 +247,6 @@ spec:
               subPath: custom-ca-bundle.crt
               readOnly: true
             {{- end }}
-            {{- if .Values.platformCABundle.enabled }}
-            # ODH/RHOAI platform CA bundle - also mounted separately for direct access
-            # This ConfigMap may contain ca-bundle.crt and/or odh-ca-bundle.crt
-            - name: {{ .Values.platformCABundle.volumeName }}
-              mountPath: {{ .Values.platformCABundle.mountPath }}
-              readOnly: true
-            {{- end }}
           livenessProbe:
             httpGet:
               path: {{ printf "%s/health" $healthPrefix }}
@@ -317,3 +275,89 @@ spec:
           resources:
             {{- toYaml . | nindent 12 }}
           {{- end }}
+
+        {{- if .Values.caBundle.enabled }}
+        # Sidecar that watches for CA bundle ConfigMap changes and regenerates the combined bundle
+        # Kubernetes automatically updates mounted ConfigMaps (~1 minute delay)
+        # This sidecar detects those changes and regenerates the combined bundle in-place
+        - name: ca-bundle-watcher
+          image: {{ .Values.image.name }}
+          {{- if .Values.image.imagePullPolicy }}
+          imagePullPolicy: {{ .Values.image.imagePullPolicy }}
+          {{- end }}
+          command:
+            - /bin/sh
+            - -c
+            - |
+              # Watch for CA bundle changes and regenerate combined bundle
+              # Kubernetes updates mounted ConfigMaps atomically via symlinks
+
+              WATCH_INTERVAL=${CA_BUNDLE_WATCH_INTERVAL:-30}
+
+              # Function to regenerate the combined CA bundle
+              regenerate_bundle() {
+{{ include "mlflow.caBundleScript" . | indent 16 }}
+              }
+
+              # Compute checksum of source files
+              compute_checksum() {
+                (
+                  cat "{{ .Values.caBundle.systemBundlePath }}" 2>/dev/null || true
+                  {{- if .Values.platformCABundle.enabled }}
+                  cat "{{ .Values.platformCABundle.filePath }}" 2>/dev/null || true
+                  cat "{{ .Values.platformCABundle.extraFilePath }}" 2>/dev/null || true
+                  {{- end }}
+                  {{- if .Values.caBundleConfigMap.enabled }}
+                  cat "/custom-certs/custom-ca-bundle.crt" 2>/dev/null || true
+                  {{- end }}
+                ) | sha256sum | cut -d' ' -f1
+              }
+
+              LAST_CHECKSUM=$(compute_checksum)
+              echo "CA bundle watcher started. Initial checksum: $LAST_CHECKSUM"
+
+              while true; do
+                sleep "$WATCH_INTERVAL"
+
+                CURRENT_CHECKSUM=$(compute_checksum)
+
+                if [ "$CURRENT_CHECKSUM" != "$LAST_CHECKSUM" ]; then
+                  echo "CA bundle change detected (checksum: $LAST_CHECKSUM -> $CURRENT_CHECKSUM)"
+                  echo "Regenerating combined CA bundle..."
+
+                  if regenerate_bundle; then
+                    LAST_CHECKSUM="$CURRENT_CHECKSUM"
+                    echo "Combined CA bundle updated successfully"
+                  else
+                    echo "ERROR: Failed to regenerate combined CA bundle"
+                  fi
+                fi
+              done
+          env:
+            - name: CA_BUNDLE_WATCH_INTERVAL
+              value: "{{ .Values.caBundle.watchInterval | default 30 }}"
+          volumeMounts:
+            - name: combined-ca-bundle
+              mountPath: {{ .Values.caBundle.mountPath }}
+            {{- if .Values.platformCABundle.enabled }}
+            - name: {{ .Values.platformCABundle.volumeName }}
+              mountPath: {{ .Values.platformCABundle.mountPath }}
+              readOnly: true
+            {{- end }}
+            {{- if .Values.caBundleConfigMap.enabled }}
+            - name: ca-bundle
+              mountPath: /custom-certs
+              readOnly: true
+            {{- end }}
+          {{- with .Values.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          resources:
+            requests:
+              cpu: 5m
+              memory: 8Mi
+            limits:
+              cpu: 50m
+              memory: 32Mi
+        {{- end }}

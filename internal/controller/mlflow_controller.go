@@ -439,7 +439,7 @@ func (r *MLflowReconciler) clusterRoleToMLflowRequests(ctx context.Context, obj 
 }
 
 // configMapToMLflowRequests maps ConfigMap events to MLflow reconcile requests.
-// When the platform CA bundle ConfigMap is created/deleted, we need to reconcile
+// When the platform CA bundle ConfigMap is created/updated/deleted, we need to reconcile
 // all MLflow instances in that namespace to update their Deployment spec.
 // Note: Content changes don't require pod restarts - kubelet auto-updates mounted ConfigMaps.
 func (r *MLflowReconciler) configMapToMLflowRequests(ctx context.Context, obj client.Object) []reconcile.Request {
