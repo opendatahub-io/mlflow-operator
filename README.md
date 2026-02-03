@@ -215,11 +215,17 @@ The operator automatically creates a NetworkPolicy that:
 
 The NetworkPolicy can be customized by modifying the Helm chart values or by creating your own NetworkPolicy.
 
+### Namespace Overrides (MLflowConfig)
+
+`MLflowConfig` is a namespaced singleton used to override artifact storage settings for a namespace.
+The `metadata.name` must be `mlflow` in every namespace where you want to apply overrides.
+
 ### Example Configurations
 
 See the [config/samples](./config/samples/) directory for complete examples:
 - `mlflow_v1_mlflow.yaml` - OpenShift deployment with local storage and service-ca TLS
 - `mlflow_v1_mlflow_remote_storage.yaml` - Remote PostgreSQL + S3 storage with horizontal scaling
+- `mlflow_v1_mlflowconfig.yaml` - Namespace-scoped artifact storage override
 
 ## Troubleshooting
 

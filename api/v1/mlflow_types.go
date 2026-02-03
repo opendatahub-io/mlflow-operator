@@ -249,6 +249,7 @@ type MLflowConfigSpec struct {
 
 // +kubebuilder:object:root=true
 // +kubebuilder:resource:scope=Namespaced
+// +kubebuilder:validation:XValidation:rule="self.metadata.name == 'mlflow'",message="MLflowConfig resource name must be 'mlflow'"
 
 // MLflowConfig is a namespace-scoped configuration resource that allows
 // Kubernetes namespace owners to override the default artifact storage

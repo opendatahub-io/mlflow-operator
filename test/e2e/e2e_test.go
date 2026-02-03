@@ -354,6 +354,71 @@ spec:
 			Eventually(verifyDeleted, 30*time.Second).Should(Succeed())
 		})
 
+		It("should validate CEL constraint for singleton MLflowConfig resource", func() {
+			By("creating an MLflowConfig resource with the correct name 'mlflow'")
+			mlflowConfigYAML := `apiVersion: mlflow.opendatahub.io/v1
+kind: MLflowConfig
+metadata:
+  name: mlflow
+spec:
+  artifactRootSecret: data-science-team-s3-credentials`
+
+			mlflowConfigFile := filepath.Join("/tmp", "mlflowconfig-valid.yaml")
+			err := os.WriteFile(mlflowConfigFile, []byte(mlflowConfigYAML), os.FileMode(0o644))
+			Expect(err).NotTo(HaveOccurred(), "Failed to write valid MLflowConfig manifest")
+			defer func() {
+				if removeErr := os.Remove(mlflowConfigFile); removeErr != nil {
+					_, _ = fmt.Fprintf(GinkgoWriter, "failed to remove %s: %v\n", mlflowConfigFile, removeErr)
+				}
+			}()
+
+			cmd := exec.Command("kubectl", "apply", "-n", namespace, "-f", mlflowConfigFile)
+			_, err = utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred(), "Failed to create MLflowConfig resource with name 'mlflow'")
+
+			By("verifying the MLflowConfig resource was created successfully")
+			cmd = exec.Command("kubectl", "get", "mlflowconfig", "mlflow", "-n", namespace, "-o", "jsonpath={.metadata.name}")
+			output, err := utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(output).To(Equal("mlflow"), "MLflowConfig resource should exist with name 'mlflow'")
+
+			By("attempting to create an MLflowConfig resource with an invalid name")
+			invalidConfigYAML := `apiVersion: mlflow.opendatahub.io/v1
+kind: MLflowConfig
+metadata:
+  name: invalid-name
+spec:
+  artifactRootSecret: data-science-team-s3-credentials`
+
+			invalidConfigFile := filepath.Join("/tmp", "mlflowconfig-invalid.yaml")
+			err = os.WriteFile(invalidConfigFile, []byte(invalidConfigYAML), os.FileMode(0o644))
+			Expect(err).NotTo(HaveOccurred(), "Failed to write invalid MLflowConfig manifest")
+			defer func() {
+				if removeErr := os.Remove(invalidConfigFile); removeErr != nil {
+					_, _ = fmt.Fprintf(GinkgoWriter, "failed to remove %s: %v\n", invalidConfigFile, removeErr)
+				}
+			}()
+
+			cmd = exec.Command("kubectl", "apply", "-n", namespace, "-f", invalidConfigFile)
+			output, err = utils.Run(cmd)
+			Expect(err).To(HaveOccurred(), "Should fail to create MLflowConfig with invalid name")
+			Expect(output).To(ContainSubstring("MLflowConfig resource name must be 'mlflow'"),
+				"Error message should indicate name validation failure")
+
+			By("cleaning up the valid MLflowConfig resource")
+			cmd = exec.Command("kubectl", "delete", "mlflowconfig", "mlflow", "-n", namespace)
+			_, err = utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred(), "Failed to delete MLflowConfig resource")
+
+			By("verifying the MLflowConfig resource was deleted")
+			verifyConfigDeleted := func(g Gomega) {
+				cmd := exec.Command("kubectl", "get", "mlflowconfig", "mlflow", "-n", namespace)
+				_, err := utils.Run(cmd)
+				g.Expect(err).To(HaveOccurred(), "MLflowConfig resource should not exist after deletion")
+			}
+			Eventually(verifyConfigDeleted, 30*time.Second).Should(Succeed())
+		})
+
 		// TODO: Customize the e2e test suite with scenarios specific to your project.
 		// Consider applying sample/CR(s) and check their status and/or verifying
 		// the reconciliation by using the metrics, i.e.:
