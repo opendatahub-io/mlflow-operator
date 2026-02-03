@@ -15,7 +15,7 @@ metadata:
 spec:
   # MLflow container image
   image:
-    image: quay.io/opendatahub/mlflow:master
+    image: quay.io/opendatahub/mlflow:odh-stable
     imagePullPolicy: Always
 
   # Number of replicas - can scale horizontally with remote storage

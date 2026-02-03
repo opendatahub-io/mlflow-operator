@@ -131,8 +131,8 @@ The deployment script accepts the following parameters:
 
 #### Basic Configuration
 - `--namespace`: Kubernetes namespace (default: `opendatahub`)
-- `--mlflow-image`: MLflow container image (default: `quay.io/opendatahub/mlflow:master`)
-- `--mlflow-operator-image`: MLflow operator image (default: `quay.io/opendatahub/mlflow-operator:main`)
+- `--mlflow-image`: MLflow container image (default: `quay.io/opendatahub/mlflow:odh-stable`)
+- `--mlflow-operator-image`: MLflow operator image (default: `quay.io/opendatahub/mlflow-operator:odh-stable`)
 
 #### Storage Configuration
 - `--backend-store`: Backend store type [`sqlite`, `postgres`] (default: `sqlite`)

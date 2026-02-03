@@ -35,7 +35,7 @@ import (
 )
 
 const (
-	defaultMLflowImage     = "quay.io/opendatahub/mlflow:master"
+	defaultMLflowImage     = "quay.io/opendatahub/mlflow:odh-stable"
 	defaultStorageSize     = "2Gi"
 	defaultBackendStoreURI = "sqlite:////mlflow/mlflow.db"
 	defaultArtifactsDest   = "file:///mlflow/artifacts"

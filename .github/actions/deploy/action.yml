@@ -16,12 +16,12 @@ inputs:
   mlflow_image:
     description: 'Full MLflow image name and tag'
     required: false
-    default: 'quay.io/opendatahub/mlflow:master'
+    default: 'quay.io/opendatahub/mlflow:odh-stable'
 
   mlflow_operator_image:
     description: 'Full MLflow operator image name and tag'
     required: false
-    default: 'quay.io/opendatahub/mlflow-operator:main'
+    default: 'quay.io/opendatahub/mlflow-operator:odh-stable'
 
   backend_store:
     description: 'Backend store type for experiment metadata'
