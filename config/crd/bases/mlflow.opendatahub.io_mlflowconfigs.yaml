@@ -79,5 +79,8 @@ spec:
         required:
         - spec
         type: object
+        x-kubernetes-validations:
+        - message: MLflowConfig resource name must be 'mlflow'
+          rule: self.metadata.name == 'mlflow'
     served: true
     storage: true
