@@ -126,11 +126,8 @@ mlflow:
   workers: 1
   # Port for MLflow server
   port: 8443
-  # Allowed hosts for the MLflow server (Host header validation)
-  # When using the operator, this is automatically populated with service DNS names
-  # (e.g., mlflow.namespace.svc.cluster.local) plus any extraAllowedHosts from the MLflow CR.
-  # When deploying standalone via Helm, set this to the hostnames clients will use to access MLflow.
-  # Example: ["mlflow.example.com", "mlflow-route.apps.cluster.example.com"]
+  # Allowed hosts for the MLflow server
+  # Set this to the hostnames clients will use to access MLflow.
   # An empty list means no host validation is performed.
   allowedHosts: []
   # Static URL prefix for MLflow (e.g., "/mlflow" for proxied deployments)
