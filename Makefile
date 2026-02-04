@@ -203,7 +203,7 @@ PLATFORM ?= odh
 .PHONY: deploy-to-platform
 deploy-to-platform: manifests kustomize ## Deploy to Open Data Hub or Red Hat OpenShift AI platform. Requires ODH/RHOAI to be already installed.
 	@echo "Fetching gateway hostname from cluster..."
-	@GATEWAY_HOST=$$($(KUBECTL) get gateway $(ODH_GATEWAY_NAME) -n $(ODH_GATEWAY_NAMESPACE) -o jsonpath='{.spec.listeners[0].hostname}' 2>/dev/null) || \
+	@GATEWAY_HOST=$$($(KUBECTL) get gateway $(ODH_GATEWAY_NAME) -n $(ODH_GATEWAY_NAMESPACE) -o jsonpath='{.status.addresses[0].value}' 2>/dev/null) || \
 		{ echo "Error: Could not find gateway '$(ODH_GATEWAY_NAME)' in namespace '$(ODH_GATEWAY_NAMESPACE)'."; \
 		  echo "Make sure Open Data Hub or Red Hat OpenShift AI is installed and the gateway is created."; \
 		  exit 1; }; \
