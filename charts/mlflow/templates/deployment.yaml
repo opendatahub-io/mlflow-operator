@@ -64,30 +64,24 @@ spec:
           secret:
             secretName: {{ .Values.tls.secretName }}
             defaultMode: 420
-        {{- if .Values.caBundleConfigMap.enabled }}
-        - name: ca-bundle
+        {{- if .Values.caBundle.configMaps }}
+        # CA bundle ConfigMap volumes
+        {{- range $i, $cm := .Values.caBundle.configMaps }}
+        - name: ca-bundle-{{ $i }}
           configMap:
-            name: {{ .Values.caBundleConfigMap.name }}
+            name: {{ $cm.name }}
             optional: true
             items:
               - key: {{ .Values.caBundleConfigMap.key }}
                 path: custom-ca-bundle.crt
         {{- end }}
-        {{- if .Values.platformCABundle.enabled }}
-        - name: {{ .Values.platformCABundle.volumeName }}
-          configMap:
-            name: {{ .Values.platformCABundle.configMapName }}
-            optional: true
-        {{- end }}
-        {{- if .Values.caBundle.enabled }}
-        # emptyDir volume for the combined CA bundle created by the init container
+        # Combined CA bundle output volume
         - name: combined-ca-bundle
           emptyDir: {}
         {{- end }}
 
-      {{- if .Values.caBundle.enabled }}
+      {{- if .Values.caBundle.configMaps }}
       # Init container that creates initial combined CA bundle
-      # The sidecar container will update it when ConfigMaps change
       initContainers:
         - name: combine-ca-bundles
           image: {{ .Values.image.name }}
@@ -98,18 +92,22 @@ spec:
             - /bin/sh
             - -c
             - |
-{{ include "mlflow.caBundleScript" . | indent 14 }}
+              set -e
+{{ include "mlflow.caBundleFunctions" . | indent 14 }}
+              combine_ca_bundles
+          env:
+            - name: CA_BUNDLE_SYSTEM_PATH
+              value: {{ .Values.caBundle.systemCAPath | quote }}
+            - name: CA_BUNDLE_MOUNT_PATHS
+              value: {{ .Values.caBundle.mountPaths | quote }}
+            - name: CA_BUNDLE_OUTPUT
+              value: {{ .Values.caBundle.outputPath | quote }}
           volumeMounts:
             - name: combined-ca-bundle
-              mountPath: {{ .Values.caBundle.mountPath }}
-            {{- if .Values.platformCABundle.enabled }}
-            - name: {{ .Values.platformCABundle.volumeName }}
-              mountPath: {{ .Values.platformCABundle.mountPath }}
-              readOnly: true
-            {{- end }}
-            {{- if .Values.caBundleConfigMap.enabled }}
-            - name: ca-bundle
-              mountPath: /custom-certs
+              mountPath: {{ dir .Values.caBundle.outputPath }}
+            {{- range $i, $cm := .Values.caBundle.configMaps }}
+            - name: ca-bundle-{{ $i }}
+              mountPath: {{ $cm.mountPath }}
               readOnly: true
             {{- end }}
           {{- with .Values.securityContext }}
@@ -190,31 +188,28 @@ spec:
               value: {{ .value | quote }}
               {{- end }}
             {{- end }}
-            {{- if .Values.caBundle.enabled }}
-            # CA bundle - a single PEM file containing all trusted certificates:
-            # - System CA certificates (from base image)
-            # - Platform CA bundle (if present)
-            # - User-provided custom CA bundle (if configured)
-            #
-            # SSL_CERT_FILE: Python ssl module, OpenSSL, httpx
+            {{- if .Values.caBundle.configMaps }}
+            # CA bundle environment variables - point various libraries to the combined CA bundle
             - name: SSL_CERT_FILE
-              value: {{ .Values.caBundle.filePath | quote }}
+              value: {{ .Values.caBundle.outputPath | quote }}
             # REQUESTS_CA_BUNDLE: requests library used by MLflow
             - name: REQUESTS_CA_BUNDLE
-              value: {{ .Values.caBundle.filePath | quote }}
+              value: {{ .Values.caBundle.outputPath | quote }}
             # CURL_CA_BUNDLE: fallback for requests/pycurl
             - name: CURL_CA_BUNDLE
-              value: {{ .Values.caBundle.filePath | quote }}
+              value: {{ .Values.caBundle.outputPath | quote }}
             # AWS_CA_BUNDLE: boto3/botocore for S3 storage
             - name: AWS_CA_BUNDLE
-              value: {{ .Values.caBundle.filePath | quote }}
-            # PGSSLROOTCERT: psycopg2 for PostgreSQL backend
+              value: {{ .Values.caBundle.outputPath | quote }}
+            # PGSSLROOTCERT/PGSSLMODE: psycopg2 PostgreSQL SSL configuration
             - name: PGSSLROOTCERT
-              value: {{ .Values.caBundle.filePath | quote }}
+              value: {{ .Values.caBundle.outputPath | quote }}
+            - name: PGSSLMODE
+              value: "verify-full"
             # MLFLOW_MYSQL_CA: MySQL CA bundle for MySQL backend
             - name: MLFLOW_MYSQL_CA
-              value: {{ .Values.caBundle.filePath | quote }}
-            # MLFLOW_S3_IGNORE_TLS: Explicitly require TLS verification for S3 storage
+              value: {{ .Values.caBundle.outputPath | quote }}
+            # MLFLOW_S3_IGNORE_TLS: Require TLS verification for S3 storage
             - name: MLFLOW_S3_IGNORE_TLS
               value: "false"
             {{- end }}
@@ -233,18 +228,11 @@ spec:
             - name: mlflow-tls
               mountPath: /etc/tls/private
               readOnly: true
-            {{- if .Values.caBundle.enabled }}
+            {{- if .Values.caBundle.configMaps }}
             # Combined CA bundle - includes system CAs + platform CAs + custom CAs
             # Created by the init container, used by all Python libraries
             - name: combined-ca-bundle
-              mountPath: {{ .Values.caBundle.mountPath }}
-              readOnly: true
-            {{- end }}
-            {{- if .Values.caBundleConfigMap.enabled }}
-            # Custom CA bundle - also mounted separately for direct access if needed
-            - name: ca-bundle
-              mountPath: /etc/pki/tls/certs/custom-ca-bundle.crt
-              subPath: custom-ca-bundle.crt
+              mountPath: {{ dir .Values.caBundle.outputPath }}
               readOnly: true
             {{- end }}
           livenessProbe:
@@ -276,10 +264,8 @@ spec:
             {{- toYaml . | nindent 12 }}
           {{- end }}
 
-        {{- if .Values.caBundle.enabled }}
+        {{- if .Values.caBundle.configMaps }}
         # Sidecar that watches for CA bundle ConfigMap changes and regenerates the combined bundle
-        # Kubernetes automatically updates mounted ConfigMaps (~1 minute delay)
-        # This sidecar detects those changes and regenerates the combined bundle in-place
         - name: ca-bundle-watcher
           image: {{ .Values.image.name }}
           {{- if .Values.image.imagePullPolicy }}
@@ -289,43 +275,22 @@ spec:
             - /bin/sh
             - -c
             - |
-              # Watch for CA bundle changes and regenerate combined bundle
-              # Kubernetes updates mounted ConfigMaps atomically via symlinks
+{{ include "mlflow.caBundleFunctions" . | indent 14 }}
 
-              WATCH_INTERVAL=${CA_BUNDLE_WATCH_INTERVAL:-30}
-
-              # Function to regenerate the combined CA bundle
-              regenerate_bundle() {
-{{ include "mlflow.caBundleScript" . | indent 16 }}
-              }
-
-              # Compute checksum of source files
-              compute_checksum() {
-                (
-                  cat "{{ .Values.caBundle.systemBundlePath }}" 2>/dev/null || true
-                  {{- if .Values.platformCABundle.enabled }}
-                  cat "{{ .Values.platformCABundle.filePath }}" 2>/dev/null || true
-                  cat "{{ .Values.platformCABundle.extraFilePath }}" 2>/dev/null || true
-                  {{- end }}
-                  {{- if .Values.caBundleConfigMap.enabled }}
-                  cat "/custom-certs/custom-ca-bundle.crt" 2>/dev/null || true
-                  {{- end }}
-                ) | sha256sum | cut -d' ' -f1
-              }
-
+              # Watch loop
               LAST_CHECKSUM=$(compute_checksum)
-              echo "CA bundle watcher started. Initial checksum: $LAST_CHECKSUM"
+              echo "CA bundle watcher started"
+              echo "  Sources: $CA_BUNDLE_SOURCES"
+              echo "  Output: $CA_BUNDLE_OUTPUT"
+              echo "  Watch interval: ${CA_BUNDLE_WATCH_INTERVAL}s"
+              echo "  Initial checksum: $LAST_CHECKSUM"
 
               while true; do
-                sleep "$WATCH_INTERVAL"
-
+                sleep "$CA_BUNDLE_WATCH_INTERVAL"
                 CURRENT_CHECKSUM=$(compute_checksum)
-
                 if [ "$CURRENT_CHECKSUM" != "$LAST_CHECKSUM" ]; then
                   echo "CA bundle change detected (checksum: $LAST_CHECKSUM -> $CURRENT_CHECKSUM)"
-                  echo "Regenerating combined CA bundle..."
-
-                  if regenerate_bundle; then
+                  if combine_ca_bundles; then
                     LAST_CHECKSUM="$CURRENT_CHECKSUM"
                     echo "Combined CA bundle updated successfully"
                   else
@@ -336,17 +301,18 @@ spec:
           env:
             - name: CA_BUNDLE_WATCH_INTERVAL
               value: "{{ .Values.caBundle.watchInterval | default 30 }}"
+            - name: CA_BUNDLE_SYSTEM_PATH
+              value: {{ .Values.caBundle.systemCAPath | quote }}
+            - name: CA_BUNDLE_MOUNT_PATHS
+              value: {{ .Values.caBundle.mountPaths | quote }}
+            - name: CA_BUNDLE_OUTPUT
+              value: {{ .Values.caBundle.outputPath | quote }}
           volumeMounts:
             - name: combined-ca-bundle
-              mountPath: {{ .Values.caBundle.mountPath }}
-            {{- if .Values.platformCABundle.enabled }}
-            - name: {{ .Values.platformCABundle.volumeName }}
-              mountPath: {{ .Values.platformCABundle.mountPath }}
-              readOnly: true
-            {{- end }}
-            {{- if .Values.caBundleConfigMap.enabled }}
-            - name: ca-bundle
-              mountPath: /custom-certs
+              mountPath: {{ dir .Values.caBundle.outputPath }}
+            {{- range $i, $cm := .Values.caBundle.configMaps }}
+            - name: ca-bundle-{{ $i }}
+              mountPath: {{ $cm.mountPath }}
               readOnly: true
             {{- end }}
           {{- with .Values.securityContext }}

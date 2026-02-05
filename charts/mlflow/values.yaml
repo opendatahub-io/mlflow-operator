@@ -166,35 +166,28 @@ tolerations: []
 affinity: {}
 
 # CA Bundle configuration for TLS verification
-# User-provided CA bundle from a ConfigMap
-caBundleConfigMap:
-  enabled: false
-  name: ""
-  key: ""
-
-# Platform CA Bundle (e.g., ODH/RHOAI trusted CA bundle)
-# This is automatically detected and mounted by the operator if present
-# The ConfigMap is expected to have keys: "ca-bundle.crt" and/or "odh-ca-bundle.crt"
-# Ref: https://github.com/opendatahub-io/architecture-decision-records/pull/28
-platformCABundle:
-  enabled: false  # Set to true by operator when ConfigMap is detected
-  configMapName: odh-trusted-ca-bundle
-  volumeName: platform-ca-bundle
-  mountPath: /etc/pki/tls/certs/platform
-  filePath: /etc/pki/tls/certs/platform/ca-bundle.crt        # Main CA bundle
-  extraFilePath: /etc/pki/tls/certs/platform/odh-ca-bundle.crt  # Additional platform certs
-
-# CA Bundle configuration
-# When enabled, an init container creates a single PEM file that includes:
-# - System CA certificates from the base image (/etc/pki/tls/certs/ca-bundle.crt)
-# - Platform CA bundle (if present)
-# - User-provided custom CA bundle (if configured)
-# This file is used by all Python libraries (boto3, requests, psycopg2, etc.)
+# The operator populates configMaps and mountPaths from detected/user-specified CA bundles.
+# All .crt and .pem files in each mounted ConfigMap are included.
 caBundle:
-  enabled: false  # Set to true by operator when any CA source is configured
-  mountPath: /etc/pki/tls/certs/combined
-  filePath: /etc/pki/tls/certs/combined/ca-bundle.crt
-  systemBundlePath: /etc/pki/tls/certs/ca-bundle.crt
-  # Seconds between checks for CA bundle ConfigMap changes
-  # A sidecar container watches for changes and regenerates the bundle in-place
-  watchInterval: 30
+  # System CA bundle path (base certificates from container image)
+  systemCAPath: /etc/pki/tls/certs/ca-bundle.crt
+
+  # ConfigMaps to mount as volumes containing CA certificates.
+  # Each entry creates a volume from a ConfigMap and mounts it at the specified path.
+  # The init container and sidecar will glob all files under each mountPath
+  # and concatenate them (along with the system CA bundle) into the combined output.
+  # The operator adds entries here for platform-detected and user-specified ConfigMaps.
+  # Example:
+  #   configMaps:
+  #     - name: odh-trusted-ca-bundle
+  #       mountPath: /etc/pki/tls/certs/platform
+  #     - name: my-custom-ca-bundle
+  #       mountPath: /etc/pki/tls/certs/custom
+  configMaps: []
+
+  # Output path for the combined CA bundle PEM file
+  # The directory portion is used as the emptyDir mount path (derived via `dir` in templates)
+  outputPath: /etc/pki/tls/certs/combined/ca-bundle.crt
+
+  mountPaths: ""   # Space-separated list of mount paths (computed by operator)
+  watchInterval: 30  # Seconds between checks for source file changes

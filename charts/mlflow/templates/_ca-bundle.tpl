@@ -1,55 +1,62 @@
 {{/*
-CA Bundle combine script.
-This script combines system, platform, and custom CA bundles into a single PEM file.
-Used by both the init container (initial creation) and sidecar (live updates).
+CA Bundle helper template.
+Provides shell functions for combining multiple CA bundle files.
+
+Required environment variables:
+  CA_BUNDLE_SYSTEM_PATH - path to system CA bundle (included first)
+  CA_BUNDLE_MOUNT_PATHS - space-separated list of directories to glob for .crt/.pem files
+  CA_BUNDLE_OUTPUT      - path to the combined output file
+
+Functions provided:
+  compute_checksum   - compute SHA256 of all source files
+  combine_ca_bundles - concatenate sources into output file
 */}}
-{{- define "mlflow.caBundleScript" -}}
-set -e
+{{- define "mlflow.caBundleFunctions" -}}
+# Compute checksum of CA bundle source files
+compute_checksum() {
+  (
+    # Include system CA
+    cat "$CA_BUNDLE_SYSTEM_PATH" 2>/dev/null || true
+    # Glob .crt and .pem files from each mount path
+    for dir in $CA_BUNDLE_MOUNT_PATHS; do
+      for f in "$dir"/*.crt "$dir"/*.pem; do
+        [ -f "$f" ] && cat "$f" 2>/dev/null || true
+      done
+    done
+  ) | sha256sum | cut -d' ' -f1
+}
 
-COMBINED_BUNDLE="{{ .Values.caBundle.filePath }}"
-SYSTEM_BUNDLE="{{ .Values.caBundle.systemBundlePath }}"
-TEMP_BUNDLE="${COMBINED_BUNDLE}.tmp"
+# Combine CA bundle files into a single PEM file
+combine_ca_bundles() {
+  local output="${CA_BUNDLE_OUTPUT}"
+  local temp="${output}.tmp"
+  local count=0
 
-# Write to temp file first for atomic update
-# Start with system CA bundle if it exists
-if [ -f "$SYSTEM_BUNDLE" ]; then
-  echo "# System CA bundle" > "$TEMP_BUNDLE"
-  cat "$SYSTEM_BUNDLE" >> "$TEMP_BUNDLE"
-  echo "" >> "$TEMP_BUNDLE"
-else
-  echo "# Combined CA bundle" > "$TEMP_BUNDLE"
-fi
+  # Initialize temp file
+  echo -n "" > "$temp"
 
-{{- if .Values.platformCABundle.enabled }}
-# Append platform CA bundle if it exists
-PLATFORM_BUNDLE="{{ .Values.platformCABundle.filePath }}"
-if [ -f "$PLATFORM_BUNDLE" ]; then
-  echo "# Platform CA bundle" >> "$TEMP_BUNDLE"
-  cat "$PLATFORM_BUNDLE" >> "$TEMP_BUNDLE"
-  echo "" >> "$TEMP_BUNDLE"
-fi
-# Also check for additional platform-specific certs
-PLATFORM_EXTRA="{{ .Values.platformCABundle.extraFilePath }}"
-if [ -f "$PLATFORM_EXTRA" ]; then
-  echo "# Platform additional CA bundle" >> "$TEMP_BUNDLE"
-  cat "$PLATFORM_EXTRA" >> "$TEMP_BUNDLE"
-  echo "" >> "$TEMP_BUNDLE"
-fi
-{{- end }}
+  # Include system CA bundle first
+  if [ -f "$CA_BUNDLE_SYSTEM_PATH" ]; then
+    cat "$CA_BUNDLE_SYSTEM_PATH" >> "$temp"
+    echo "" >> "$temp"
+    count=$((count + 1))
+  fi
 
-{{- if .Values.caBundleConfigMap.enabled }}
-# Append user-provided custom CA bundle if it exists
-CUSTOM_BUNDLE="/custom-certs/custom-ca-bundle.crt"
-if [ -f "$CUSTOM_BUNDLE" ]; then
-  echo "# Custom CA bundle" >> "$TEMP_BUNDLE"
-  cat "$CUSTOM_BUNDLE" >> "$TEMP_BUNDLE"
-  echo "" >> "$TEMP_BUNDLE"
-fi
-{{- end }}
+  # Glob .crt and .pem files from each mount path
+  for dir in $CA_BUNDLE_MOUNT_PATHS; do
+    for f in "$dir"/*.crt "$dir"/*.pem; do
+      if [ -f "$f" ]; then
+        cat "$f" >> "$temp"
+        echo "" >> "$temp"
+        count=$((count + 1))
+      fi
+    done
+  done
 
-# Atomically replace the combined bundle
-mv "$TEMP_BUNDLE" "$COMBINED_BUNDLE"
+  # Atomically replace the output file
+  mv "$temp" "$output"
 
-echo "Combined CA bundle created at $COMBINED_BUNDLE"
-echo "Certificate count: $(grep -c 'BEGIN CERTIFICATE' "$COMBINED_BUNDLE" || echo 0)"
-{{- end }}
+  echo "Combined $count CA bundle sources into $output"
+  echo "Certificate count: $(grep -c 'BEGIN CERTIFICATE' "$output" || echo 0)"
+}
+{{- end -}}

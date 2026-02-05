@@ -247,6 +247,8 @@ spec:
     name: my-ca-bundle
     key: ca-bundle.crt
 ```
+
+When CA bundles are present (platform or custom), PostgreSQL connections use `PGSSLMODE=verify-full`. Ensure your PostgreSQL server's certificate is signed by a CA in the bundle, or override via connection string (e.g., `?sslmode=prefer`).
 ### Example Configurations
 
 See the [config/samples](./config/samples/) directory for complete examples:

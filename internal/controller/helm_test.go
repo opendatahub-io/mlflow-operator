@@ -30,8 +30,7 @@ import (
 )
 
 const (
-	deploymentKind              = "Deployment"
-	combinedCABundledVolumeName = "combined-ca-bundle"
+	deploymentKind = "Deployment"
 )
 
 func TestMlflowToHelmValues_Storage(t *testing.T) {
@@ -1198,8 +1197,8 @@ func TestMlflowToHelmValues_CABundle(t *testing.T) {
 	if caBundle["enabled"].(bool) != true {
 		t.Error("caBundle should be enabled when user CA bundle is configured")
 	}
-	if caBundle["filePath"].(string) != CombinedCABundleFilePath {
-		t.Errorf("caBundle.filePath = %v, want %v", caBundle["filePath"], CombinedCABundleFilePath)
+	if caBundle["filePath"].(string) != caCombinedBundle {
+		t.Errorf("caBundle.filePath = %v, want %v", caBundle["filePath"], caCombinedBundle)
 	}
 
 	// Test: ODH CA bundle only (no user-provided)
@@ -1220,8 +1219,8 @@ func TestMlflowToHelmValues_CABundle(t *testing.T) {
 	if caBundle["enabled"].(bool) != true {
 		t.Error("caBundle should be enabled when platform CA bundle exists")
 	}
-	if caBundle["filePath"].(string) != CombinedCABundleFilePath {
-		t.Errorf("caBundle.filePath = %v, want %v", caBundle["filePath"], CombinedCABundleFilePath)
+	if caBundle["filePath"].(string) != caCombinedBundle {
+		t.Errorf("caBundle.filePath = %v, want %v", caBundle["filePath"], caCombinedBundle)
 	}
 
 	// Test: both CA bundles enabled - combined bundle is used
@@ -1242,8 +1241,8 @@ func TestMlflowToHelmValues_CABundle(t *testing.T) {
 	}
 	// caBundle.filePath should point to combined bundle (includes system + platform + user CAs)
 	caBundle = values["caBundle"].(map[string]interface{})
-	if caBundle["filePath"].(string) != CombinedCABundleFilePath {
-		t.Errorf("caBundle.filePath = %v, want %v", caBundle["filePath"], CombinedCABundleFilePath)
+	if caBundle["filePath"].(string) != caCombinedBundle {
+		t.Errorf("caBundle.filePath = %v, want %v", caBundle["filePath"], caCombinedBundle)
 	}
 }
 
@@ -1315,7 +1314,7 @@ func TestRenderChart_CABundle(t *testing.T) {
 	}
 
 	// Verify file-based env vars point to combined CA bundle (includes system + ODH + user CAs)
-	expectedFilePath := CombinedCABundleFilePath
+	expectedFilePath := caCombinedBundle
 	fileBasedEnvVars := []string{"SSL_CERT_FILE", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE", "AWS_CA_BUNDLE", "PGSSLROOTCERT"}
 	for _, envName := range fileBasedEnvVars {
 		if foundEnvVars[envName] != expectedFilePath {
@@ -1323,29 +1322,55 @@ func TestRenderChart_CABundle(t *testing.T) {
 		}
 	}
 
+	// Verify PGSSLMODE is set to verify-full for security
+	if foundEnvVars["PGSSLMODE"] != "verify-full" {
+		t.Errorf("PGSSLMODE = %v, want verify-full", foundEnvVars["PGSSLMODE"])
+	}
+
 	// Check combined-ca-bundle volume mount exists on main container
+	// Note: Platform and custom CA bundles are only mounted on init/sidecar containers
+	// The main container only needs the combined bundle
 	volumeMounts, _, _ := unstructured.NestedSlice(container, "volumeMounts")
-	foundCombined, foundCustom, foundODH := false, false, false
+	foundCombined, foundCustom := false, false
 	for _, vm := range volumeMounts {
 		name := vm.(map[string]interface{})["name"].(string)
-		if name == combinedCABundledVolumeName {
+		if name == caCombinedVolume {
 			foundCombined = true
 		}
-		if name == "ca-bundle" {
+		if name == caCustomVolume {
 			foundCustom = true
-		}
-		if name == PlatformTrustedCABundleVolumeName {
-			foundODH = true
 		}
 	}
 	if !foundCombined {
-		t.Errorf("%s volume mount not found on main container", combinedCABundledVolumeName)
+		t.Errorf("%s volume mount not found on main container", caCombinedVolume)
 	}
 	if !foundCustom {
 		t.Error("custom CA bundle volume mount not found")
 	}
-	if !foundODH {
-		t.Error("ODH CA bundle volume mount not found")
+
+	// Check that init container has all required volume mounts for combining bundles
+	initVolumeMounts, _, _ := unstructured.NestedSlice(initContainer, "volumeMounts")
+	foundInitCombined, foundInitCustom, foundInitPlatform := false, false, false
+	for _, vm := range initVolumeMounts {
+		name := vm.(map[string]interface{})["name"].(string)
+		if name == caCombinedVolume {
+			foundInitCombined = true
+		}
+		if name == caCustomVolume {
+			foundInitCustom = true
+		}
+		if name == caPlatformVolume {
+			foundInitPlatform = true
+		}
+	}
+	if !foundInitCombined {
+		t.Errorf("init container: %s volume mount not found", caCombinedVolume)
+	}
+	if !foundInitCustom {
+		t.Error("init container: custom CA bundle volume mount not found")
+	}
+	if !foundInitPlatform {
+		t.Error("init container: platform CA bundle volume mount not found")
 	}
 
 	// Check volumes exist including combined-ca-bundle emptyDir
@@ -1354,14 +1379,14 @@ func TestRenderChart_CABundle(t *testing.T) {
 	for _, vol := range volumes {
 		volMap := vol.(map[string]interface{})
 		name := volMap["name"].(string)
-		if name == combinedCABundledVolumeName {
+		if name == caCombinedVolume {
 			foundCombinedVolume = true
 			// Should be an emptyDir
 			if _, ok := volMap["emptyDir"]; !ok {
-				t.Errorf("%s volume should be an emptyDir", combinedCABundledVolumeName)
+				t.Errorf("%s volume should be an emptyDir", caCombinedVolume)
 			}
 		}
-		if name == "ca-bundle" || name == PlatformTrustedCABundleVolumeName {
+		if name == caCustomVolume || name == caPlatformVolume {
 			configMap, _, _ := unstructured.NestedMap(volMap, "configMap")
 			if optional, ok := configMap["optional"].(bool); !ok || !optional {
 				t.Errorf("volume %s should have optional: true", name)
@@ -1369,7 +1394,7 @@ func TestRenderChart_CABundle(t *testing.T) {
 		}
 	}
 	if !foundCombinedVolume {
-		t.Errorf("%s volume not found", combinedCABundledVolumeName)
+		t.Errorf("%s volume not found", caCombinedVolume)
 	}
 }
 
@@ -1419,7 +1444,7 @@ func TestRenderChart_CABundle_ODHOnly(t *testing.T) {
 	}
 
 	// Verify file-based env vars point to combined CA bundle
-	expectedFilePath := CombinedCABundleFilePath
+	expectedFilePath := caCombinedBundle
 	fileBasedEnvVars := []string{"SSL_CERT_FILE", "REQUESTS_CA_BUNDLE", "AWS_CA_BUNDLE", "PGSSLROOTCERT"}
 	for _, envName := range fileBasedEnvVars {
 		if foundEnvVars[envName] != expectedFilePath {
@@ -1464,8 +1489,8 @@ func TestRenderChart_NoCABundle(t *testing.T) {
 	volumes, _, _ := unstructured.NestedSlice(deployment.Object, "spec", "template", "spec", "volumes")
 	for _, vol := range volumes {
 		volMap := vol.(map[string]interface{})
-		if volMap["name"].(string) == combinedCABundledVolumeName {
-			t.Errorf("%s volume should not exist when no CA bundles are configured", combinedCABundledVolumeName)
+		if volMap["name"].(string) == caCombinedVolume {
+			t.Errorf("%s volume should not exist when no CA bundles are configured", caCombinedVolume)
 		}
 	}
 
