@@ -185,16 +185,15 @@ platformCABundle:
   extraFilePath: /etc/pki/tls/certs/platform/odh-ca-bundle.crt  # Additional platform certs
 
 # CA Bundle configuration
-# When enabled, an init container creates a single PEM file that includes:
-# - System CA certificates from the base image (/etc/pki/tls/certs/ca-bundle.crt)
-# - Platform CA bundle (if present)
-# - User-provided custom CA bundle (if configured)
-# This file is used by all Python libraries (boto3, requests, psycopg2, etc.)
+# When enabled, an init container creates a single PEM file by concatenating
+# CA bundle sources. This file is used by Python libraries (boto3, requests, psycopg2, etc.)
 caBundle:
-  enabled: false  # Set to true by operator when any CA source is configured
+  enabled: false  # Set to true by operator when CA sources are configured
   mountPath: /etc/pki/tls/certs/combined
   filePath: /etc/pki/tls/certs/combined/ca-bundle.crt
-  systemBundlePath: /etc/pki/tls/certs/ca-bundle.crt
-  # Seconds between checks for CA bundle ConfigMap changes
+  # Space-separated list of CA bundle file paths to concatenate
+  # Set by the operator to include system, platform, and custom CA bundles
+  sources: ""
+  # Seconds between checks for CA bundle source file changes
   # A sidecar container watches for changes and regenerates the bundle in-place
   watchInterval: 30

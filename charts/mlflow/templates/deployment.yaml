@@ -98,7 +98,14 @@ spec:
             - /bin/sh
             - -c
             - |
-{{ include "mlflow.caBundleScript" . | indent 14 }}
+              set -e
+{{ include "mlflow.caBundleFunctions" . | indent 14 }}
+              combine_ca_bundles
+          env:
+            - name: CA_BUNDLE_SOURCES
+              value: {{ .Values.caBundle.sources | quote }}
+            - name: CA_BUNDLE_OUTPUT
+              value: {{ .Values.caBundle.filePath | quote }}
           volumeMounts:
             - name: combined-ca-bundle
               mountPath: {{ .Values.caBundle.mountPath }}
@@ -289,43 +296,22 @@ spec:
             - /bin/sh
             - -c
             - |
-              # Watch for CA bundle changes and regenerate combined bundle
-              # Kubernetes updates mounted ConfigMaps atomically via symlinks
+{{ include "mlflow.caBundleFunctions" . | indent 14 }}
 
-              WATCH_INTERVAL=${CA_BUNDLE_WATCH_INTERVAL:-30}
-
-              # Function to regenerate the combined CA bundle
-              regenerate_bundle() {
-{{ include "mlflow.caBundleScript" . | indent 16 }}
-              }
-
-              # Compute checksum of source files
-              compute_checksum() {
-                (
-                  cat "{{ .Values.caBundle.systemBundlePath }}" 2>/dev/null || true
-                  {{- if .Values.platformCABundle.enabled }}
-                  cat "{{ .Values.platformCABundle.filePath }}" 2>/dev/null || true
-                  cat "{{ .Values.platformCABundle.extraFilePath }}" 2>/dev/null || true
-                  {{- end }}
-                  {{- if .Values.caBundleConfigMap.enabled }}
-                  cat "/custom-certs/custom-ca-bundle.crt" 2>/dev/null || true
-                  {{- end }}
-                ) | sha256sum | cut -d' ' -f1
-              }
-
+              # Watch loop
               LAST_CHECKSUM=$(compute_checksum)
-              echo "CA bundle watcher started. Initial checksum: $LAST_CHECKSUM"
+              echo "CA bundle watcher started"
+              echo "  Sources: $CA_BUNDLE_SOURCES"
+              echo "  Output: $CA_BUNDLE_OUTPUT"
+              echo "  Watch interval: ${CA_BUNDLE_WATCH_INTERVAL}s"
+              echo "  Initial checksum: $LAST_CHECKSUM"
 
               while true; do
-                sleep "$WATCH_INTERVAL"
-
+                sleep "$CA_BUNDLE_WATCH_INTERVAL"
                 CURRENT_CHECKSUM=$(compute_checksum)
-
                 if [ "$CURRENT_CHECKSUM" != "$LAST_CHECKSUM" ]; then
                   echo "CA bundle change detected (checksum: $LAST_CHECKSUM -> $CURRENT_CHECKSUM)"
-                  echo "Regenerating combined CA bundle..."
-
-                  if regenerate_bundle; then
+                  if combine_ca_bundles; then
                     LAST_CHECKSUM="$CURRENT_CHECKSUM"
                     echo "Combined CA bundle updated successfully"
                   else
@@ -336,6 +322,10 @@ spec:
           env:
             - name: CA_BUNDLE_WATCH_INTERVAL
               value: "{{ .Values.caBundle.watchInterval | default 30 }}"
+            - name: CA_BUNDLE_SOURCES
+              value: {{ .Values.caBundle.sources | quote }}
+            - name: CA_BUNDLE_OUTPUT
+              value: {{ .Values.caBundle.filePath | quote }}
           volumeMounts:
             - name: combined-ca-bundle
               mountPath: {{ .Values.caBundle.mountPath }}

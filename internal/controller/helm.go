@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"io"
 	"path/filepath"
+	"strings"
 
 	"helm.sh/helm/v3/pkg/chart"
 	"helm.sh/helm/v3/pkg/chart/loader"
@@ -40,6 +41,20 @@ const (
 	defaultStorageSize     = "2Gi"
 	defaultBackendStoreURI = "sqlite:////mlflow/mlflow.db"
 	defaultArtifactsDest   = "file:///mlflow/artifacts"
+)
+
+// CA bundle paths and volume names - used for combining system, platform, and custom CA bundles
+const (
+	caSystemBundle   = "/etc/pki/tls/certs/ca-bundle.crt"
+	caPlatformVolume = "platform-ca-bundle"
+	caPlatformMount  = "/etc/pki/tls/certs/platform"
+	caPlatformBundle = caPlatformMount + "/ca-bundle.crt"
+	caPlatformExtra  = caPlatformMount + "/odh-ca-bundle.crt"
+	caCustomVolume   = "ca-bundle"
+	caCustomBundle   = "/custom-certs/custom-ca-bundle.crt"
+	caCombinedVolume = "combined-ca-bundle"
+	caCombinedMount  = "/etc/pki/tls/certs/combined"
+	caCombinedBundle = caCombinedMount + "/ca-bundle.crt"
 )
 
 // getResourceSuffix returns the resource suffix for naming MLflow resources.
@@ -132,28 +147,31 @@ func (h *HelmRenderer) mlflowToHelmValues(mlflow *mlflowv1.MLflow, namespace str
 		}
 	}
 
-	// Enable ODH trusted CA bundle if ConfigMap exists in the target namespace
-	// This is mounted alongside any user-provided bundle for maximum compatibility
+	// Platform CA bundle - mounted if the well-known ConfigMap exists
 	values["platformCABundle"] = map[string]interface{}{
 		"enabled":       opts.PlatformTrustedCABundleExists,
 		"configMapName": PlatformTrustedCABundleConfigMapName,
-		"volumeName":    PlatformTrustedCABundleVolumeName,
-		"mountPath":     PlatformTrustedCABundleMountPath,
-		"filePath":      PlatformTrustedCABundleFilePath,
-		"extraFilePath": PlatformTrustedCABundleExtraFilePath,
+		"volumeName":    caPlatformVolume,
+		"mountPath":     caPlatformMount,
+		"filePath":      caPlatformBundle,
+		"extraFilePath": caPlatformExtra,
 	}
 
-	// Determine if we need the CA bundle init container
-	// The init container combines system CAs with any custom/platform CA bundles
-	caBundlesEnabled := mlflow.Spec.CABundleConfigMap != nil || opts.PlatformTrustedCABundleExists
+	// Build space-separated list of CA bundle sources to concatenate
+	caBundleSources := []string{caSystemBundle}
+	if opts.PlatformTrustedCABundleExists {
+		caBundleSources = append(caBundleSources, caPlatformBundle, caPlatformExtra)
+	}
+	if mlflow.Spec.CABundleConfigMap != nil {
+		caBundleSources = append(caBundleSources, caCustomBundle)
+	}
 
-	// CA bundle configuration - the final bundle that combines system + platform + custom CAs
-	// When enabled, an init container creates a single PEM file containing all CA certificates
+	// CA bundle configuration - combines all sources into a single PEM file
 	values["caBundle"] = map[string]interface{}{
-		"enabled":          caBundlesEnabled,
-		"mountPath":        CombinedCABundleMountPath,
-		"filePath":         CombinedCABundleFilePath,
-		"systemBundlePath": SystemCABundlePath,
+		"enabled":   len(caBundleSources) > 1,
+		"mountPath": caCombinedMount,
+		"filePath":  caCombinedBundle,
+		"sources":   strings.Join(caBundleSources, " "),
 	}
 
 	// Use config from environment variables as default, can be overridden by CR spec
