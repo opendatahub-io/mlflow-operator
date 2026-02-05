@@ -32,10 +32,12 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/util/retry"
 	ctrl "sigs.k8s.io/controller-runtime"
+	controllerbuilder "sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 
@@ -60,6 +62,7 @@ type MLflowReconciler struct {
 // +kubebuilder:rbac:groups=mlflow.opendatahub.io,resources=mlflows/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=mlflow.opendatahub.io,resources=mlflows/finalizers,verbs=update
 // +kubebuilder:rbac:groups="",resources=namespaces,verbs=get;list;watch
+// +kubebuilder:rbac:groups="",resources=configmaps,verbs=get;list;watch
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterroles,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterrolebindings,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=console.openshift.io,resources=consolelinks,verbs=get;list;watch;create;update;patch;delete
@@ -94,13 +97,77 @@ func (r *MLflowReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		return ctrl.Result{}, nil
 	}
 
-	// Render Helm chart
+	// Validate user-provided CA bundle ConfigMap if specified
+	if mlflow.Spec.CABundleConfigMap != nil {
+		validCABundle := false
+		customCABundleConfigMap := &corev1.ConfigMap{}
+		err = r.Get(ctx, types.NamespacedName{
+			Name:      mlflow.Spec.CABundleConfigMap.Name,
+			Namespace: targetNamespace,
+		}, customCABundleConfigMap)
+		if err != nil {
+			if errors.IsNotFound(err) {
+				log.Info("Warning: Custom CA bundle ConfigMap not found, MLflow will start without custom certificates",
+					"configmap", mlflow.Spec.CABundleConfigMap.Name,
+					"namespace", targetNamespace)
+			} else {
+				log.Error(err, "Failed to check for custom CA bundle ConfigMap",
+					"configmap", mlflow.Spec.CABundleConfigMap.Name,
+					"namespace", targetNamespace)
+			}
+		} else {
+			// ConfigMap exists, check if the key exists
+			if _, ok := customCABundleConfigMap.Data[mlflow.Spec.CABundleConfigMap.Key]; !ok {
+				// Get available keys for helpful error message
+				availableKeys := make([]string, 0, len(customCABundleConfigMap.Data))
+				for k := range customCABundleConfigMap.Data {
+					availableKeys = append(availableKeys, k)
+				}
+				log.Info("Warning: Custom CA bundle ConfigMap exists but key not found, MLflow will start without custom certificates",
+					"configmap", mlflow.Spec.CABundleConfigMap.Name,
+					"key", mlflow.Spec.CABundleConfigMap.Key,
+					"namespace", targetNamespace,
+					"available-keys", availableKeys)
+			} else {
+				validCABundle = true
+				log.V(1).Info("Found custom CA bundle ConfigMap with valid key",
+					"configmap", mlflow.Spec.CABundleConfigMap.Name,
+					"key", mlflow.Spec.CABundleConfigMap.Key,
+					"namespace", targetNamespace)
+			}
+		}
+		if !validCABundle {
+			// Avoid enabling the mount when it would break pod startup
+			mlflow.Spec.CABundleConfigMap = nil
+		}
+	}
+
+	// Check if platform CA bundle ConfigMap exists in target namespace
+	platformCABundleExists := false
+	platformCABundleConfigMap := &corev1.ConfigMap{}
+	err = r.Get(ctx, types.NamespacedName{
+		Name:      PlatformTrustedCABundleConfigMapName,
+		Namespace: targetNamespace,
+	}, platformCABundleConfigMap)
+	if err == nil {
+		// Platform CA bundle ConfigMap exists
+		platformCABundleExists = true
+		log.V(1).Info("Found platform CA bundle ConfigMap", "name", PlatformTrustedCABundleConfigMapName, "namespace", targetNamespace)
+	} else if !errors.IsNotFound(err) {
+		// Real error (not just ConfigMap NotFound) - log and continue
+		log.Error(err, "Failed to check for platform CA bundle ConfigMap")
+	}
+
+	// Render the Helm chart
 	helmChartPath := r.ChartPath
 	if helmChartPath == "" {
 		helmChartPath = chartPath
 	}
 	renderer := NewHelmRenderer(helmChartPath)
-	objects, err := renderer.RenderChart(mlflow, targetNamespace)
+	renderOpts := RenderOptions{
+		PlatformTrustedCABundleExists: platformCABundleExists,
+	}
+	objects, err := renderer.RenderChart(mlflow, targetNamespace, renderOpts)
 	if err != nil {
 		log.Error(err, "Failed to render Helm chart")
 		meta.SetStatusCondition(&mlflow.Status.Conditions, metav1.Condition{
@@ -309,7 +376,17 @@ func (r *MLflowReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		// 2. Owns() only triggers on controller owner references
 		// This handler enqueues all MLflow instances listed in the owner references
 		Watches(&rbacv1.ClusterRole{}, handler.EnqueueRequestsFromMapFunc(r.clusterRoleToMLflowRequests)).
-		Owns(&rbacv1.ClusterRoleBinding{})
+		Owns(&rbacv1.ClusterRoleBinding{}).
+		// Watch platform CA bundle ConfigMap to trigger reconciliation when it appears/disappears
+		// Note: We don't restart pods on content changes - kubelet automatically updates mounted ConfigMaps
+		// This watch ensures we update the Deployment spec when the ConfigMap existence changes
+		Watches(
+			&corev1.ConfigMap{},
+			handler.EnqueueRequestsFromMapFunc(r.configMapToMLflowRequests),
+			controllerbuilder.WithPredicates(predicate.NewPredicateFuncs(func(obj client.Object) bool {
+				return obj.GetName() == PlatformTrustedCABundleConfigMapName
+			})),
+		)
 
 	// Conditionally watch ConsoleLink if available in the cluster
 	if r.ConsoleLinkAvailable {
@@ -348,6 +425,36 @@ func (r *MLflowReconciler) clusterRoleToMLflowRequests(ctx context.Context, obj 
 				},
 			})
 		}
+	}
+	return requests
+}
+
+// configMapToMLflowRequests maps ConfigMap events to MLflow reconcile requests.
+// When the platform CA bundle ConfigMap is created/updated/deleted, we need to reconcile
+// all MLflow instances in that namespace to update their Deployment spec.
+// Note: Content changes don't require pod restarts - kubelet auto-updates mounted ConfigMaps.
+func (r *MLflowReconciler) configMapToMLflowRequests(ctx context.Context, obj client.Object) []reconcile.Request {
+	log := logf.FromContext(ctx)
+
+	// List all MLflow instances in the same namespace as the ConfigMap
+	mlflowList := &mlflowv1.MLflowList{}
+	if err := r.List(ctx, mlflowList); err != nil {
+		log.Error(err, "Failed to list MLflow instances for ConfigMap watch")
+		return nil
+	}
+
+	requests := make([]reconcile.Request, 0, len(mlflowList.Items))
+	for _, mlflow := range mlflowList.Items {
+		log.V(1).Info("Enqueueing MLflow reconciliation due to platform CA bundle change",
+			"mlflow", mlflow.Name,
+			"configmap", obj.GetName(),
+			"configmap-namespace", obj.GetNamespace())
+		requests = append(requests, reconcile.Request{
+			NamespacedName: types.NamespacedName{
+				Name:      mlflow.Name,
+				Namespace: mlflow.Namespace,
+			},
+		})
 	}
 	return requests
 }

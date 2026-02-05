@@ -64,6 +64,74 @@ spec:
           secret:
             secretName: {{ .Values.tls.secretName }}
             defaultMode: 420
+        {{- if .Values.caBundleConfigMap.enabled }}
+        - name: ca-bundle
+          configMap:
+            name: {{ .Values.caBundleConfigMap.name }}
+            optional: true
+            items:
+              - key: {{ .Values.caBundleConfigMap.key }}
+                path: custom-ca-bundle.crt
+        {{- end }}
+        {{- if .Values.platformCABundle.enabled }}
+        - name: {{ .Values.platformCABundle.volumeName }}
+          configMap:
+            name: {{ .Values.platformCABundle.configMapName }}
+            optional: true
+        {{- end }}
+        {{- if .Values.caBundle.enabled }}
+        # emptyDir volume for the combined CA bundle created by the init container
+        - name: combined-ca-bundle
+          emptyDir: {}
+        {{- end }}
+
+      {{- if .Values.caBundle.enabled }}
+      # Init container that creates initial combined CA bundle
+      # The sidecar container will update it when ConfigMaps change
+      initContainers:
+        - name: combine-ca-bundles
+          image: {{ .Values.image.name }}
+          {{- if .Values.image.imagePullPolicy }}
+          imagePullPolicy: {{ .Values.image.imagePullPolicy }}
+          {{- end }}
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -e
+{{ include "mlflow.caBundleFunctions" . | indent 14 }}
+              combine_ca_bundles
+          env:
+            - name: CA_BUNDLE_SOURCES
+              value: {{ .Values.caBundle.sources | quote }}
+            - name: CA_BUNDLE_OUTPUT
+              value: {{ .Values.caBundle.filePath | quote }}
+          volumeMounts:
+            - name: combined-ca-bundle
+              mountPath: {{ .Values.caBundle.mountPath }}
+            {{- if .Values.platformCABundle.enabled }}
+            - name: {{ .Values.platformCABundle.volumeName }}
+              mountPath: {{ .Values.platformCABundle.mountPath }}
+              readOnly: true
+            {{- end }}
+            {{- if .Values.caBundleConfigMap.enabled }}
+            - name: ca-bundle
+              mountPath: /custom-certs
+              readOnly: true
+            {{- end }}
+          {{- with .Values.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              cpu: 100m
+              memory: 64Mi
+      {{- end }}
+
       containers:
         - name: mlflow
           image: {{ .Values.image.name }}
@@ -129,6 +197,34 @@ spec:
               value: {{ .value | quote }}
               {{- end }}
             {{- end }}
+            {{- if .Values.caBundle.enabled }}
+            # CA bundle - a single PEM file containing all trusted certificates:
+            # - System CA certificates (from base image)
+            # - Platform CA bundle (if present)
+            # - User-provided custom CA bundle (if configured)
+            #
+            # SSL_CERT_FILE: Python ssl module, OpenSSL, httpx
+            - name: SSL_CERT_FILE
+              value: {{ .Values.caBundle.filePath | quote }}
+            # REQUESTS_CA_BUNDLE: requests library used by MLflow
+            - name: REQUESTS_CA_BUNDLE
+              value: {{ .Values.caBundle.filePath | quote }}
+            # CURL_CA_BUNDLE: fallback for requests/pycurl
+            - name: CURL_CA_BUNDLE
+              value: {{ .Values.caBundle.filePath | quote }}
+            # AWS_CA_BUNDLE: boto3/botocore for S3 storage
+            - name: AWS_CA_BUNDLE
+              value: {{ .Values.caBundle.filePath | quote }}
+            # PGSSLROOTCERT: psycopg2 for PostgreSQL backend
+            - name: PGSSLROOTCERT
+              value: {{ .Values.caBundle.filePath | quote }}
+            # MLFLOW_MYSQL_CA: MySQL CA bundle for MySQL backend
+            - name: MLFLOW_MYSQL_CA
+              value: {{ .Values.caBundle.filePath | quote }}
+            # MLFLOW_S3_IGNORE_TLS: Explicitly require TLS verification for S3 storage
+            - name: MLFLOW_S3_IGNORE_TLS
+              value: "false"
+            {{- end }}
           {{- if .Values.envFrom }}
           envFrom:
             {{- toYaml .Values.envFrom | nindent 12 }}
@@ -144,6 +240,20 @@ spec:
             - name: mlflow-tls
               mountPath: /etc/tls/private
               readOnly: true
+            {{- if .Values.caBundle.enabled }}
+            # Combined CA bundle - includes system CAs + platform CAs + custom CAs
+            # Created by the init container, used by all Python libraries
+            - name: combined-ca-bundle
+              mountPath: {{ .Values.caBundle.mountPath }}
+              readOnly: true
+            {{- end }}
+            {{- if .Values.caBundleConfigMap.enabled }}
+            # Custom CA bundle - also mounted separately for direct access if needed
+            - name: ca-bundle
+              mountPath: /etc/pki/tls/certs/custom-ca-bundle.crt
+              subPath: custom-ca-bundle.crt
+              readOnly: true
+            {{- end }}
           livenessProbe:
             httpGet:
               path: {{ printf "%s/health" $healthPrefix }}
@@ -172,3 +282,72 @@ spec:
           resources:
             {{- toYaml . | nindent 12 }}
           {{- end }}
+
+        {{- if .Values.caBundle.enabled }}
+        # Sidecar that watches for CA bundle ConfigMap changes and regenerates the combined bundle
+        # Kubernetes automatically updates mounted ConfigMaps (~1 minute delay)
+        # This sidecar detects those changes and regenerates the combined bundle in-place
+        - name: ca-bundle-watcher
+          image: {{ .Values.image.name }}
+          {{- if .Values.image.imagePullPolicy }}
+          imagePullPolicy: {{ .Values.image.imagePullPolicy }}
+          {{- end }}
+          command:
+            - /bin/sh
+            - -c
+            - |
+{{ include "mlflow.caBundleFunctions" . | indent 14 }}
+
+              # Watch loop
+              LAST_CHECKSUM=$(compute_checksum)
+              echo "CA bundle watcher started"
+              echo "  Sources: $CA_BUNDLE_SOURCES"
+              echo "  Output: $CA_BUNDLE_OUTPUT"
+              echo "  Watch interval: ${CA_BUNDLE_WATCH_INTERVAL}s"
+              echo "  Initial checksum: $LAST_CHECKSUM"
+
+              while true; do
+                sleep "$CA_BUNDLE_WATCH_INTERVAL"
+                CURRENT_CHECKSUM=$(compute_checksum)
+                if [ "$CURRENT_CHECKSUM" != "$LAST_CHECKSUM" ]; then
+                  echo "CA bundle change detected (checksum: $LAST_CHECKSUM -> $CURRENT_CHECKSUM)"
+                  if combine_ca_bundles; then
+                    LAST_CHECKSUM="$CURRENT_CHECKSUM"
+                    echo "Combined CA bundle updated successfully"
+                  else
+                    echo "ERROR: Failed to regenerate combined CA bundle"
+                  fi
+                fi
+              done
+          env:
+            - name: CA_BUNDLE_WATCH_INTERVAL
+              value: "{{ .Values.caBundle.watchInterval | default 30 }}"
+            - name: CA_BUNDLE_SOURCES
+              value: {{ .Values.caBundle.sources | quote }}
+            - name: CA_BUNDLE_OUTPUT
+              value: {{ .Values.caBundle.filePath | quote }}
+          volumeMounts:
+            - name: combined-ca-bundle
+              mountPath: {{ .Values.caBundle.mountPath }}
+            {{- if .Values.platformCABundle.enabled }}
+            - name: {{ .Values.platformCABundle.volumeName }}
+              mountPath: {{ .Values.platformCABundle.mountPath }}
+              readOnly: true
+            {{- end }}
+            {{- if .Values.caBundleConfigMap.enabled }}
+            - name: ca-bundle
+              mountPath: /custom-certs
+              readOnly: true
+            {{- end }}
+          {{- with .Values.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          resources:
+            requests:
+              cpu: 5m
+              memory: 8Mi
+            limits:
+              cpu: 50m
+              memory: 32Mi
+        {{- end }}

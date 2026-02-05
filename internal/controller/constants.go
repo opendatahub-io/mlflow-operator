@@ -27,4 +27,7 @@ const (
 	TLSSecretName = "mlflow-tls"
 	// StaticPrefix is the URL prefix for MLflow when deployed via the operator
 	StaticPrefix = "/mlflow"
+
+	// PlatformTrustedCABundleConfigMapName is the well-known ConfigMap name for platform CA bundle
+	PlatformTrustedCABundleConfigMapName = "odh-trusted-ca-bundle"
 )

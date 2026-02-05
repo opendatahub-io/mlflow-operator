@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"io"
 	"path/filepath"
+	"strings"
 
 	"helm.sh/helm/v3/pkg/chart"
 	"helm.sh/helm/v3/pkg/chart/loader"
@@ -42,6 +43,20 @@ const (
 	defaultArtifactsDest   = "file:///mlflow/artifacts"
 )
 
+// CA bundle paths and volume names - used for combining system, platform, and custom CA bundles
+const (
+	caSystemBundle   = "/etc/pki/tls/certs/ca-bundle.crt"
+	caPlatformVolume = "platform-ca-bundle"
+	caPlatformMount  = "/etc/pki/tls/certs/platform"
+	caPlatformBundle = caPlatformMount + "/ca-bundle.crt"
+	caPlatformExtra  = caPlatformMount + "/odh-ca-bundle.crt"
+	caCustomVolume   = "ca-bundle"
+	caCustomBundle   = "/custom-certs/custom-ca-bundle.crt"
+	caCombinedVolume = "combined-ca-bundle"
+	caCombinedMount  = "/etc/pki/tls/certs/combined"
+	caCombinedBundle = caCombinedMount + "/ca-bundle.crt"
+)
+
 // getResourceSuffix returns the resource suffix for naming MLflow resources.
 // Returns empty string for CR named "mlflow", otherwise returns "-{crname}".
 // All resources are named as "mlflow{{ suffix }}".
@@ -57,6 +72,12 @@ type HelmRenderer struct {
 	chartPath string
 }
 
+// RenderOptions contains additional context needed for rendering
+type RenderOptions struct {
+	// PlatformTrustedCABundleExists indicates if the platform CA bundle ConfigMap exists in the target namespace
+	PlatformTrustedCABundleExists bool
+}
+
 // NewHelmRenderer creates a new HelmRenderer
 func NewHelmRenderer(chartPath string) *HelmRenderer {
 	return &HelmRenderer{
@@ -65,14 +86,14 @@ func NewHelmRenderer(chartPath string) *HelmRenderer {
 }
 
 // RenderChart renders the Helm chart with the given values
-func (h *HelmRenderer) RenderChart(mlflow *mlflowv1.MLflow, namespace string) ([]*unstructured.Unstructured, error) {
+func (h *HelmRenderer) RenderChart(mlflow *mlflowv1.MLflow, namespace string, opts RenderOptions) ([]*unstructured.Unstructured, error) {
 	// Load the Helm chart
 	loadedChart, err := loader.Load(h.chartPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load chart: %w", err)
 	}
 
-	values, err := h.mlflowToHelmValues(mlflow, namespace)
+	values, err := h.mlflowToHelmValues(mlflow, namespace, opts)
 	if err != nil {
 		return nil, fmt.Errorf("failed to convert MLflow spec to Helm values: %w", err)
 	}
@@ -87,7 +108,7 @@ func (h *HelmRenderer) RenderChart(mlflow *mlflowv1.MLflow, namespace string) ([
 }
 
 // mlflowToHelmValues converts MLflow CR spec to Helm values
-func (h *HelmRenderer) mlflowToHelmValues(mlflow *mlflowv1.MLflow, namespace string) (map[string]interface{}, error) {
+func (h *HelmRenderer) mlflowToHelmValues(mlflow *mlflowv1.MLflow, namespace string, opts RenderOptions) (map[string]interface{}, error) {
 	values := make(map[string]interface{})
 
 	values["namespace"] = namespace
@@ -116,6 +137,42 @@ func (h *HelmRenderer) mlflowToHelmValues(mlflow *mlflowv1.MLflow, namespace str
 	}
 
 	values["tls"] = tlsValues
+
+	// User-provided CA bundle configuration
+	if mlflow.Spec.CABundleConfigMap != nil {
+		values["caBundleConfigMap"] = map[string]interface{}{
+			"enabled": true,
+			"name":    mlflow.Spec.CABundleConfigMap.Name,
+			"key":     mlflow.Spec.CABundleConfigMap.Key,
+		}
+	}
+
+	// Platform CA bundle - mounted if the well-known ConfigMap exists
+	values["platformCABundle"] = map[string]interface{}{
+		"enabled":       opts.PlatformTrustedCABundleExists,
+		"configMapName": PlatformTrustedCABundleConfigMapName,
+		"volumeName":    caPlatformVolume,
+		"mountPath":     caPlatformMount,
+		"filePath":      caPlatformBundle,
+		"extraFilePath": caPlatformExtra,
+	}
+
+	// Build space-separated list of CA bundle sources to concatenate
+	caBundleSources := []string{caSystemBundle}
+	if opts.PlatformTrustedCABundleExists {
+		caBundleSources = append(caBundleSources, caPlatformBundle, caPlatformExtra)
+	}
+	if mlflow.Spec.CABundleConfigMap != nil {
+		caBundleSources = append(caBundleSources, caCustomBundle)
+	}
+
+	// CA bundle configuration - combines all sources into a single PEM file
+	values["caBundle"] = map[string]interface{}{
+		"enabled":   len(caBundleSources) > 1,
+		"mountPath": caCombinedMount,
+		"filePath":  caCombinedBundle,
+		"sources":   strings.Join(caBundleSources, " "),
+	}
 
 	// Use config from environment variables as default, can be overridden by CR spec
 	mlflowImage := cfg.MLflowImage

@@ -37,6 +37,13 @@ spec:
   registryStoreUri: "sqlite:////mlflow/mlflow.db"
   artifactsDestination: "file:///mlflow/artifacts"
 
+  # Custom CA Bundle (Optional)
+  # For connecting to services with self-signed certificates or private CAs
+  # caBundleConfigMap:
+  #   name: my-ca-bundle
+  #   key: ca-bundle.crt
+
+
   # IMPORTANT: serveArtifacts MUST be enabled when using file-based artifact storage
   serveArtifacts: true
 

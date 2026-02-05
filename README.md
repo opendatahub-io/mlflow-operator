@@ -215,6 +215,31 @@ The operator automatically creates a NetworkPolicy that:
 
 The NetworkPolicy can be customized by modifying the Helm chart values or by creating your own NetworkPolicy.
 
+### Custom CA Bundles
+
+When connecting to external services that use self-signed certificates or private CAs (such as private S3 endpoints, PostgreSQL databases, or artifact stores), you can configure custom CA bundles.
+
+The operator combines CA certificates from multiple sources into a single bundle:
+1. **System CA bundle** - Base system certificates from the container image
+2. **Platform CA bundle** - Automatically detected from `odh-trusted-ca-bundle` ConfigMap (injected by ODH/RHOAI)
+3. **User-provided CA bundle** - Custom certificates you specify via `caBundleConfigMap`
+
+#### Using a Custom CA Bundle
+
+Create a ConfigMap containing your CA certificates:
+```bash
+kubectl create configmap my-ca-bundle \
+  --from-file=ca-bundle.crt=/path/to/your/ca-certificates.pem \
+  -n <namespace>
+```
+
+Reference it in your MLflow CR:
+```yaml
+spec:
+  caBundleConfigMap:
+    name: my-ca-bundle
+    key: ca-bundle.crt
+```
 ### Example Configurations
 
 See the [config/samples](./config/samples/) directory for complete examples:
