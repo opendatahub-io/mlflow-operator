@@ -47,6 +47,9 @@ const (
 	systemCAPath    = "/etc/pki/tls/certs/ca-bundle.crt"
 	caPlatformMount = "/etc/pki/tls/certs/platform"
 	caCustomMount   = "/etc/pki/tls/certs/custom"
+
+	serviceCABundleConfigMapName = "openshift-service-ca.crt"
+	serviceCABundleConfigMapKey  = "service-ca.crt"
 )
 
 // getResourceSuffix returns the resource suffix for naming MLflow resources.
@@ -371,6 +374,25 @@ func (h *HelmRenderer) mlflowToHelmValues(mlflow *mlflowv1.MLflow, namespace str
 		"type":        "ClusterIP",
 		"port":        8443,
 		"annotations": serviceAnnotations,
+	}
+
+	// Metrics configuration - always enabled with service-ca TLS verification.
+	// The operator always sets the service-ca annotation for TLS cert provisioning,
+	// so we can always reference the service-ca CA bundle ConfigMap for verification.
+	serviceName := "mlflow" + getResourceSuffix(mlflow.Name)
+	serverName := fmt.Sprintf("%s.%s.svc", serviceName, namespace)
+
+	values["metrics"] = map[string]interface{}{
+		"enabled": true,
+		"tlsConfig": map[string]interface{}{
+			"ca": map[string]interface{}{
+				"configMap": map[string]interface{}{
+					"name": serviceCABundleConfigMapName,
+					"key":  serviceCABundleConfigMapKey,
+				},
+			},
+			"serverName": serverName,
+		},
 	}
 
 	if mlflow.Spec.PodSecurityContext != nil {

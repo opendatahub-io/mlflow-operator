@@ -1,0 +1,29 @@
+{{- if .Values.metrics.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  labels:
+    app: mlflow
+    app.kubernetes.io/name: mlflow{{ .Values.resourceSuffix }}
+    {{- with .Values.commonLabels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  name: mlflow-metrics-monitor{{ .Values.resourceSuffix }}
+  namespace: {{ .Values.namespace }}
+spec:
+  endpoints:
+    - path: /metrics
+      port: https
+      scheme: https
+      tlsConfig:
+        # For proper TLS verification, configure metrics.tlsConfig in values
+        {{- if .Values.metrics.tlsConfig }}
+        {{- toYaml .Values.metrics.tlsConfig | nindent 8 }}
+        {{- else }}
+        insecureSkipVerify: true
+        {{- end }}
+  selector:
+    matchLabels:
+      app: mlflow
+      app.kubernetes.io/name: mlflow{{ .Values.resourceSuffix }}
+{{- end }}
