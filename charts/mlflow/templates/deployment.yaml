@@ -6,6 +6,7 @@ metadata:
   namespace: {{ .Values.namespace }}
   labels:
     app: mlflow
+    app.kubernetes.io/name: mlflow{{ .Values.resourceSuffix }}
     {{- with .Values.commonLabels }}
     {{- toYaml . | nindent 4 }}
     {{- end }}
@@ -76,7 +77,11 @@ spec:
         - name: combined-ca-bundle
           emptyDir: {}
         {{- end }}
-
+        {{- if .Values.metrics.enabled }}
+        - name: metrics
+          emptyDir:
+            sizeLimit: 100Mi
+        {{- end }}
       {{- if .Values.caBundle.configMaps }}
       # Init container that creates initial combined CA bundle
       initContainers:
@@ -152,6 +157,9 @@ spec:
             {{- end }}
             {{- if .Values.mlflow.staticPrefix }}
             - --static-prefix={{ .Values.mlflow.staticPrefix }}
+            {{- end }}
+            {{- if .Values.metrics.enabled }}
+            - --expose-prometheus=/prometheus
             {{- end }}
           env:
             - name: MLFLOW_DISABLE_TELEMETRY
@@ -231,6 +239,10 @@ spec:
             - name: combined-ca-bundle
               mountPath: {{ dir .Values.caBundle.outputPath }}
               readOnly: true
+            {{- end }}
+            {{- if .Values.metrics.enabled }}
+            - name: metrics
+              mountPath: /prometheus
             {{- end }}
           livenessProbe:
             httpGet:
