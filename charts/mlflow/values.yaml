@@ -160,6 +160,23 @@ service:
   # Annotations to add to the service
   annotations: {}
 
+# Metrics and Prometheus configuration
+# When enabled, the --expose-prometheus flag is passed to MLflow and a ServiceMonitor is created.
+# Metrics are served on the main HTTPS port at /metrics endpoint.
+metrics:
+  enabled: true  # Enable Prometheus metrics and ServiceMonitor
+  # TLS configuration for Prometheus scraping
+  # Used to configure how Prometheus verifies the MLflow server's TLS certificate.
+  # If not specified, defaults to insecureSkipVerify: true
+  # Example for proper CA verification:
+  #   tlsConfig:
+  #     ca:
+  #       configMap:
+  #         name: my-ca-bundle
+  #         key: ca.crt
+  #     serverName: mlflow.namespace.svc
+  tlsConfig: {}
+
 # Node selector, tolerations, and affinity
 nodeSelector: {}
 tolerations: []
