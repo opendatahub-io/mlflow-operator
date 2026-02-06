@@ -6,4 +6,6 @@ This chart deploys MLflow with Kubernetes authentication enabled. TLS is termina
 - MLflow listens on port 8443 with TLS.
 - Health probes and traffic use HTTPS end-to-end.
 
+Set `mlflow.backendStoreUri` (or `mlflow.backendStoreUriFrom`) explicitly; it is required and should not rely on implicit defaults.
+
 See `values.yaml` for the full list of configurable settings.

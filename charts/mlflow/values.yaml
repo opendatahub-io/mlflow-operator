@@ -21,6 +21,10 @@ commonLabels:
 # For labels that should be on all resources, use commonLabels
 podLabels: {}
 
+# Pod-specific annotations applied only to the MLflow pod
+# Use this for pod-specific metadata like Prometheus scraping, sidecars, etc.
+podAnnotations: {}
+
 # TLS configuration for the MLflow server (handled directly by uvicorn)
 tls:
   # Secret containing TLS certificate and key (tls.crt, tls.key)
@@ -58,10 +62,13 @@ storage:
 # MLflow server configuration
 mlflow:
   # Backend store URI (where MLflow stores experiment and run metadata)
-  # Default uses SQLite which requires storage.enabled: true
-  # For production, use remote DB: postgresql://user:pass@host:5432/mlflow
-  # Note: For URIs containing credentials, use backendStoreUriFrom instead
-  backendStoreUri: "sqlite:////mlflow/mlflow.db"
+  # Set this explicitly or use backendStoreUriFrom instead.
+  # Example (requires storage.enabled: true): sqlite:////mlflow/mlflow.db
+  # Note: The /mlflow path is where the PVC is mounted in the container.
+  # For production, use a remote DB: postgresql://db-host:5432/mlflow
+  # Important: For URIs containing credentials, use backendStoreUriFrom to
+  # supply the URI via a Kubernetes Secret instead of writing credentials inline.
+  backendStoreUri: ""
 
   # Backend store URI from secret (preferred for URIs with credentials)
   # Takes precedence over backendStoreUri if both are set
@@ -119,7 +126,9 @@ mlflow:
   workers: 1
   # Port for MLflow server
   port: 8443
-  # Allowed hosts (will be generated based on routes/services)
+  # Allowed hosts for the MLflow server
+  # Set this to the hostnames clients will use to access MLflow.
+  # An empty list means no host validation is performed.
   allowedHosts: []
   # Static URL prefix for MLflow (e.g., "/mlflow" for proxied deployments)
   # This also gets set as the --root-path for uvicorn in the deployment template.

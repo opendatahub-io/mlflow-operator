@@ -17,6 +17,7 @@ limitations under the License.
 package controller
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/onsi/gomega"   // nolint:staticcheck // Named import for gomega.NewWithT; dual import for readability
@@ -29,8 +30,19 @@ import (
 	mlflowv1 "github.com/opendatahub-io/mlflow-operator/api/v1"
 )
 
+// contains checks if the comma-separated hosts string contains an exact match for the target host.
+func contains(hosts, target string) bool {
+	for host := range strings.SplitSeq(hosts, ",") {
+		if strings.TrimSpace(host) == target {
+			return true
+		}
+	}
+	return false
+}
+
 const (
-	deploymentKind = "Deployment"
+	deploymentKind      = "Deployment"
+	testBackendStoreURI = "sqlite:////mlflow/mlflow.db"
 )
 
 func TestMlflowToHelmValues_Storage(t *testing.T) {
@@ -48,7 +60,9 @@ func TestMlflowToHelmValues_Storage(t *testing.T) {
 			name: "storage not configured - should be disabled",
 			mlflow: &mlflowv1.MLflow{
 				ObjectMeta: metav1.ObjectMeta{Name: "test"},
-				Spec:       mlflowv1.MLflowSpec{},
+				Spec: mlflowv1.MLflowSpec{
+					BackendStoreURI: ptr(testBackendStoreURI),
+				},
 			},
 			wantEnabled:    false,
 			wantSize:       defaultStorageSize,
@@ -60,7 +74,8 @@ func TestMlflowToHelmValues_Storage(t *testing.T) {
 			mlflow: &mlflowv1.MLflow{
 				ObjectMeta: metav1.ObjectMeta{Name: "test"},
 				Spec: mlflowv1.MLflowSpec{
-					Storage: &corev1.PersistentVolumeClaimSpec{},
+					BackendStoreURI: ptr(testBackendStoreURI),
+					Storage:         &corev1.PersistentVolumeClaimSpec{},
 				},
 			},
 			wantEnabled:    true,
@@ -73,6 +88,7 @@ func TestMlflowToHelmValues_Storage(t *testing.T) {
 			mlflow: &mlflowv1.MLflow{
 				ObjectMeta: metav1.ObjectMeta{Name: "test"},
 				Spec: mlflowv1.MLflowSpec{
+					BackendStoreURI: ptr(testBackendStoreURI),
 					Storage: &corev1.PersistentVolumeClaimSpec{
 						AccessModes:      []corev1.PersistentVolumeAccessMode{corev1.ReadWriteMany},
 						StorageClassName: ptr("fast-ssd"),
@@ -135,7 +151,9 @@ func TestMlflowToHelmValues_Image(t *testing.T) {
 			name: "image not configured - should use config defaults",
 			mlflow: &mlflowv1.MLflow{
 				ObjectMeta: metav1.ObjectMeta{Name: "test"},
-				Spec:       mlflowv1.MLflowSpec{},
+				Spec: mlflowv1.MLflowSpec{
+					BackendStoreURI: ptr(testBackendStoreURI),
+				},
 			},
 			// pullPolicy should not be set when not explicitly provided
 			wantPullPolicy: "",
@@ -203,13 +221,15 @@ func TestMlflowToHelmValues_MLflowConfig(t *testing.T) {
 		wantRegistrySecretRef    bool
 	}{
 		{
-			name: "mlflow config not set - should use defaults",
+			name: "mlflow config with explicit backend store",
 			mlflow: &mlflowv1.MLflow{
 				ObjectMeta: metav1.ObjectMeta{Name: "test"},
-				Spec:       mlflowv1.MLflowSpec{},
+				Spec: mlflowv1.MLflowSpec{
+					BackendStoreURI: ptr(testBackendStoreURI),
+				},
 			},
-			wantBackendStoreURI:      defaultBackendStoreURI,
-			wantRegistryStoreURI:     defaultBackendStoreURI, // Registry defaults to backend
+			wantBackendStoreURI:      testBackendStoreURI,
+			wantRegistryStoreURI:     testBackendStoreURI, // Registry defaults to backend
 			wantArtifactsDestination: defaultArtifactsDest,
 			wantDefaultArtifactRoot:  "", // Empty - let MLflow use its intelligent defaults
 			wantServeArtifacts:       false,
@@ -260,12 +280,13 @@ func TestMlflowToHelmValues_MLflowConfig(t *testing.T) {
 			mlflow: &mlflowv1.MLflow{
 				ObjectMeta: metav1.ObjectMeta{Name: "test"},
 				Spec: mlflowv1.MLflowSpec{
-					ServeArtifacts: ptr(false),
-					Workers:        ptr(int32(4)),
+					BackendStoreURI: ptr(testBackendStoreURI),
+					ServeArtifacts:  ptr(false),
+					Workers:         ptr(int32(4)),
 				},
 			},
-			wantBackendStoreURI:      defaultBackendStoreURI,
-			wantRegistryStoreURI:     defaultBackendStoreURI, // Registry defaults to backend
+			wantBackendStoreURI:      testBackendStoreURI,
+			wantRegistryStoreURI:     testBackendStoreURI, // Registry defaults to backend
 			wantArtifactsDestination: defaultArtifactsDest,
 			wantDefaultArtifactRoot:  "", // Empty - let MLflow use its intelligent defaults
 			wantServeArtifacts:       false,
@@ -288,8 +309,8 @@ func TestMlflowToHelmValues_MLflowConfig(t *testing.T) {
 					},
 				},
 			},
-			wantBackendStoreURI:      defaultBackendStoreURI, // Falls back to default when using secret ref
-			wantRegistryStoreURI:     defaultBackendStoreURI, // Registry defaults to backend
+			wantBackendStoreURI:      "",
+			wantRegistryStoreURI:     "",
 			wantArtifactsDestination: defaultArtifactsDest,
 			wantDefaultArtifactRoot:  "", // Empty - let MLflow use its intelligent defaults
 			wantServeArtifacts:       false,
@@ -309,8 +330,8 @@ func TestMlflowToHelmValues_MLflowConfig(t *testing.T) {
 					},
 				},
 			},
-			wantBackendStoreURI:      defaultBackendStoreURI, // Direct value ignored when secret ref present
-			wantRegistryStoreURI:     defaultBackendStoreURI, // Registry defaults to backend
+			wantBackendStoreURI:      "",
+			wantRegistryStoreURI:     "",
 			wantArtifactsDestination: defaultArtifactsDest,
 			wantDefaultArtifactRoot:  "", // Empty - let MLflow use its intelligent defaults
 			wantServeArtifacts:       false,
@@ -323,12 +344,13 @@ func TestMlflowToHelmValues_MLflowConfig(t *testing.T) {
 			mlflow: &mlflowv1.MLflow{
 				ObjectMeta: metav1.ObjectMeta{Name: "test"},
 				Spec: mlflowv1.MLflowSpec{
+					BackendStoreURI:      ptr(testBackendStoreURI),
 					ArtifactsDestination: ptr("s3://bucket/artifacts"),
 					DefaultArtifactRoot:  ptr("s3://bucket/custom-root"),
 				},
 			},
-			wantBackendStoreURI:      defaultBackendStoreURI,
-			wantRegistryStoreURI:     defaultBackendStoreURI, // Registry defaults to backend
+			wantBackendStoreURI:      testBackendStoreURI,
+			wantRegistryStoreURI:     testBackendStoreURI, // Registry defaults to backend
 			wantArtifactsDestination: "s3://bucket/artifacts",
 			wantDefaultArtifactRoot:  "s3://bucket/custom-root", // Custom value overrides default
 			wantServeArtifacts:       false,                     // Default is now false
@@ -411,7 +433,9 @@ func TestMlflowToHelmValues_StaticPrefix(t *testing.T) {
 
 	mlflow := &mlflowv1.MLflow{
 		ObjectMeta: metav1.ObjectMeta{Name: "test"},
-		Spec:       mlflowv1.MLflowSpec{},
+		Spec: mlflowv1.MLflowSpec{
+			BackendStoreURI: ptr(testBackendStoreURI),
+		},
 	}
 
 	values, err := renderer.mlflowToHelmValues(mlflow, "test-namespace")
@@ -451,7 +475,9 @@ func TestMlflowToHelmValues_Env(t *testing.T) {
 			name: "no custom env vars",
 			mlflow: &mlflowv1.MLflow{
 				ObjectMeta: metav1.ObjectMeta{Name: "test"},
-				Spec:       mlflowv1.MLflowSpec{},
+				Spec: mlflowv1.MLflowSpec{
+					BackendStoreURI: ptr(testBackendStoreURI),
+				},
 			},
 			wantMinEnvs: 0, // No env vars when none are specified
 		},
@@ -460,6 +486,7 @@ func TestMlflowToHelmValues_Env(t *testing.T) {
 			mlflow: &mlflowv1.MLflow{
 				ObjectMeta: metav1.ObjectMeta{Name: "test"},
 				Spec: mlflowv1.MLflowSpec{
+					BackendStoreURI: ptr(testBackendStoreURI),
 					Env: []corev1.EnvVar{
 						{Name: "CUSTOM_VAR", Value: "custom-value"},
 						{Name: "AWS_REGION", Value: "us-east-1"},
@@ -475,6 +502,7 @@ func TestMlflowToHelmValues_Env(t *testing.T) {
 			mlflow: &mlflowv1.MLflow{
 				ObjectMeta: metav1.ObjectMeta{Name: "test"},
 				Spec: mlflowv1.MLflowSpec{
+					BackendStoreURI: ptr(testBackendStoreURI),
 					Env: []corev1.EnvVar{
 						{
 							Name: "DB_PASSWORD",
@@ -543,7 +571,9 @@ func TestMlflowToHelmValues_EnvFrom(t *testing.T) {
 			name: "no envFrom",
 			mlflow: &mlflowv1.MLflow{
 				ObjectMeta: metav1.ObjectMeta{Name: "test"},
-				Spec:       mlflowv1.MLflowSpec{},
+				Spec: mlflowv1.MLflowSpec{
+					BackendStoreURI: ptr(testBackendStoreURI),
+				},
 			},
 			wantEnvFromCount: 0,
 		},
@@ -552,6 +582,7 @@ func TestMlflowToHelmValues_EnvFrom(t *testing.T) {
 			mlflow: &mlflowv1.MLflow{
 				ObjectMeta: metav1.ObjectMeta{Name: "test"},
 				Spec: mlflowv1.MLflowSpec{
+					BackendStoreURI: ptr(testBackendStoreURI),
 					EnvFrom: []corev1.EnvFromSource{
 						{
 							SecretRef: &corev1.SecretEnvSource{
@@ -616,7 +647,9 @@ func TestMlflowToHelmValues_Resources(t *testing.T) {
 			name: "resources not configured - should not set in values (helm chart defaults apply)",
 			mlflow: &mlflowv1.MLflow{
 				ObjectMeta: metav1.ObjectMeta{Name: "test"},
-				Spec:       mlflowv1.MLflowSpec{},
+				Spec: mlflowv1.MLflowSpec{
+					BackendStoreURI: ptr(testBackendStoreURI),
+				},
 			},
 			wantResourcesSet: false,
 		},
@@ -625,6 +658,7 @@ func TestMlflowToHelmValues_Resources(t *testing.T) {
 			mlflow: &mlflowv1.MLflow{
 				ObjectMeta: metav1.ObjectMeta{Name: "test"},
 				Spec: mlflowv1.MLflowSpec{
+					BackendStoreURI: ptr(testBackendStoreURI),
 					Resources: &corev1.ResourceRequirements{
 						Requests: corev1.ResourceList{
 							corev1.ResourceCPU:    resource.MustParse("500m"),
@@ -695,7 +729,9 @@ func TestMlflowToHelmValues_Replicas(t *testing.T) {
 			name: "replicas not configured - should default to 1",
 			mlflow: &mlflowv1.MLflow{
 				ObjectMeta: metav1.ObjectMeta{Name: "test"},
-				Spec:       mlflowv1.MLflowSpec{},
+				Spec: mlflowv1.MLflowSpec{
+					BackendStoreURI: ptr(testBackendStoreURI),
+				},
 			},
 			wantReplicas: 1,
 		},
@@ -704,7 +740,8 @@ func TestMlflowToHelmValues_Replicas(t *testing.T) {
 			mlflow: &mlflowv1.MLflow{
 				ObjectMeta: metav1.ObjectMeta{Name: "test"},
 				Spec: mlflowv1.MLflowSpec{
-					Replicas: ptr(int32(3)),
+					BackendStoreURI: ptr(testBackendStoreURI),
+					Replicas:        ptr(int32(3)),
 				},
 			},
 			wantReplicas: 3,
@@ -731,7 +768,9 @@ func TestMlflowToHelmValues_Namespace(t *testing.T) {
 
 	mlflow := &mlflowv1.MLflow{
 		ObjectMeta: metav1.ObjectMeta{Name: "test"},
-		Spec:       mlflowv1.MLflowSpec{},
+		Spec: mlflowv1.MLflowSpec{
+			BackendStoreURI: ptr(testBackendStoreURI),
+		},
 	}
 
 	testNamespace := "custom-namespace"
@@ -773,7 +812,9 @@ func TestMlflowToHelmValues_ResourceSuffix(t *testing.T) {
 			g := gomega.NewWithT(t)
 			mlflow := &mlflowv1.MLflow{
 				ObjectMeta: metav1.ObjectMeta{Name: tt.crName},
-				Spec:       mlflowv1.MLflowSpec{},
+				Spec: mlflowv1.MLflowSpec{
+					BackendStoreURI: ptr(testBackendStoreURI),
+				},
 			}
 
 			values, err := renderer.mlflowToHelmValues(mlflow, "test-namespace")
@@ -793,6 +834,7 @@ func TestRenderChart_EnvVars(t *testing.T) {
 	mlflow := &mlflowv1.MLflow{
 		ObjectMeta: metav1.ObjectMeta{Name: "test-mlflow"},
 		Spec: mlflowv1.MLflowSpec{
+			BackendStoreURI: ptr(testBackendStoreURI),
 			Env: []corev1.EnvVar{
 				{
 					Name:  "SIMPLE_VAR",
@@ -1023,7 +1065,7 @@ func TestRenderChart(t *testing.T) {
 			},
 		},
 		{
-			name: "deployment should have allowed hosts configured",
+			name: "deployment should have allowed hosts from service DNS names",
 			mlflow: &mlflowv1.MLflow{
 				ObjectMeta: metav1.ObjectMeta{
 					Name: "test-mlflow",
@@ -1051,16 +1093,36 @@ func TestRenderChart(t *testing.T) {
 							t.Fatalf("Failed to get args from container: found=%v, err=%v", found, err)
 						}
 
-						// Check for --allowed-hosts arg
+						// Check for --allowed-hosts arg with service DNS names
+						// Service name is mlflow-test-mlflow for CR named "test-mlflow"
+						// Also includes gateway hostname from MLFLOW_URL config (default: mlflow.example.com)
+						expectedHosts := []string{
+							"mlflow-test-mlflow.test-ns.svc.cluster.local",
+							"mlflow-test-mlflow.test-ns.svc",
+							"mlflow-test-mlflow.test-ns",
+							"mlflow-test-mlflow",
+							"localhost",
+							"127.0.0.1",
+							"mlflow.example.com",
+						}
 						hasAllowedHosts := false
 						for i, arg := range args {
 							if arg == "--allowed-hosts" {
 								hasAllowedHosts = true
-								// Next arg should be the comma-separated list
 								if i+1 < len(args) {
 									hosts := args[i+1]
 									if hosts == "" {
 										t.Error("--allowed-hosts flag present but hosts list is empty")
+									}
+									// Verify all expected hosts are present
+									for _, expected := range expectedHosts {
+										if !contains(hosts, expected) {
+											t.Errorf("Expected host %q not found in allowed hosts: %s", expected, hosts)
+										}
+									}
+									// Verify wildcard is NOT present
+									if contains(hosts, "*") {
+										t.Error("Wildcard '*' should not be in allowed hosts")
 									}
 									t.Logf("Allowed hosts: %s", hosts)
 								}
@@ -1081,6 +1143,73 @@ func TestRenderChart(t *testing.T) {
 						}
 						if !hasStaticPrefixArg {
 							t.Errorf("%s not found in deployment args", staticPrefixArg)
+						}
+					}
+				}
+			},
+		},
+		{
+			name: "deployment should include extraAllowedHosts",
+			mlflow: &mlflowv1.MLflow{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "mlflow",
+				},
+				Spec: mlflowv1.MLflowSpec{
+					BackendStoreURI:      ptr("sqlite:////mlflow/mlflow.db"),
+					RegistryStoreURI:     ptr("sqlite:////mlflow/mlflow.db"),
+					ArtifactsDestination: ptr("file:///mlflow/artifacts"),
+					ExtraAllowedHosts: []string{
+						"mlflow.example.com",
+						"mlflow-route.apps.cluster.example.com",
+					},
+				},
+			},
+			namespace: "opendatahub",
+			wantErr:   false,
+			validateObjs: func(t *testing.T, objs []*unstructured.Unstructured) {
+				for _, obj := range objs {
+					if obj.GetKind() == deploymentKind {
+						containers, found, err := unstructured.NestedSlice(obj.Object, "spec", "template", "spec", "containers")
+						if err != nil || !found || len(containers) == 0 {
+							t.Fatalf("Failed to get containers from deployment: found=%v, err=%v", found, err)
+						}
+
+						container := containers[0].(map[string]interface{})
+						args, found, err := unstructured.NestedStringSlice(container, "args")
+						if err != nil || !found {
+							t.Fatalf("Failed to get args from container: found=%v, err=%v", found, err)
+						}
+
+						// Check for --allowed-hosts arg with both service DNS names and extra hosts
+						// Service name is "mlflow" for CR named "mlflow" (no suffix)
+						expectedHosts := []string{
+							"mlflow.opendatahub.svc.cluster.local",
+							"mlflow.opendatahub.svc",
+							"mlflow.opendatahub",
+							"mlflow",
+							"localhost",
+							"127.0.0.1",
+							"mlflow.example.com",
+							"mlflow-route.apps.cluster.example.com",
+						}
+						for i, arg := range args {
+							if arg == "--allowed-hosts" {
+								if i+1 < len(args) {
+									hosts := args[i+1]
+									// Verify all expected hosts are present
+									for _, expected := range expectedHosts {
+										if !contains(hosts, expected) {
+											t.Errorf("Expected host %q not found in allowed hosts: %s", expected, hosts)
+										}
+									}
+									// Verify wildcard is NOT present
+									if contains(hosts, "*") {
+										t.Error("Wildcard '*' should not be in allowed hosts")
+									}
+									t.Logf("Allowed hosts: %s", hosts)
+								}
+								break
+							}
 						}
 					}
 				}
