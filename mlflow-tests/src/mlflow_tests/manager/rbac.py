@@ -4,7 +4,7 @@ import logging
 from kubernetes import client
 from kubernetes.client.rest import ApiException
 
-from mlflow_tests.enums import ResourceType, UserRole
+from mlflow_tests.enums import ResourceType, KubeVerb
 
 logger = logging.getLogger(__name__)
 
@@ -24,23 +24,25 @@ class K8RoleManager:
             self,
         name: str,
         namespace: str,
-        role: UserRole,
+        verbs: list[KubeVerb],
         resources: list[ResourceType],
+        subresources: list[str] = None,
     ) -> None:
         """Create a Kubernetes Role with specified permissions.
 
         Args:
             name: Role name
             namespace: Namespace for the Role
-            role: Permission level defining K8s verbs
+            verbs: List of Kubernetes verbs to grant
             resources: MLflow resources to grant access to
+            subresources: Optional list of subresources (e.g., ["gatewaysecrets/use"])
 
         Raises:
             ApiException: If creation fails
         """
-        # Get K8s verbs from role for main resources
-        main_verbs = role.get_k8s_verbs()
-        sub_resource_verbs = role.get_k8s_sub_resource_verbs()
+        # Get K8s verbs from verb list
+        main_verbs = [verb.value for verb in verbs]
+        subresources = subresources or []
 
         # Get K8s resource names from ResourceType
         resource_names = [r.get_k8s_resource() for r in resources]
@@ -59,23 +61,34 @@ class K8RoleManager:
             logger.debug(f"Added main resource rule: resources={resource_names}, verbs={main_verbs}")
 
         # Rule 2: MLflow sub-resources (gatewaysecrets/use, gatewayendpoints/use, etc.)
-        # Only add if the role can use gateway resources and we have gateway resources in the list
-        gateway_sub_resources = []
-        for resource in resources:
-            gateway_sub_resources.extend(resource.get_k8s_sub_resources())
-
-        if gateway_sub_resources and sub_resource_verbs:
+        # Only add if subresources are explicitly provided
+        if subresources:
+            # Use provided subresources directly
             mlflow_sub_rule = client.V1PolicyRule(
                 api_groups=["mlflow.kubeflow.org"],
-                resources=gateway_sub_resources,
-                verbs=sub_resource_verbs,
+                resources=subresources,
+                verbs=["create"],  # Sub-resources only support create verb in K8s
             )
             policy_rules.append(mlflow_sub_rule)
-            logger.debug(f"Added sub-resource rule: resources={gateway_sub_resources}, verbs={sub_resource_verbs}")
+            logger.debug(f"Added sub-resource rule: resources={subresources}, verbs=['create']")
+        else:
+            # Auto-detect gateway sub-resources from resource types if subresources not specified
+            gateway_sub_resources = []
+            for resource in resources:
+                gateway_sub_resources.extend(resource.get_k8s_sub_resources())
+
+            if gateway_sub_resources and KubeVerb.CREATE in verbs:
+                mlflow_sub_rule = client.V1PolicyRule(
+                    api_groups=["mlflow.kubeflow.org"],
+                    resources=gateway_sub_resources,
+                    verbs=["create"],
+                )
+                policy_rules.append(mlflow_sub_rule)
+                logger.debug(f"Added auto-detected sub-resource rule: resources={gateway_sub_resources}, verbs=['create']")
 
         # Rule 3: Core Kubernetes API permissions for basic authentication and namespace access
         # These are needed for MLflow to authenticate with the K8s API and validate tokens
-        core_verbs = ["get", "list"] if role in [UserRole.READ] else ["get", "list", "create"]
+        core_verbs = ["get", "list"] if KubeVerb.CREATE not in verbs else ["get", "list", "create"]
         core_rule = client.V1PolicyRule(
             api_groups=[""],  # Core API group
             resources=["namespaces", "serviceaccounts", "secrets"],
@@ -182,10 +195,7 @@ class K8RoleManager:
 
         # Try multiple API groups that MLflow might use
         api_groups_to_try = [
-            "mlflow.kubeflow.org",
-            "mlflow.org",
-            "kubeflow.org",
-            ""  # Core API group
+            "mlflow.kubeflow.org"
         ]
 
         for api_group in api_groups_to_try:

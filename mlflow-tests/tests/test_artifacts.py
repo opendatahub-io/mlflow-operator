@@ -3,7 +3,7 @@ import mlflow
 from mlflow import MlflowClient
 from typing import ClassVar
 
-from .shared import UserInfo, TestData
+from .shared import UserInfo, TestData, TestStep
 from .constants.config import Config
 from .actions import (
     action_start_run,
@@ -20,16 +20,18 @@ from .actions import (
 from .validations import (
     validate_artifact_logged,
     validate_artifact_downloaded,
+    validate_model_created,
     validate_model_logged,
     validate_model_loaded,
     validate_storage,
     validate_run_created,
-    validate_action_failed,
+    validate_run_ended,
+    validate_authentication_denied,
 )
 
 import pytest
 
-from mlflow_tests.enums import ResourceType, UserRole
+from mlflow_tests.enums import ResourceType, KubeVerb
 from .base import TestBase
 
 logger = logging.getLogger(__name__)
@@ -44,149 +46,168 @@ class TestMLflowArtifacts(TestBase):
     """
 
     test_scenarios: ClassVar[list[TestData]] = [
-        # Basic artifact workflow tests - EDIT permission
+        # Basic artifact workflow tests - CREATE permission
         TestData(
-            test_name="User with EDIT permission can log and download artifacts",
-            user_info=UserInfo(workspace=Config.WORKSPACES[0], role=UserRole.EDIT, resource_type=ResourceType.EXPERIMENTS),
+            test_name="User with CREATE permission can log and download artifacts",
+            user_info=UserInfo(workspace=Config.WORKSPACES[0], verbs=[KubeVerb.CREATE], resource_types=[ResourceType.EXPERIMENTS]),
             workspace_to_use=Config.WORKSPACES[0],
-            action_func=[
-                action_start_run,
-                action_create_temp_artifact,
-                action_log_artifact,
-                action_list_artifacts,
-                action_download_artifact,
-                action_end_run,
-            ],
-            validate_func=[
-                validate_run_created,
-                validate_artifact_logged,
-                validate_artifact_downloaded,
-            ],
+            test_steps = [
+                TestStep(action_func=action_start_run),
+                TestStep(action_func=action_create_temp_artifact),
+                TestStep(action_func=action_log_artifact),
+                TestStep(action_func=action_list_artifacts),
+                TestStep(action_func=action_download_artifact),
+                TestStep(action_func=action_end_run, validate_func=validate_artifact_downloaded)
+            ]
         ),
         TestData(
-            test_name="User with EDIT permission can log and load models",
-            user_info=UserInfo(workspace=Config.WORKSPACES[0], role=UserRole.EDIT, resource_type=ResourceType.EXPERIMENTS),
+            test_name="User with CREATE permission can log and load models",
+            user_info=UserInfo(workspace=Config.WORKSPACES[0], verbs=[KubeVerb.CREATE], resource_types=[ResourceType.EXPERIMENTS]),
             workspace_to_use=Config.WORKSPACES[0],
-            action_func=[
-                action_start_run,
-                action_create_model,
-                action_log_model,
-                action_load_model,
-                action_end_run,
-            ],
-            validate_func=[
-                validate_run_created,
-                validate_model_logged,
-                validate_model_loaded,
-            ],
+            test_steps = [
+                TestStep(action_func=action_start_run, validate_func=validate_run_created),
+                TestStep(action_func=action_create_model, validate_func=validate_model_created),
+                TestStep(action_func=action_log_model, validate_func=validate_model_logged),
+                TestStep(action_func=action_load_model, validate_func=validate_model_loaded),
+                TestStep(action_func=action_end_run, validate_func=validate_run_ended)
+            ]
         ),
         TestData(
-            test_name="User with EDIT permission can verify storage for artifacts",
-            user_info=UserInfo(workspace=Config.WORKSPACES[0], role=UserRole.EDIT, resource_type=ResourceType.EXPERIMENTS),
+            test_name="User with CREATE permission can verify storage for artifacts",
+            user_info=UserInfo(workspace=Config.WORKSPACES[0], verbs=[KubeVerb.CREATE], resource_types=[ResourceType.EXPERIMENTS]),
             workspace_to_use=Config.WORKSPACES[0],
-            action_func=[
-                action_start_run,
-                action_create_temp_artifact,
-                action_log_artifact,
-                action_get_run_info,
-                action_end_run,
-            ],
-            validate_func=[
-                validate_run_created,
-                validate_storage,
-            ],
+            test_steps = [
+                TestStep(action_func=action_start_run),
+                TestStep(action_func=action_create_temp_artifact),
+                TestStep(action_func=action_log_artifact),
+                TestStep(action_func=action_get_run_info),
+                TestStep(action_func=action_end_run, validate_func=validate_storage)
+            ]
         ),
 
         TestData(
-            test_name="User with READ permission cannot log artifacts",
-            user_info=UserInfo(workspace=Config.WORKSPACES[0], role=UserRole.READ, resource_type=ResourceType.EXPERIMENTS),
+            test_name="User with GET permission cannot log artifacts",
+            user_info=UserInfo(workspace=Config.WORKSPACES[0], verbs=[KubeVerb.GET], resource_types=[ResourceType.EXPERIMENTS]),
             workspace_to_use=Config.WORKSPACES[0],
-            action_func=[
-                action_start_run,
-                action_create_temp_artifact,
-                action_log_artifact,
-            ],
-            validate_func=validate_action_failed,
+            test_steps = [
+                TestStep(action_func=action_start_run),
+                TestStep(action_func=action_create_temp_artifact),
+                TestStep(action_func=action_log_artifact, validate_func=validate_authentication_denied)
+            ]
         ),
         TestData(
-            test_name="User with READ permission cannot log models",
-            user_info=UserInfo(workspace=Config.WORKSPACES[0], role=UserRole.READ, resource_type=ResourceType.EXPERIMENTS),
+            test_name="User with GET permission cannot log models",
+            user_info=UserInfo(workspace=Config.WORKSPACES[0], verbs=[KubeVerb.GET], resource_types=[ResourceType.EXPERIMENTS]),
             workspace_to_use=Config.WORKSPACES[0],
-            action_func=[
-                action_start_run,
-                action_create_model,
-                action_log_model,
-            ],
-            validate_func=validate_action_failed,
+            test_steps = [
+                TestStep(action_func=action_start_run),
+                TestStep(action_func=action_create_model),
+                TestStep(action_func=action_log_model, validate_func=validate_authentication_denied)
+            ]
         ),
 
         # Cross-workspace permission tests
         # Note: These tests verify permission failures when accessing resources in unauthorized workspaces
         TestData(
-            test_name="User with READ permission on workspace 1 cannot start run in workspace 2",
-            user_info=UserInfo(workspace=Config.WORKSPACES[0], role=UserRole.READ, resource_type=ResourceType.EXPERIMENTS),
+            test_name="User with GET permission on workspace 1 cannot start run in workspace 2",
+            user_info=UserInfo(workspace=Config.WORKSPACES[0], verbs=[KubeVerb.GET], resource_types=[ResourceType.EXPERIMENTS]),
             workspace_to_use=Config.WORKSPACES[1],
-            action_func=action_start_run,
-            validate_func=validate_action_failed,
+            test_steps = TestStep(
+                action_func=action_start_run,
+                validate_func=validate_authentication_denied
+            )
         ),
         TestData(
-            test_name="User with EDIT permission on workspace 1 cannot log artifacts in workspace 2",
-            user_info=UserInfo(workspace=Config.WORKSPACES[0], role=UserRole.EDIT, resource_type=ResourceType.EXPERIMENTS),
+            test_name="User with CREATE permission on workspace 1 cannot log artifacts in workspace 2",
+            user_info=UserInfo(workspace=Config.WORKSPACES[0], verbs=[KubeVerb.CREATE], resource_types=[ResourceType.EXPERIMENTS]),
             workspace_to_use=Config.WORKSPACES[1],
-            action_func=[
-                action_start_run,
-                action_create_temp_artifact,
-                action_log_artifact,
-            ],
-            validate_func=validate_action_failed,
+            test_steps = [
+                TestStep(action_func=action_start_run, validate_func=validate_authentication_denied),
+            ]
         ),
 
-        # MANAGE permission tests
+        # CREATE permission tests (formerly MANAGE)
         TestData(
-            test_name="User with MANAGE permission can log and download artifacts",
-            user_info=UserInfo(workspace=Config.WORKSPACES[0], role=UserRole.MANAGE, resource_type=ResourceType.EXPERIMENTS),
+            test_name="User with CREATE permission can log and download artifacts",
+            user_info=UserInfo(workspace=Config.WORKSPACES[0], verbs=[KubeVerb.CREATE], resource_types=[ResourceType.EXPERIMENTS]),
             workspace_to_use=Config.WORKSPACES[0],
-            action_func=[
-                action_start_run,
-                action_create_temp_artifact,
-                action_log_artifact,
-                action_list_artifacts,
-                action_download_artifact,
-                action_end_run,
-            ],
-            validate_func=[
-                validate_run_created,
-                validate_artifact_logged,
-                validate_artifact_downloaded,
-            ],
+            test_steps = [
+                TestStep(action_func=action_start_run, validate_func=validate_run_created),
+                TestStep(action_func=action_create_temp_artifact),
+                TestStep(action_func=action_log_artifact, validate_func=validate_artifact_logged),
+                TestStep(action_func=action_list_artifacts),
+                TestStep(action_func=action_download_artifact, validate_func=validate_artifact_downloaded),
+                TestStep(action_func=action_end_run, validate_func=validate_run_ended)
+            ]
         ),
         TestData(
-            test_name="User with MANAGE permission can log and load models",
-            user_info=UserInfo(workspace=Config.WORKSPACES[0], role=UserRole.MANAGE, resource_type=ResourceType.EXPERIMENTS),
+            test_name="User with CREATE permission can log and load models",
+            user_info=UserInfo(workspace=Config.WORKSPACES[0], verbs=[KubeVerb.CREATE], resource_types=[ResourceType.EXPERIMENTS]),
             workspace_to_use=Config.WORKSPACES[0],
-            action_func=[
-                action_start_run,
-                action_create_model,
-                action_log_model,
-                action_load_model,
-                action_end_run,
-            ],
-            validate_func=[
-                validate_run_created,
-                validate_model_logged,
-                validate_model_loaded,
-            ],
+            test_steps = [
+                TestStep(action_func=action_start_run, validate_func=validate_run_created),
+                TestStep(action_func=action_create_model, validate_func=validate_model_created),
+                TestStep(action_func=action_log_model, validate_func=validate_model_logged),
+                TestStep(action_func=action_load_model, validate_func=validate_model_loaded),
+                TestStep(action_func=action_end_run, validate_func=validate_run_ended)
+            ]
         ),
         TestData(
-            test_name="User with MANAGE permission on workspace 1 cannot log artifacts in workspace 2",
-            user_info=UserInfo(workspace=Config.WORKSPACES[0], role=UserRole.MANAGE, resource_type=ResourceType.EXPERIMENTS),
+            test_name="User with CREATE permission on workspace 1 cannot log artifacts in workspace 2",
+            user_info=UserInfo(workspace=Config.WORKSPACES[0], verbs=[KubeVerb.CREATE], resource_types=[ResourceType.EXPERIMENTS]),
             workspace_to_use=Config.WORKSPACES[1],
-            action_func=[
-                action_start_run,
-                action_create_temp_artifact,
-                action_log_artifact,
-            ],
-            validate_func=validate_action_failed,
+            test_steps = [
+                TestStep(action_func=action_start_run),
+                TestStep(action_func=action_create_temp_artifact),
+                TestStep(action_func=action_log_artifact, validate_func=validate_authentication_denied)
+            ]
+        ),
+
+        # Additional negative test cases
+        TestData(
+            test_name="User with GET permission cannot end run",
+            user_info=UserInfo(workspace=Config.WORKSPACES[0], verbs=[KubeVerb.GET], resource_types=[ResourceType.EXPERIMENTS]),
+            workspace_to_use=Config.WORKSPACES[0],
+            test_steps = TestStep(
+                action_func=action_end_run,
+                validate_func=validate_authentication_denied
+            )
+        ),
+        TestData(
+            test_name="User with GET permission cannot create temporary artifacts",
+            user_info=UserInfo(workspace=Config.WORKSPACES[0], verbs=[KubeVerb.GET], resource_types=[ResourceType.EXPERIMENTS]),
+            workspace_to_use=Config.WORKSPACES[0],
+            test_steps = TestStep(
+                action_func=action_create_temp_artifact,
+                validate_func=validate_authentication_denied
+            )
+        ),
+        TestData(
+            test_name="User with CREATE permission cannot perform operations in different workspace",
+            user_info=UserInfo(workspace=Config.WORKSPACES[0], verbs=[KubeVerb.CREATE], resource_types=[ResourceType.EXPERIMENTS]),
+            workspace_to_use=Config.WORKSPACES[1],
+            test_steps = [
+                TestStep(action_func=action_start_run, validate_func=validate_authentication_denied),
+                TestStep(action_func=action_create_model, validate_func=validate_authentication_denied)
+            ]
+        ),
+        TestData(
+            test_name="User with UPDATE permission cannot create run without CREATE permission",
+            user_info=UserInfo(workspace=Config.WORKSPACES[0], verbs=[KubeVerb.UPDATE], resource_types=[ResourceType.EXPERIMENTS]),
+            workspace_to_use=Config.WORKSPACES[0],
+            test_steps = TestStep(
+                action_func=action_start_run,
+                validate_func=validate_authentication_denied
+            )
+        ),
+        TestData(
+            test_name="User with LIST permission cannot log artifacts without CREATE permission",
+            user_info=UserInfo(workspace=Config.WORKSPACES[0], verbs=[KubeVerb.LIST], resource_types=[ResourceType.EXPERIMENTS]),
+            workspace_to_use=Config.WORKSPACES[0],
+            test_steps = [
+                TestStep(action_func=action_start_run, validate_func=validate_authentication_denied),
+                TestStep(action_func=action_log_artifact, validate_func=validate_authentication_denied)
+            ]
         ),
     ]
 
@@ -207,7 +228,8 @@ class TestMLflowArtifacts(TestBase):
         """
         logger.info("=" * 80)
         logger.info(f"Starting test: {test_data.test_name}")
-        logger.info(f"User role: {test_data.user_info.role.value}, Resource: {test_data.user_info.resource_type.value}")
+        verb_names = [verb.value for verb in test_data.user_info.verbs]
+        logger.info(f"User verbs: {verb_names}, Resource: {test_data.user_info.resource_types.value}")
         logger.info(f"Workspace: {test_data.workspace_to_use}")
         logger.info("=" * 80)
 
@@ -215,11 +237,12 @@ class TestMLflowArtifacts(TestBase):
         self.test_context.last_error = None
 
         # Step 2: Create user with permissions
-        logger.info(f"Step 2: Creating user with {test_data.user_info.role.value} permissions on {test_data.user_info.resource_type.value} in workspace '{test_data.user_info.workspace}'")
+        logger.info(f"Step 2: Creating user with {verb_names} permissions on {test_data.user_info.resource_types.value} in workspace '{test_data.user_info.workspace}'")
         user_info: UserInfo = create_user_with_permissions(
             workspace=test_data.user_info.workspace,
-            user_role=test_data.user_info.role,
-            resource_type=test_data.user_info.resource_type
+            verbs=test_data.user_info.verbs,
+            resource_types=test_data.user_info.resource_types,
+            subresources=test_data.user_info.subresources
         )
         logger.info(f"Created user: {user_info.uname}")
 
@@ -254,10 +277,7 @@ class TestMLflowArtifacts(TestBase):
         logger.info(f"Set active workspace to: {test_data.workspace_to_use}")
         logger.debug(f"Created authenticated MLflow client for user: {user_info.uname}")
 
-        # Step 4: Execute action(s) if provided
-        self._execute_actions(test_data)
-
-        # Step 5: Validate the result(s)
-        self._execute_validations(test_data)
+        # Step 4-5: Execute test steps (actions and validations)
+        self._execute_test_steps(test_data)
 
         logger.info(f"Test PASSED: {test_data.test_name}")

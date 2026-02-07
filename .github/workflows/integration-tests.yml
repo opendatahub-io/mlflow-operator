@@ -217,6 +217,7 @@ jobs:
           MLFLOW_S3_ENDPOINT_URL: ${{ steps.setup-minio.outputs.minio_localhost_endpoint }}
           artifact_storage: ${{ inputs.artifact_storage || matrix.artifact_storage }}
           serve_artifacts: ${{ inputs.serve_artifacts || matrix.serve_artifacts }}
+          MLFLOW_LOGGING_LEVEL: "DEBUG"
         run: |
           echo "🧪 Running MLflow integration tests..."
           cd mlflow-tests

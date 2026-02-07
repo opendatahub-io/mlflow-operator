@@ -8,14 +8,14 @@ This project provides a comprehensive testing framework for MLflow with dual-mod
 - **Local Mode**: Tests MLflow REST API with Basic Authentication
 - **Kubernetes Mode**: Tests MLflow with Kubernetes RBAC and ServiceAccount-based authentication
 
-The framework validates user permissions across different roles (READ, EDIT, USE, MANAGE) and ensures proper workspace isolation in multi-tenant MLflow deployments. It uses a declarative, TestData-driven approach for comprehensive RBAC testing with automatic cleanup and workspace management.
+The framework validates user permissions using specific Kubernetes verbs (GET, CREATE, LIST, UPDATE, DELETE) and ensures proper workspace isolation in multi-tenant MLflow deployments. It uses a declarative, TestData-driven approach for comprehensive RBAC testing with automatic cleanup and workspace management.
 
 ## Architecture
 
 ### Core Components
 
-- **Resource Management**: Enum-based resource definitions (`ResourceType`, `UserRole`) with automatic Kubernetes RBAC mapping
-- **User Managers**: Pluggable backends for user creation (Kubernetes ServiceAccounts vs MLflow users)
+- **Resource Management**: Enum-based resource definitions (`ResourceType`, `KubeVerb`) with automatic Kubernetes RBAC mapping
+- **User Manager**: Kubernetes-based user creation using ServiceAccounts with RBAC
 - **Test Framework**: Declarative test scenarios using `TestData` and `TestContext` for state management
 - **Action System**: Reusable action functions for MLflow operations (create, read, delete)
 - **Validation System**: Comprehensive validation functions for success/failure scenarios
@@ -46,17 +46,14 @@ Each test follows a consistent 5-step execution pattern:
 ```
 mlflow-tests/
 ├── src/mlflow_tests/          # Core reusable package
-│   ├── enums/                 # Resource and role definitions
+│   ├── enums/                 # Resource and permission definitions
 │   │   ├── resource_type.py   # MLflow resource types (EXPERIMENTS, REGISTERED_MODELS, RUNS, GATEWAY_*)
-│   │   └── user_role.py       # User permission levels (READ, EDIT, USE, MANAGE)
-│   ├── managers/              # Backend-agnostic user and resource managers
-│   │   ├── base.py            # Abstract UserManager interface
-│   │   ├── k8s/               # Kubernetes implementation
-│   │   │   ├── namespace.py
-│   │   │   ├── rbac.py        # K8s role and role binding management
-│   │   │   ├── service_account.py
-│   │   │   └── user.py        # K8s-specific user creation via ServiceAccounts
-│   │   └── mlflow/            # MLflow-native implementation
+│   │   └── kube_verb.py       # Kubernetes verbs (GET, CREATE, LIST, UPDATE, DELETE)
+│   ├── manager/               # Kubernetes user and resource management
+│   │   ├── namespace.py       # Namespace management
+│   │   ├── rbac.py            # K8s role and role binding management
+│   │   ├── service_account.py # ServiceAccount and token management
+│   │   └── user.py            # User creation via ServiceAccounts
 │   │       └── user.py        # MLflow REST API user management
 │   └── utils/                 # Utility functions
 │       └── client.py          # Kubernetes and MLflow client factories
@@ -134,7 +131,7 @@ LOCAL=true uv run pytest
 uv run pytest -v -s --log-cli-level=INFO
 
 # Run specific test scenario
-uv run pytest tests/test_experiments.py::TestExperiments::test_experiment -k "READ user can get experiment"
+uv run pytest tests/test_experiments.py::TestExperiments::test_experiment -k "GET permission can get experiment"
 ```
 
 ### Test Markers
@@ -187,10 +184,13 @@ Tests provide detailed logging showing:
 - Pluggable user manager pattern for extensible authentication backends
 
 ### Permission Testing Matrix
-- **READ**: Can retrieve resources, cannot modify (`get`, `list` verbs)
-- **EDIT**: Can create/delete resources in assigned workspace (`get`, `list`, `create`, `update`, `delete` verbs)
-- **USE**: Can use gateway resources for model serving (`get`, `list`, `create` verbs)
-- **MANAGE**: Full permissions within workspace (all verbs including admin operations)
+Tests use specific Kubernetes verbs for granular permission control:
+- **GET**: Can retrieve specific resources (`get` verb)
+- **LIST**: Can list resources (`list` verb)
+- **CREATE**: Can create new resources (`create` verb)
+- **UPDATE**: Can modify existing resources (`update` verb)
+- **DELETE**: Can delete resources (`delete` verb)
+- **Gateway Subresources**: Special permissions for model serving (gatewaysecrets/use, etc.)
 
 ### MLflow Operator Integration
 - **Resource Types**: Maps to Kubernetes CustomResources (`experiments`, `registeredmodels`, `jobs`, `gateway*`)
@@ -226,8 +226,8 @@ Tests define scenarios as data structures rather than imperative code:
 ```python
 test_scenarios = [
     TestData(
-        test_name="Validate READ user can get experiment",
-        user_info=UserInfo(workspace=Config.WORKSPACES[0], role=UserRole.READ, ...),
+        test_name="Validate user with GET permission can get experiment",
+        user_info=UserInfo(workspace=Config.WORKSPACES[0], verbs=[KubeVerb.GET], ...),
         workspace_to_use=Config.WORKSPACES[0],
         action_func=action_get_experiment,
         validate_func=validate_experiment_retrieved,
@@ -235,8 +235,8 @@ test_scenarios = [
 ]
 ```
 
-#### Pluggable User Managers
-- Abstract `UserManager` interface allows different authentication backends
+#### Kubernetes User Management
+- `K8UserManager` creates ServiceAccounts with RBAC for authentication
 - `K8UserManager`: Creates Kubernetes ServiceAccounts with RBAC
 - `MlFlowUserManager`: Uses MLflow REST API for user management
 - Factory pattern automatically selects implementation based on `LOCAL` environment variable
@@ -319,10 +319,11 @@ class TestContext:
 @dataclass
 class UserInfo:
     workspace: str                   # User's assigned workspace
-    role: UserRole                  # Permission level (READ/EDIT/USE/MANAGE)
+    verbs: list[KubeVerb]           # Kubernetes verbs (GET/CREATE/LIST/UPDATE/DELETE)
     resource_type: ResourceType     # Resource scope (EXPERIMENTS/MODELS/etc)
+    subresources: list[str]         # Optional subresources (gatewaysecrets/use, etc.)
     uname: str                      # Generated username
-    password: str                   # Generated password (masked in logs)
+    password: str                   # Generated password/token (masked in logs)
 ```
 
 ### Adding Tests to Existing Test Files
@@ -337,10 +338,10 @@ test_scenarios = [
     # Existing scenarios...
 
     TestData(
-        test_name="Validate that MANAGE user can update experiment tags",
+        test_name="Validate that user with UPDATE permission can update experiment tags",
         user_info=UserInfo(
             workspace=Config.WORKSPACES[0],
-            role=UserRole.MANAGE,
+            verbs=[KubeVerb.UPDATE],
             resource_type=ResourceType.EXPERIMENTS
         ),
         workspace_to_use=Config.WORKSPACES[0],
@@ -348,10 +349,10 @@ test_scenarios = [
         validate_func=validate_experiment_tags_updated, # You'll create this
     ),
     TestData(
-        test_name="Validate that READ user cannot update experiment tags",
+        test_name="Validate that user with GET permission cannot update experiment tags",
         user_info=UserInfo(
             workspace=Config.WORKSPACES[0],
-            role=UserRole.READ,
+            verbs=[KubeVerb.GET],
             resource_type=ResourceType.EXPERIMENTS
         ),
         workspace_to_use=Config.WORKSPACES[0],
@@ -462,7 +463,7 @@ from .validations.your_new_validations import (
 )
 
 import pytest
-from mlflow_tests.enums import ResourceType, UserRole
+from mlflow_tests.enums import ResourceType, KubeVerb
 from .base import TestBase
 
 logger = logging.getLogger(__name__)
@@ -473,10 +474,10 @@ class TestYourNewFeature(TestBase):
 
     test_scenarios = [
         TestData(
-            test_name="Validate READ user can perform safe operations",
+            test_name="Validate user with GET permission can perform safe operations",
             user_info=UserInfo(
                 workspace=Config.WORKSPACES[0],
-                role=UserRole.READ,
+                verbs=[KubeVerb.GET],
                 resource_type=ResourceType.EXPERIMENTS  # or appropriate resource
             ),
             workspace_to_use=Config.WORKSPACES[0],
@@ -491,15 +492,16 @@ class TestYourNewFeature(TestBase):
         """Test your new feature operations with user permissions."""
         logger.info("=" * 80)
         logger.info(f"Starting test: {test_data.test_name}")
-        logger.info(f"User role: {test_data.user_info.role.value}, Resource: {test_data.user_info.resource_type.value}")
+        verb_names = [verb.value for verb in test_data.user_info.verbs]
+        logger.info(f"User verbs: {verb_names}, Resource: {test_data.user_info.resource_types.value}")
         logger.info(f"Workspace: {test_data.workspace_to_use}")
         logger.info("=" * 80)
 
         # Create user with permissions
         user_info: UserInfo = create_user_with_permissions(
             workspace=test_data.user_info.workspace,
-            user_role=test_data.user_info.role,
-            resource_type=test_data.user_info.resource_type
+            verbs=test_data.user_info.verbs,
+            resource_types=test_data.user_info.resource_types
         )
 
         # Set context
@@ -613,7 +615,7 @@ uv run pytest tests/test_your_new_feature.py -v
 uv run pytest tests/test_your_new_feature.py -v -s --log-cli-level=INFO
 
 # Run specific test scenarios
-uv run pytest tests/test_your_new_feature.py::TestYourNewFeature::test_your_new_feature -k "READ user"
+uv run pytest tests/test_your_new_feature.py::TestYourNewFeature::test_your_new_feature -k "GET permission"
 ```
 
 ## Troubleshooting

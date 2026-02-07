@@ -8,7 +8,7 @@ import logging
 import mlflow
 from mlflow.exceptions import MlflowException
 from ..shared import TestContext
-from .validation_utils import validate_action_failed, validate_resource_retrieved_or_created
+from .validation_utils import validate_authentication_denied, validate_resource_retrieved_or_created
 
 logger = logging.getLogger(__name__)
 

@@ -72,6 +72,30 @@ def validate_artifact_downloaded(test_context: TestContext) -> None:
     logger.info("Successfully validated artifact download and content match")
 
 
+def validate_model_created(test_context: TestContext) -> None:
+    """Validate that a model was successfully created.
+
+    Checks that model is created and available in test context.
+
+    Args:
+        test_context: Test context containing created model.
+
+    Raises:
+        AssertionError: If model is not created.
+    """
+    logger.info("Validating model was successfully created")
+
+    # Validate model is set
+    assert test_context.model is not None, \
+        "Model not created in test context"
+
+    # Validate model has predict method (basic sklearn interface check)
+    assert hasattr(test_context.model, 'predict'), \
+        "Created model does not have predict method"
+
+    logger.info("Successfully validated model creation")
+
+
 def validate_model_logged(test_context: TestContext) -> None:
     """Validate that a model was successfully logged to MLflow.
 
@@ -186,3 +210,24 @@ def validate_run_created(test_context: TestContext) -> None:
         "Run ID not set after starting run"
 
     logger.info(f"Successfully validated run creation (run_id: {test_context.current_run_id})")
+
+
+def validate_run_ended(test_context: TestContext) -> None:
+    """Validate that an MLflow run was successfully ended.
+
+    Checks that no error occurred during run ending and the run context is cleared.
+
+    Args:
+        test_context: Test context containing run information.
+
+    Raises:
+        AssertionError: If run ending failed or an error occurred.
+    """
+    logger.info("Validating MLflow run was successfully ended")
+
+    # Validate no error occurred
+    assert test_context.last_error is None, \
+        f"Run ending failed: {test_context.last_error}"
+    logger.debug("No errors detected during run ending")
+
+    logger.info("Successfully validated run ending")

@@ -1,6 +1,6 @@
 """Enums for MLflow tests."""
 
 from .resource_type import ResourceType
-from .user_role import UserRole
+from .kube_verb import KubeVerb
 
-__all__ = ["ResourceType", "UserRole"]
+__all__ = ["ResourceType", "KubeVerb"]

@@ -5,9 +5,9 @@ import pytest
 import random
 from mlflow.client import MlflowClient
 
-from mlflow_tests.enums import ResourceType
-from mlflow_tests.managers import UserManager
-from mlflow_tests.managers.k8s import K8Manager
+from mlflow_tests.enums import ResourceType, KubeVerb
+from mlflow_tests.manager.user import K8UserManager
+from mlflow_tests.manager.namespace import K8Manager
 from mlflow_tests.utils.client import ClientManager
 from .constants.config import Config
 from .shared import TestContext, UserInfo, TestData
@@ -77,7 +77,6 @@ class TestBase:
 
     admin_client: MlflowClient
     k8_manager: K8Manager
-    user_manager: UserManager
     workspaces: list[str] = list()
     resource_map: dict[ResourceType, dict[str, list[str] | str]] = dict()
     test_context: TestContext
@@ -313,13 +312,14 @@ class TestBase:
         Returns a function that creates users with role-based permissions and
         returns an authenticated MLflow client for that user.
         """
-        def _create_user(workspace, user_role, resource_type):
+        def _create_user(workspace: str, verbs: list[KubeVerb], resource_types: list[ResourceType], subresources: list[str]=None):
             """Internal function to create user with permissions and authenticated client.
 
             Args:
                 workspace: Workspace/namespace for the user
-                user_role: Role to assign (READ, EDIT, MANAGE, etc.)
-                resource_type: Resource type to grant access to
+                verbs: List of Kubernetes verbs to grant
+                resource_types: List of resource types to grant access to
+                subresources: Optional list of subresources
 
             Returns:
                 UserInfo object with user credentials and workspace
@@ -329,10 +329,12 @@ class TestBase:
             """
             username = f"test-user-{random_gen.randint(0,10_000)}"
             logger.info(f"Creating test user '{username}' in workspace '{workspace}'")
-            logger.debug(f"User will have {user_role.value} role on {resource_type.value}")
+            verb_names = [verb.value for verb in verbs] if isinstance(verbs, list) else [verbs.value]
+            resource_names = [rt.value for rt in resource_types]
+            logger.debug(f"User will have {verb_names} verbs on {resource_names}")
 
             # Create the user
-            user_info = self.user_manager.create_user(username=username, other_info=workspace)
+            user_info = self.user_manager.create_user(username=username, namespace=workspace)
             logger.info(f"Created user '{username}' in workspace '{workspace}'")
             logger.debug(f"User credentials: username={user_info[0]}, credential_length={len(user_info[1])}")
 
@@ -345,14 +347,15 @@ class TestBase:
                 logger.info(f"User '{username}' token validation passed (K8s mode)")
 
             # Create role and permissions
-            logger.debug(f"Assigning {user_role.value} role on {resource_type.value} to user '{username}'")
+            logger.debug(f"Assigning {verb_names} verbs on {resource_names} to user '{username}'")
             self.user_manager.create_role(
                 name=username,
                 workspace_name=workspace,
-                role=user_role,
-                resources=[resource_type]
+                verbs=verbs if isinstance(verbs, list) else [verbs],
+                resources=resource_types,
+                subresources=subresources
             )
-            logger.info(f"Assigned {user_role.value} permissions on {resource_type.value} to user '{username}'")
+            logger.info(f"Assigned {verb_names} permissions on {resource_names} to user '{username}'")
 
             # Set authentication context
             logger.debug(f"Setting authentication context for user '{username}'")
@@ -360,7 +363,14 @@ class TestBase:
             logger.info(f"Authentication context set for user '{username}'")
 
             # Create UserInfo object
-            user_info_obj = UserInfo(uname=user_info[0], upass=user_info[1], workspace=workspace)
+            user_info_obj = UserInfo(
+                uname=user_info[0],
+                upass=user_info[1],
+                workspace=workspace,
+                resource_types=resource_types,
+                verbs=verbs if isinstance(verbs, list) else [verbs],
+                subresources=subresources
+            )
 
             # Add user to cleanup list
             self.test_context.add_user_for_cleanup(user_info_obj)
@@ -369,61 +379,72 @@ class TestBase:
             return user_info_obj
         return _create_user
 
-    def _execute_actions(self, test_data: TestData) -> None:
-        """Execute action sequence for the test.
+    def _execute_test_steps(self, test_data: TestData) -> None:
+        """Execute test steps for the test.
 
-        Handles both single actions and sequences of actions for complex workflows.
-        Stops execution on first error for expected failure tests.
+        Iterates over test_steps and executes actions and validations for each step.
+        Actions may fail (especially in negative tests), but validations should confirm
+        whether the failure was expected or not.
 
         Args:
-            test_data: Test configuration containing actions to execute.
+            test_data: Test configuration containing test steps to execute.
         """
-        if not test_data.action_func:
-            logger.debug("Step 4: No action to execute, proceeding to validation")
+        if not hasattr(test_data, 'test_steps') or not test_data.test_steps:
+            logger.debug("No test steps to execute")
             return
 
-        # Handle both single action and list of actions
-        actions = test_data.action_func if isinstance(test_data.action_func, list) else [test_data.action_func]
-        logger.info(f"Executing {len(actions)} action(s)")
+        # Handle both single TestStep and list of TestSteps
+        test_steps = test_data.test_steps if isinstance(test_data.test_steps, list) else [test_data.test_steps]
+        logger.info(f"Executing {len(test_steps)} test step(s)")
 
-        for i, action in enumerate(actions, 1):
-            action_name = action.__name__
-            logger.info(f"Step 4.{i}: Executing action '{action_name}'")
-            try:
-                action(self.test_context)
-                logger.info(f"Action '{action_name}' completed without exception")
-            except Exception as e:
-                # Store exception for validation to verify expected failures
-                logger.warning(f"Action '{action_name}' raised exception: {type(e).__name__}: {e}")
-                self.test_context.last_error = e
-                # For expected failures, stop executing subsequent actions
-                if i < len(actions):
-                    logger.info(f"Stopping action sequence at action {i} due to exception")
-                break
+        for i, step in enumerate(test_steps, 1):
+            logger.info(f"--- Test Step {i} ---")
 
-    def _execute_validations(self, test_data: TestData) -> None:
-        """Execute validation sequence for the test.
+            # Execute action if present (don't stop on failure - validation will check if it was expected)
+            if step.action_func:
+                self._execute_action(step.action_func, i)
 
-        Handles both single validations and sequences of validations.
-        Raises AssertionError on first validation failure.
+            # Execute validation if present
+            if step.validate_func:
+                self._execute_validation(step.validate_func, i)
+
+    def _execute_action(self, action_func, step_number: int) -> None:
+        """Execute a single action function.
+
+        Actions may succeed or fail. Failures are stored in test_context.last_error
+        for validation functions to verify if the failure was expected.
 
         Args:
-            test_data: Test configuration containing validations to execute.
+            action_func: The action function to execute.
+            step_number: The step number for logging.
+        """
+        action_name = action_func.__name__
+        logger.info(f"Step {step_number}: Executing action '{action_name}'")
+
+        try:
+            action_func(self.test_context)
+            logger.info(f"Action '{action_name}' completed without exception")
+        except Exception as e:
+            # Store exception for validation to verify expected failures
+            logger.warning(f"Action '{action_name}' raised exception: {type(e).__name__}: {e}")
+            self.test_context.last_error = e
+
+    def _execute_validation(self, validate_func, step_number: int) -> None:
+        """Execute a single validation function.
+
+        Args:
+            validate_func: The validation function to execute.
+            step_number: The step number for logging.
 
         Raises:
-            AssertionError: If any validation fails.
+            AssertionError: If validation fails.
         """
-        # Handle both single validation and list of validations
-        validations = test_data.validate_func if isinstance(test_data.validate_func, list) else [test_data.validate_func]
-        logger.info(f"Step 5: Executing {len(validations)} validation(s)")
+        validation_name = validate_func.__name__
+        logger.info(f"Step {step_number}: Executing validation '{validation_name}'")
 
-        for i, validation in enumerate(validations, 1):
-            validation_name = validation.__name__
-            logger.info(f"Step 5.{i}: Executing validation '{validation_name}'")
-            try:
-                validation(self.test_context)
-                logger.info(f"Validation '{validation_name}' passed successfully")
-            except AssertionError as e:
-                logger.error(f"Validation '{validation_name}' failed: {e}")
-                logger.error(f"Test FAILED: {test_data.test_name}")
-                raise
+        try:
+            validate_func(self.test_context)
+            logger.info(f"Validation '{validation_name}' passed successfully")
+        except AssertionError as e:
+            logger.error(f"Validation '{validation_name}' failed: {e}")
+            raise

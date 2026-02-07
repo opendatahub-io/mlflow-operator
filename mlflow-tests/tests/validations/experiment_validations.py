@@ -7,7 +7,7 @@ operations (get, create, delete) based on expected permissions and outcomes.
 import logging
 import mlflow
 from ..shared import TestContext
-from .validation_utils import validate_action_failed, validate_resource_retrieved_or_created
+from .validation_utils import validate_authentication_denied, validate_resource_retrieved_or_created
 
 logger = logging.getLogger(__name__)
 

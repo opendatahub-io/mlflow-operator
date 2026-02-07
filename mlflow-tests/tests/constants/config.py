@@ -3,11 +3,12 @@ import os
 
 class Config:
 
-    LOCAL: bool = os.getenv("local", "false") == "true"
+    LOCAL: bool = os.getenv("LOCAL", "false") == "true"
     ADMIN_USERNAME: str = os.getenv("admin_uname", "")
     ADMIN_PASSWORD: str = os.getenv("admin_pass", "")
     K8_API_TOKEN: str = os.getenv("kube_token", "")
     MLFLOW_URI: str = os.getenv("MLFLOW_TRACKING_URI", "https://localhost:8080")
+    DISABLE_TLS: str = os.getenv("DISABLE_TLS", "true")
     CA_BUNDLE: str = os.getenv("ca_bundle", "")
     ARTIFACT_STORAGE = os.getenv("artifact_storage", "file")
     SERVE_ARTIFACTS = os.getenv("serve_artifacts", "true") == "true"

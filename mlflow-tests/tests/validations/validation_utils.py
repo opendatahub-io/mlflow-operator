@@ -11,10 +11,10 @@ from ..shared import TestContext
 logger = logging.getLogger(__name__)
 
 
-def validate_action_failed(test_context: TestContext) -> None:
-    """Validate that an action failed as expected.
+def validate_authentication_denied(test_context: TestContext) -> None:
+    """Validate that an action failed due to authentication denial.
 
-    Checks that an authentication error occurred during the action.
+    Checks that an authentication or authorization error occurred during the action.
 
     Args:
         test_context: Test context containing error information.
