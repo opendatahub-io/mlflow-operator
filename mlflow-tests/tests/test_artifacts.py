@@ -229,7 +229,7 @@ class TestMLflowArtifacts(TestBase):
         logger.info("=" * 80)
         logger.info(f"Starting test: {test_data.test_name}")
         verb_names = [verb.value for verb in test_data.user_info.verbs]
-        logger.info(f"User verbs: {verb_names}, Resource: {test_data.user_info.resource_types.value}")
+        logger.info(f"User verbs: {verb_names}, Resource: {[rt.value for rt in test_data.user_info.resource_types]}")
         logger.info(f"Workspace: {test_data.workspace_to_use}")
         logger.info("=" * 80)
 
@@ -237,7 +237,7 @@ class TestMLflowArtifacts(TestBase):
         self.test_context.last_error = None
 
         # Step 2: Create user with permissions
-        logger.info(f"Step 2: Creating user with {verb_names} permissions on {test_data.user_info.resource_types.value} in workspace '{test_data.user_info.workspace}'")
+        logger.info(f"Step 2: Creating user with {verb_names} permissions on {[rt.value for rt in test_data.user_info.resource_types]} in workspace '{test_data.user_info.workspace}'")
         user_info: UserInfo = create_user_with_permissions(
             workspace=test_data.user_info.workspace,
             verbs=test_data.user_info.verbs,

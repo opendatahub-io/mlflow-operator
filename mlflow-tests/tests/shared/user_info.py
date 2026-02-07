@@ -109,14 +109,12 @@ class UserInfo:
         return self
 
     @property
-    def resource_types(self) -> ResourceType:
-        """Get the resource type.
+    def resource_types(self) -> list[ResourceType]:
+        """Get the resource types.
 
         Returns:
-            ResourceType: The resource type
+            list[ResourceType]: The list of resource types
         """
-        if isinstance(self._resource_types, list):
-            return self._resource_types[0] if self._resource_types else None
         return self._resource_types
 
     def set_resource_types(self, value: list[ResourceType]) -> "UserInfo":
@@ -131,9 +129,7 @@ class UserInfo:
         Raises:
             ValueError: If value is not a ResourceType
         """
-        if not isinstance(value, ResourceType):
-            raise ValueError("Resource type must be a ResourceType enum")
-        self._resource_types = [value]
+        self._resource_types = value
         return self
 
     @property

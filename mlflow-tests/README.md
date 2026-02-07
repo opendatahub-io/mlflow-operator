@@ -493,7 +493,7 @@ class TestYourNewFeature(TestBase):
         logger.info("=" * 80)
         logger.info(f"Starting test: {test_data.test_name}")
         verb_names = [verb.value for verb in test_data.user_info.verbs]
-        logger.info(f"User verbs: {verb_names}, Resource: {test_data.user_info.resource_types.value}")
+        logger.info(f"User verbs: {verb_names}, Resource: {[rt.value for rt in test_data.user_info.resource_types]}")
         logger.info(f"Workspace: {test_data.workspace_to_use}")
         logger.info("=" * 80)
 
