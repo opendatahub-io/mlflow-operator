@@ -6,55 +6,57 @@ different resource types (experiments, registered models, etc.).
 
 import logging
 from typing import Optional
-from ..shared import TestContext
+from ..shared import TestContext, ErrorResponse, ErrorCode
 
 logger = logging.getLogger(__name__)
 
 
-def validate_action_failed(test_context: TestContext) -> None:
-    """Validate that an action failed as expected.
+def validate_authentication_denied(test_context: TestContext) -> None:
+    """Validate that an action failed due to authentication denial.
 
-    Checks that an authentication error occurred during the action.
+    Checks that an authentication or authorization error occurred during the action.
 
     Args:
-        test_context: Test context containing error information.
+        test_context: Test context containing structured error information.
 
     Raises:
-        AssertionError: If no error occurred or error message is unexpected.
+        AssertionError: If no error occurred or error is not permission-related.
     """
-    logger.info(f"Validating that action failed as expected for user '{test_context.active_user.uname}' in workspace '{test_context.active_workspace}'")
+    user_name = test_context.active_user.uname
+    workspace = test_context.active_workspace
+    logger.info(f"Validating that action failed as expected for user '{user_name}' in workspace '{workspace}'")
 
     # Validate that an error occurred
     if test_context.last_error is None:
-        logger.error(f"Validation failed: Action should have failed for unauthorized user '{test_context.active_user.uname}', but succeeded")
-    assert test_context.last_error is not None, \
-        f"Action should have failed for unauthorized user: {test_context.active_user.uname}, " \
-        f"but succeeded"
-    logger.debug(f"Confirmed error occurred: {test_context.last_error}")
+        logger.error(f"Validation failed: Action should have failed for unauthorized user '{user_name}', but succeeded")
+        raise AssertionError(f"Action should have failed for unauthorized user '{user_name}', but succeeded")
 
-    # Validate error message contains authentication or permission failure
-    error_message = str(test_context.last_error)
-    expected_errors = [
-        "Authentication with the Kubernetes API failed",  # Authentication failure
-        "PERMISSION_DENIED",  # Permission denied (RBAC working correctly)
-        "UNAUTHENTICATED",    # Another form of authentication failure
-        "Forbidden",          # HTTP 403 permission denied
-    ]
+    error_response: ErrorResponse = test_context.last_error
 
-    error_found = any(expected_error in error_message for expected_error in expected_errors)
-    if not error_found:
-        logger.error(f"Validation failed: Action failed with unexpected error - expected authentication or permission failure, got: {error_message}")
-    assert error_found, \
-        f"Action failed with unexpected error for user {test_context.active_user.uname}: {error_message}. " \
-        f"Expected one of: {expected_errors}"
+    # Check if it's a permission or authentication error
+    if not error_response.is_permission_error():
+        logger.error(f"Validation failed: Expected permission/authentication error, got: {error_response.error.code} - {error_response.error.message}")
+        raise AssertionError(
+            f"Action failed with unexpected error for user {user_name}: {error_response.error.code} - {error_response.error.message}. "
+            f"Expected permission/authentication error."
+        )
 
-    # Log which type of error occurred for debugging
-    if "PERMISSION_DENIED" in error_message:
-        logger.info(f"Successfully validated action failure - user lacks required permissions (RBAC working correctly)")
-    elif "Authentication" in error_message or "UNAUTHENTICATED" in error_message:
-        logger.info(f"Successfully validated action failure - authentication failed")
+    # Log specific type of permission error for debugging
+    error_code = error_response.error.code
+    if error_code == ErrorCode.PERMISSION_DENIED:
+        logger.info("Successfully validated action failure - user lacks required permissions (RBAC working correctly)")
+    elif error_code in [ErrorCode.UNAUTHENTICATED, ErrorCode.AUTHENTICATION_FAILED]:
+        logger.info(f"Successfully validated action failure - authentication failed ({error_code})")
+    elif error_code == ErrorCode.FORBIDDEN:
+        logger.info("Successfully validated action failure - access forbidden")
+    elif error_code == ErrorCode.WORKSPACE_ACCESS_DENIED:
+        logger.info("Successfully validated action failure - workspace access denied")
     else:
-        logger.info(f"Successfully validated action failure - access denied")
+        logger.info(f"Successfully validated action failure - permission error ({error_code})")
+
+    logger.debug(f"Error details: {error_response.error.message}")
+    if error_response.error.details:
+        logger.debug(f"Error context: {error_response.error.details}")
 
 
 def validate_resource_retrieved_or_created(
@@ -83,16 +85,19 @@ def validate_resource_retrieved_or_created(
 
     # Validate no error occurred
     if test_context.last_error is not None:
-        logger.error(f"Validation failed: {resource_type} {operation} encountered an error for user '{user_name}': {test_context.last_error}")
-    assert test_context.last_error is None, \
-        f"{resource_type} {operation} failed for user {user_name}: {test_context.last_error}"
+        error_response: ErrorResponse = test_context.last_error
+        logger.error(f"Validation failed: {resource_type} {operation} encountered an error for user '{user_name}': {error_response.error.code} - {error_response.error.message}")
+        raise AssertionError(
+            f"{resource_type} {operation} failed for user {user_name}: {error_response.error.code} - {error_response.error.message}"
+        )
     logger.debug(f"No errors detected during {resource_type} {operation}")
 
     # Validate resource identifier is set
     resource_value = getattr(test_context, resource_field, None)
     if resource_value is None:
         logger.error(f"Validation failed: {resource_type} identifier not set after {operation} for user '{user_name}'")
-    assert resource_value is not None, \
-        f"{resource_type} identifier not set after {operation} for user: {user_name}"
+        raise AssertionError(
+            f"{resource_type} identifier not set after {operation} for user: {user_name}"
+        )
 
     logger.info(f"Successfully validated {resource_type} {operation} ({resource_field}: {resource_value})")

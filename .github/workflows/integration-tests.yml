@@ -10,6 +10,7 @@ env:
   AWS_SECRET_ACCESS_KEY: 'minio123'
   MLFLOW_TRACKING_URI: "https://localhost:8080"
   MLFLOW_TRACKING_INSECURE_TLS: "true"
+  TESTS_LOG_LEVEL: "DEBUG"
 
 on:
   workflow_dispatch:
@@ -110,7 +111,15 @@ jobs:
       - name: Build and load MLflow operator image
         id: build-operator
         run: |
-          # Build the operator image and load it into Kind cluster
+          # Configure Docker to use insecure registry
+          sudo mkdir -p /etc/docker
+          echo '{
+            "insecure-registries": ["kind-registry:5000"]
+          }' | sudo tee /etc/docker/daemon.json
+          sudo systemctl restart docker
+          sleep 5
+
+          # Build the operator image and push to Kind registry
           OPERATOR_IMG=kind-registry:5000/mlflow-operator:latest
           docker build -t "$OPERATOR_IMG" .
           docker push "$OPERATOR_IMG"
@@ -149,6 +158,27 @@ jobs:
           # Forward MLflow service port to localhost:8080
           echo "🔍 Verifying MLflow API readiness..."
           kubectl port-forward service/mlflow 8080:8443 -n ${{ steps.deploy-mlflow.outputs.namespace }} &
+
+      - name: Setup PostgreSQL port forward
+        id: setup-postgres
+        if: ${{ (inputs.backend_store || matrix.backend_store) == 'postgres' }}
+        run: |
+          echo "🐘 Setting up PostgreSQL port forward for database access..."
+
+          # Wait for PostgreSQL to be ready
+          echo "⏳ Waiting for PostgreSQL to be fully ready..."
+          kubectl wait --for=condition=ready pod -l app=postgres --timeout=300s -n "${{ steps.deploy-mlflow.outputs.namespace }}"
+
+          # Forward PostgreSQL service port to localhost:5432
+          echo "🔍 Setting up PostgreSQL port forward..."
+          kubectl port-forward service/postgres-service 5432:5432 -n ${{ steps.deploy-mlflow.outputs.namespace }} &
+
+          # Give port-forward a moment to establish
+          sleep 5
+          echo "✅ PostgreSQL accessible at localhost:5432"
+
+          # Set backend store URI for tests
+          echo "MLFLOW_BACKEND_STORE_URI=postgresql://postgres:mysecretpassword@localhost:5432/mydatabase" >> "$GITHUB_ENV"
 
       - name: Setup MinIO port forward
         id: setup-minio
@@ -226,7 +256,10 @@ jobs:
             ${{ env.PYTEST_ARGS }} \
             --junitxml="../test-results/${{ env.JUNIT_XML }}" \
             --html="../test-results/${{ env.HTML_REPORT }}" \
-            --self-contained-html
+            --self-contained-html \
+            --log-cli-level=${{ env.TESTS_LOG_LEVEL }} \
+            --log-cli-format='%(asctime)s.%(msecs)03d [%(levelname)s] %(name)s: %(message)s' \
+            --log-cli-date-format='%Y-%m-%d %H:%M:%S'
 
           # Capture test result for summary
           TEST_EXIT_CODE=$?

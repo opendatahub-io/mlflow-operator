@@ -1,5 +1,6 @@
 from mlflow_tests.enums import ResourceType
 from .user_info import UserInfo
+from .error_models import ErrorResponse
 from dataclasses import dataclass, field
 from typing import Optional, Any
 import logging
@@ -29,7 +30,7 @@ class TestContext:
         user_client: MLflow client authenticated with current user credentials
         users_to_delete: List of users to delete (users are global, not workspace-scoped)
         resource_map: Shared resource map from fixtures
-        last_error: Last error encountered during test execution
+        last_error: Last structured error encountered during test execution
         current_run_id: ID of currently active MLflow run for artifact operations
         temp_artifact_path: Path to temporary artifact file
         temp_artifact_content: Content of temporary artifact
@@ -52,7 +53,7 @@ class TestContext:
     user_client: Optional[MlflowClient] = None
     users_to_delete: list[UserInfo] = field(default_factory=list)
     resource_map: dict[ResourceType, dict[str, list[str] | str]] = field(default_factory=dict)
-    last_error: Optional[Exception] = None
+    last_error: Optional[ErrorResponse] = None
     current_run_id: Optional[str] = None
     temp_artifact_path: Optional[str] = None
     temp_artifact_content: Optional[str] = None

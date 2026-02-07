@@ -4,7 +4,7 @@ import logging
 from kubernetes import client
 from kubernetes.client.rest import ApiException
 
-from mlflow_tests.enums import ResourceType, UserRole
+from mlflow_tests.enums import ResourceType, KubeVerb
 
 logger = logging.getLogger(__name__)
 
@@ -24,23 +24,25 @@ class K8RoleManager:
             self,
         name: str,
         namespace: str,
-        role: UserRole,
+        verbs: list[KubeVerb],
         resources: list[ResourceType],
+        subresources: list[str] = None,
     ) -> None:
         """Create a Kubernetes Role with specified permissions.
 
         Args:
             name: Role name
             namespace: Namespace for the Role
-            role: Permission level defining K8s verbs
+            verbs: List of Kubernetes verbs to grant
             resources: MLflow resources to grant access to
+            subresources: Optional list of subresources (e.g., ["gatewaysecrets/use"])
 
         Raises:
             ApiException: If creation fails
         """
-        # Get K8s verbs from role for main resources
-        main_verbs = role.get_k8s_verbs()
-        sub_resource_verbs = role.get_k8s_sub_resource_verbs()
+        # Get K8s verbs from verb list
+        main_verbs = [verb.value for verb in verbs]
+        subresources = subresources or []
 
         # Get K8s resource names from ResourceType
         resource_names = [r.get_k8s_resource() for r in resources]
@@ -59,30 +61,41 @@ class K8RoleManager:
             logger.debug(f"Added main resource rule: resources={resource_names}, verbs={main_verbs}")
 
         # Rule 2: MLflow sub-resources (gatewaysecrets/use, gatewayendpoints/use, etc.)
-        # Only add if the role can use gateway resources and we have gateway resources in the list
-        gateway_sub_resources = []
-        for resource in resources:
-            gateway_sub_resources.extend(resource.get_k8s_sub_resources())
-
-        if gateway_sub_resources and sub_resource_verbs:
+        # Only add if subresources are explicitly provided
+        if subresources:
+            # Use provided subresources directly
             mlflow_sub_rule = client.V1PolicyRule(
                 api_groups=["mlflow.kubeflow.org"],
-                resources=gateway_sub_resources,
-                verbs=sub_resource_verbs,
+                resources=subresources,
+                verbs=["create"],  # Sub-resources only support create verb in K8s
             )
             policy_rules.append(mlflow_sub_rule)
-            logger.debug(f"Added sub-resource rule: resources={gateway_sub_resources}, verbs={sub_resource_verbs}")
+            logger.debug(f"Added sub-resource rule: resources={subresources}, verbs=['create']")
+        else:
+            # Auto-detect gateway sub-resources from resource types if subresources not specified
+            gateway_sub_resources = []
+            for resource in resources:
+                gateway_sub_resources.extend(resource.get_k8s_sub_resources())
+
+            if gateway_sub_resources and KubeVerb.CREATE in verbs:
+                mlflow_sub_rule = client.V1PolicyRule(
+                    api_groups=["mlflow.kubeflow.org"],
+                    resources=gateway_sub_resources,
+                    verbs=["create"],
+                )
+                policy_rules.append(mlflow_sub_rule)
+                logger.debug(f"Added auto-detected sub-resource rule: resources={gateway_sub_resources}, verbs=['create']")
 
         # Rule 3: Core Kubernetes API permissions for basic authentication and namespace access
         # These are needed for MLflow to authenticate with the K8s API and validate tokens
-        core_verbs = ["get", "list"] if role in [UserRole.READ] else ["get", "list", "create"]
+        core_verbs = ["get", "list"] if KubeVerb.CREATE not in verbs else ["get", "list", "create"]
         core_rule = client.V1PolicyRule(
             api_groups=[""],  # Core API group
             resources=["namespaces", "serviceaccounts", "secrets"],
             verbs=core_verbs,
         )
         policy_rules.append(core_rule)
-        logger.debug(f"Added core API rule: verbs={core_verbs}")
+        logger.debug(f"Added core API rule to provide access to namespace, sa and secrets: verbs={core_verbs}")
 
         # Rule 4: RBAC permissions to read own roles and bindings (for token validation)
         rbac_rule = client.V1PolicyRule(
@@ -161,7 +174,7 @@ class K8RoleManager:
         resource: str,
         verb: str,
         max_retries: int = 10,
-        retry_delay: float = 1.0
+        retry_delay: float = 2.0
     ) -> None:
         """Verify that RBAC permissions are actually usable via SubjectAccessReview.
 
@@ -183,9 +196,6 @@ class K8RoleManager:
         # Try multiple API groups that MLflow might use
         api_groups_to_try = [
             "mlflow.kubeflow.org",
-            "mlflow.org",
-            "kubeflow.org",
-            ""  # Core API group
         ]
 
         for api_group in api_groups_to_try:
@@ -203,6 +213,7 @@ class K8RoleManager:
                     user=f"system:serviceaccount:{namespace}:{service_account_name}"
                 )
             )
+            reason = "No reason provided"
 
             for attempt in range(max_retries):
                 try:
@@ -211,16 +222,16 @@ class K8RoleManager:
                         logger.info(f"RBAC permissions verified for {service_account_name} - can {verb} {resource} (API group: {api_group})")
                         return
                     else:
-                        reason = result.status.reason or "No reason provided"
+                        if result.status.allowed:
+                            reason = result.status.reason
                         logger.debug(f"RBAC denied for API group '{api_group}' (attempt {attempt + 1}/{max_retries}): {reason}")
                         if attempt < max_retries - 1:
                             import time
                             time.sleep(retry_delay)
                             retry_delay *= 1.2  # Smaller backoff multiplier
-                        break  # Try next API group
                 except Exception as e:
                     logger.debug(f"RBAC verification attempt {attempt + 1} failed for API group '{api_group}': {e}")
-                    if attempt < max_retries - 1:
+                    if attempt < max_retries:
                         import time
                         time.sleep(retry_delay)
                         retry_delay *= 1.2
@@ -230,9 +241,4 @@ class K8RoleManager:
         # If we get here, none of the API groups worked - log detailed error and continue
         logger.warning(f"RBAC permissions could not be verified for {service_account_name} to {verb} {resource}")
         logger.warning(f"Tried API groups: {api_groups_to_try}")
-        logger.warning(f"This may indicate that MLflow CRDs are not installed or use different API groups")
-        logger.warning(f"Proceeding without verification - test may fail if permissions are not actually available")
-
-        # Don't raise an exception - just warn and continue
-        # This allows tests to run even if verification fails
-        # If permissions are actually wrong, the MLflow operation will fail later
+        raise RuntimeError(f"RBAC permissions could not be verified for {service_account_name} to {verb} {resource}, failed due to K8s error: {reason}")

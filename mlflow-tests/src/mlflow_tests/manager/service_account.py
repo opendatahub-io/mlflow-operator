@@ -155,12 +155,12 @@ class ServiceAccountManager:
         # This should not be reached, but added for safety
         raise RuntimeError(f"Failed to retrieve token via TokenRequest API for '{service_account_name}' after {max_retries} attempts")
 
-    def create_sa_and_get_token(self, sa_name: str, other_info: str) -> tuple[str, str]:
+    def create_sa_and_get_token(self, sa_name: str, namespace: str) -> tuple[str, str]:
         """Create a service account and return its authentication token using TokenRequest API.
 
         Args:
             sa_name: ServiceAccount name to create
-            other_info: Namespace for the service account
+            namespace: Namespace for the service account
 
         Returns:
             Tuple of (service_account_name, token) for Kubernetes API authentication
@@ -175,8 +175,6 @@ class ServiceAccountManager:
             2. Uses TokenRequest API to get a short-lived JWT token
             3. No secrets are created, improving security and reducing cleanup overhead
         """
-        namespace = other_info
-
         logger.info(f"Starting service account creation workflow for '{sa_name}' in namespace '{namespace}' (using TokenRequest API)")
 
         try:

@@ -6,8 +6,8 @@ operations (get, create, delete) based on expected permissions and outcomes.
 
 import logging
 import mlflow
-from ..shared import TestContext
-from .validation_utils import validate_action_failed, validate_resource_retrieved_or_created
+from ..shared import TestContext, ErrorResponse
+from .validation_utils import validate_authentication_denied, validate_resource_retrieved_or_created
 
 logger = logging.getLogger(__name__)
 
@@ -65,9 +65,10 @@ def validate_experiment_deleted(test_context: TestContext) -> None:
 
     # Validate no error occurred
     if test_context.last_error is not None:
-        logger.error(f"Validation failed: Experiment deletion encountered an error for user '{test_context.active_user.uname}': {test_context.last_error}")
-    assert test_context.last_error is None, \
-        f"Experiment deletion failed for user {test_context.active_user.uname}: {test_context.last_error}"
+        error_response: ErrorResponse = test_context.last_error
+        logger.error(f"Validation failed: Experiment deletion encountered an error for user '{test_context.active_user.uname}': {error_response.error.code} - {error_response.error.message}")
+        assert False, \
+            f"Experiment deletion failed for user {test_context.active_user.uname}: {error_response.error.code} - {error_response.error.message}"
     logger.debug("No errors detected during experiment deletion")
 
     # Validate experiment ID is set

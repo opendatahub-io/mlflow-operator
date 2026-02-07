@@ -5,16 +5,15 @@ from typing import Any
 
 from kubernetes import client
 
-from mlflow_tests.enums import ResourceType, UserRole
-from mlflow_tests.managers.base import UserManager
-from mlflow_tests.managers.k8s.rbac import K8RoleManager
-from mlflow_tests.managers.k8s.service_account import ServiceAccountManager
+from mlflow_tests.enums import ResourceType, KubeVerb
+from mlflow_tests.manager.rbac import K8RoleManager
+from mlflow_tests.manager.service_account import ServiceAccountManager
 
 logger = logging.getLogger(__name__)
 
 
-class K8UserManager(UserManager):
-    """Kubernetes implementation of UserManager.
+class K8UserManager:
+    """Kubernetes user manager.
 
     Manages users via ServiceAccounts and RBAC.
     """
@@ -32,55 +31,59 @@ class K8UserManager(UserManager):
         self.role_manager = K8RoleManager(rbac_v1_api)
         self.sa_manager = ServiceAccountManager(core_v1_api)
 
-    def create_user(self, username: str, other_info: str) -> tuple[str, str]:
+    def create_user(self, username: str, namespace: str) -> tuple[str, str]:
         """Create a user as a Kubernetes ServiceAccount.
 
         Args:
             username: ServiceAccount name
-            other_info: Namespace for the ServiceAccount
+            namespace: Namespace for the ServiceAccount
 
         Returns:
             User details including token for authentication
         """
-        logger.info(f"Creating K8s user (ServiceAccount) '{username}' in namespace '{other_info}'")
+        logger.info(f"Creating K8s user (ServiceAccount) '{username}' in namespace '{namespace}'")
         try:
-            result = self.sa_manager.create_sa_and_get_token(username, other_info)
+            result = self.sa_manager.create_sa_and_get_token(username, namespace)
             logger.info(f"Successfully created K8s user '{username}'")
             return result
         except Exception as e:
-            logger.error(f"Failed to create K8s user '{username}' in namespace '{other_info}': {e}")
+            logger.error(f"Failed to create K8s user '{username}' in namespace '{namespace}': {e}")
             raise
 
     def create_role(
         self,
         name: str,
         workspace_name: str,
-        role: UserRole,
+        verbs: list[KubeVerb],
         resources: list[ResourceType],
+        subresources: list[str] = None,
     ) -> None:
         """Create a Kubernetes Role and bind it to a user.
 
         Args:
             name: User/ServiceAccount name (used for role and binding)
             workspace_name: Namespace for role and binding
-            role: Permission level
+            verbs: List of Kubernetes verbs to grant
             resources: Resources to grant access to
+            subresources: Optional list of subresources (e.g., ["gatewaysecrets/use"])
         """
         role_name = f"{name}-role"
         binding_name = f"{name}-binding"
 
         logger.info(f"Creating K8s role '{role_name}' for user '{name}' in namespace '{workspace_name}'")
-        logger.debug(f"Role details - Permission level: {role.value}, Resources: {[r.value for r in resources]}")
+        logger.debug(f"Role details - Verbs: {[v.value for v in verbs]}, Resources: {[r.value for r in resources]}")
 
-        # Get the verbs and resources for logging
-        verbs = role.get_k8s_verbs()
+        # Get the verb strings and resources for logging
+        verb_strings = [verb.value for verb in verbs]
         k8s_resources = [r.get_k8s_resource() for r in resources]
-        logger.info(f"RBAC Permissions - Verbs: {verbs}, MLflow Resources: {k8s_resources}")
+        logger.info(f"RBAC Permissions - Verbs: {verb_strings}, MLflow Resources: {k8s_resources}")
+        if subresources:
+            logger.info(f"Subresources: {subresources}")
         logger.info(f"Additional permissions: Core K8s API (namespaces, serviceaccounts, secrets), RBAC read access")
 
         # Create the role
         self.role_manager.create_role(
-            role_name, workspace_name, role, resources
+            role_name, workspace_name, verbs, resources, subresources
         )
         logger.info(f"Created K8s role '{role_name}' with comprehensive permissions")
 
@@ -94,8 +97,23 @@ class K8UserManager(UserManager):
         # Verify permissions are actually usable by performing SubjectAccessReview
         logger.debug(f"Verifying RBAC permissions for user '{name}' are ready")
         for resource in resources:
-            # Test the most important verb for the role (delete for EDIT/MANAGE, get for READ)
-            test_verb = "delete" if "delete" in role.get_k8s_verbs() else "get"
+            # Test the most important verb available (delete > create > update > get > list)
+            available_verbs = [v.value for v in verbs]
+            if "delete" in available_verbs:
+                test_verb = "delete"
+            elif "create" in available_verbs:
+                test_verb = "create"
+            elif "update" in available_verbs:
+                test_verb = "update"
+            elif "get" in available_verbs:
+                test_verb = "get"
+            elif "list" in available_verbs:
+                test_verb = "list"
+            else:
+                # Fallback to first available verb if none of the above match
+                test_verb = available_verbs[0] if available_verbs else "get"
+                logger.warning(f"Using fallback verb '{test_verb}' for RBAC verification")
+
             try:
                 self.role_manager.verify_rbac_permissions(
                     service_account_name=name,
@@ -110,7 +128,7 @@ class K8UserManager(UserManager):
                 logger.error(f"RBAC verification failed for user '{name}': {e}")
                 raise
 
-        logger.info(f"User '{name}' now has {role.value} access to {len(resources)} resource types in namespace '{workspace_name}'")
+        logger.info(f"User '{name}' now has {verb_strings} access to {len(resources)} resource types in namespace '{workspace_name}'")
 
     def delete_user(self, username: str, namespace: str = None) -> None:
         """Delete a Kubernetes ServiceAccount and associated resources.

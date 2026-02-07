@@ -2,16 +2,17 @@
 
 import logging
 import os
+import tempfile
+from pathlib import Path
+
 import pytest
-import mlflow.server.auth.client
 import random
 
-from mlflow_tests.enums import ResourceType
-from mlflow_tests.managers.k8s import K8Manager, K8UserManager
-from mlflow_tests.managers.mlflow import MlFlowUserManager
+from mlflow_tests.enums import ResourceType, KubeVerb
+from mlflow_tests.manager.namespace import K8Manager
+from mlflow_tests.manager.user import K8UserManager
 from mlflow_tests.utils.client import ClientManager
 from .constants.config import Config
-from .shared import UserInfo
 
 logger = logging.getLogger(__name__)
 random_gen = random.Random()
@@ -29,68 +30,52 @@ def setup_clients():
 
     # Disable SSL verification for testing environments
     # WARNING: This is insecure and should only be used in development/testing
-    import os
     import urllib3
     logger.warning("Disabling SSL verification for testing environment - THIS IS INSECURE")
     urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
     # Set environment variables to disable SSL verification
-    os.environ['MLFLOW_TRACKING_INSECURE_TLS'] = 'true'
+    os.environ['MLFLOW_TRACKING_INSECURE_TLS'] = Config.DISABLE_TLS
     os.environ['CURL_CA_BUNDLE'] = ''
     os.environ['REQUESTS_CA_BUNDLE'] = ''
     logger.debug("Set SSL environment variables for insecure testing")
     if Config.ARTIFACT_STORAGE == "s3" and not Config.SERVE_ARTIFACTS:
         logger.debug("Set AWS Credentials because artifact store is s3 and server_artifacts=false")
-        if not Config.AWS_ACCESS_KEY and not Config.AWS_SECRET_KEY:
+        if not Config.AWS_ACCESS_KEY or not Config.AWS_SECRET_KEY:
             raise RuntimeError("AWS Credentials not set, please set env variables 'AWS_ACCESS_KEY_ID' & 'AWS_SECRET_ACCESS_KEY'")
         os.environ['MLFLOW_S3_ENDPOINT_URL'] = Config.S3_URL
         os.environ['AWS_ACCESS_KEY_ID'] = Config.AWS_ACCESS_KEY
         os.environ['AWS_SECRET_ACCESS_KEY'] = Config.AWS_SECRET_KEY
 
-    # Define workspaces for both local and K8s environments
+    # Define workspaces
     workspaces = Config.WORKSPACES
     logger.info(f"Configured workspaces: {workspaces}")
 
-    if not Config.LOCAL:
-        logger.info("Setting up Kubernetes environment")
-        core_v1_api, rbac_v1_api = ClientManager.create_k8s_client()
-        logger.debug("Created Kubernetes API clients")
+    logger.info("Setting up Kubernetes environment")
+    core_v1_api, rbac_v1_api = ClientManager.create_k8s_client()
+    logger.debug("Created Kubernetes API clients")
 
-        # Create K8 managers
-        k8_manager = K8Manager(core_v1_api)
-        user_manager = K8UserManager(core_v1_api, rbac_v1_api)
-        logger.info("Created K8 managers")
+    # Create K8 managers
+    k8_manager = K8Manager(core_v1_api)
+    user_manager = K8UserManager(core_v1_api, rbac_v1_api)
+    logger.info("Created K8 managers")
 
-        # Create test namespaces
-        logger.info(f"Creating {len(workspaces)} test namespaces")
-        for workspace in workspaces:
-            logger.debug(f"Creating namespace: {workspace}")
-            k8_manager.create_namespace(workspace)
-        logger.info("Successfully created all test namespaces")
+    # Create test namespaces
+    logger.info(f"Creating {len(workspaces)} test namespaces")
+    for workspace in workspaces:
+        logger.debug(f"Creating namespace: {workspace}")
+        k8_manager.create_namespace(workspace)
+    logger.info("Successfully created all test namespaces")
 
-        admin_client = ClientManager.create_mlflow_client(
-            token=Config.K8_API_TOKEN,
-            tracking_uri=Config.MLFLOW_URI
-        )
-        logger.info(f"Created MLflow admin client for K8s environment (URI: {Config.MLFLOW_URI})")
-    else:
-        logger.info("Setting up local MLflow environment")
-        admin_client = ClientManager.create_mlflow_client(
-            username=Config.ADMIN_USERNAME,
-            password=Config.ADMIN_PASSWORD,
-            tracking_uri=Config.MLFLOW_URI
-        )
-        logger.info(f"Created MLflow admin client for local environment (URI: {Config.MLFLOW_URI})")
-
-        auth_client = mlflow.server.auth.client.AuthServiceClient(Config.MLFLOW_URI)
-        k8_manager = None
-        user_manager = MlFlowUserManager(auth_client)
-        logger.info("Created MLflow user manager")
+    admin_client = ClientManager.create_mlflow_client(
+        token=Config.K8_API_TOKEN,
+        tracking_uri=Config.MLFLOW_URI
+    )
+    logger.info(f"Created MLflow admin client for K8s environment (URI: {Config.MLFLOW_URI})")
 
     logger.info("Test session setup completed successfully")
     logger.info("=" * 80)
     return admin_client, k8_manager, user_manager, workspaces
-
 
 @pytest.fixture(autouse=True, scope="function")
 def cleanup_active_runs():
@@ -180,12 +165,8 @@ def create_experiments_and_runs(setup_clients):
 
     # Verify admin authentication is properly set
     logger.debug("Verifying admin authentication credentials are set")
-    if Config.LOCAL:
-        if not os.environ.get('MLFLOW_TRACKING_USERNAME'):
-            logger.warning("MLFLOW_TRACKING_USERNAME not set - admin client may not be authenticated")
-    else:
-        if not os.environ.get('MLFLOW_TRACKING_TOKEN'):
-            logger.warning("MLFLOW_TRACKING_TOKEN not set - admin client may not be authenticated")
+    if not os.environ.get('MLFLOW_TRACKING_TOKEN'):
+        logger.warning("MLFLOW_TRACKING_TOKEN not set - admin client may not be authenticated")
 
     logger.info(f"Creating baseline resources for {len(workspaces)} workspaces")
 
@@ -214,22 +195,6 @@ def create_experiments_and_runs(setup_clients):
             resource_map = {ResourceType.EXPERIMENTS: {workspace: experiment_id}}
         logger.debug(f"Added experiment to resource map for workspace '{workspace}'")
 
-        # Create run and store it in a resource map
-        # run_name = f"test-run-{experiment_id}"
-        # logger.debug(f"Creating baseline run: {run_name}")
-        #
-        # try:
-        #     run = mlflow.start_run(experiment_id=experiment_id, run_name=run_name)
-        #     run_id = run.info.run_id
-        #     logger.info(f"Created run '{run_name}' with ID: {run_id} in workspace '{workspace}'")
-        # except Exception as e:
-        #     logger.error(f"Failed to create baseline run in workspace '{workspace}': {e}")
-        #     logger.error(f"Authentication may not be properly configured. Check credentials.")
-        #     raise
-        #
-        # resource_map = {ResourceType.RUNS: {workspace: run_id}}
-        # logger.debug(f"Added run to resource map for workspace '{workspace}'")
-
         # Create registered model and store it in resource map
         model_name = f"test-model-{random_gen.randint(1, 10000)}"
         logger.debug(f"Creating baseline registered model: {model_name}")
@@ -252,7 +217,6 @@ def create_experiments_and_runs(setup_clients):
 
     logger.info(f"Successfully created all baseline resources")
     logger.info(f"Resource summary - Experiments: {len(resource_map.get(ResourceType.EXPERIMENTS, {}))}, "
-               f"Registered Models: {len(resource_map.get(ResourceType.REGISTERED_MODELS, {}))}, "
-               f"Runs: {len(resource_map.get(ResourceType.RUNS, {}))}")
+               f"Registered Models: {len(resource_map.get(ResourceType.REGISTERED_MODELS, {}))}")
     logger.info("=" * 80)
     return resource_map

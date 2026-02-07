@@ -27,10 +27,6 @@ def action_start_run(test_context: TestContext) -> None:
     """
     logger.info(f"Starting MLflow run in experiment {test_context.active_experiment_id}")
 
-    # Set the workspace context in MLflow before making API calls
-    logger.debug(f"Setting MLflow workspace to: '{test_context.active_workspace}'")
-    mlflow.set_workspace(test_context.active_workspace)
-
     run = mlflow.start_run(experiment_id=test_context.active_experiment_id)
     test_context.current_run_id = run.info.run_id
     logger.info(f"Successfully started run {test_context.current_run_id}")
@@ -54,7 +50,7 @@ def action_end_run(test_context: TestContext) -> None:
 
     # Set the workspace context in MLflow before making API calls
     logger.debug(f"Setting MLflow workspace to: '{test_context.active_workspace}'")
-    mlflow.set_workspace(test_context.active_workspace)
+
 
     mlflow.end_run()
     logger.info(f"Successfully ended run {test_context.current_run_id}")
@@ -96,7 +92,7 @@ def action_log_artifact(test_context: TestContext) -> None:
 
     # Set the workspace context in MLflow before making API calls
     logger.debug(f"Setting MLflow workspace to: '{test_context.active_workspace}'")
-    mlflow.set_workspace(test_context.active_workspace)
+
 
     mlflow.log_artifact(test_context.temp_artifact_path)
     logger.info(f"Successfully logged artifact {os.path.basename(test_context.temp_artifact_path)}")
@@ -116,10 +112,10 @@ def action_list_artifacts(test_context: TestContext) -> None:
 
     # Set the workspace context in MLflow before making API calls
     logger.debug(f"Setting MLflow workspace to: '{test_context.active_workspace}'")
-    mlflow.set_workspace(test_context.active_workspace)
 
-    client = mlflow.MlflowClient()
-    test_context.artifact_list = client.list_artifacts(test_context.current_run_id)
+
+    # Use the authenticated client from test context
+    test_context.artifact_list = test_context.user_client.list_artifacts(test_context.current_run_id)
     logger.info(f"Successfully listed {len(test_context.artifact_list)} artifact(s)")
 
 
@@ -138,7 +134,7 @@ def action_download_artifact(test_context: TestContext) -> None:
 
     # Set the workspace context in MLflow before making API calls
     logger.debug(f"Setting MLflow workspace to: '{test_context.active_workspace}'")
-    mlflow.set_workspace(test_context.active_workspace)
+
 
     test_context.downloaded_path = mlflow.artifacts.download_artifacts(
         run_id=test_context.current_run_id,
@@ -181,10 +177,6 @@ def action_log_model(test_context: TestContext) -> None:
     """
     logger.info(f"Logging model to run {test_context.current_run_id}")
 
-    # Set the workspace context in MLflow before making API calls
-    logger.debug(f"Setting MLflow workspace to: '{test_context.active_workspace}'")
-    mlflow.set_workspace(test_context.active_workspace)
-
     model_info = mlflow.sklearn.log_model(test_context.model, "model")
     test_context.model_uri = model_info.model_uri
     logger.info(f"Successfully logged model with URI: {test_context.model_uri}")
@@ -204,7 +196,7 @@ def action_load_model(test_context: TestContext) -> None:
 
     # Set the workspace context in MLflow before making API calls
     logger.debug(f"Setting MLflow workspace to: '{test_context.active_workspace}'")
-    mlflow.set_workspace(test_context.active_workspace)
+
 
     test_context.model = mlflow.sklearn.load_model(test_context.model_uri)
     logger.info("Successfully loaded model")
@@ -224,7 +216,6 @@ def action_get_run_info(test_context: TestContext) -> None:
 
     # Set the workspace context in MLflow before making API calls
     logger.debug(f"Setting MLflow workspace to: '{test_context.active_workspace}'")
-    mlflow.set_workspace(test_context.active_workspace)
 
     run = mlflow.get_run(test_context.current_run_id)
     test_context.artifact_location = run.info.artifact_uri

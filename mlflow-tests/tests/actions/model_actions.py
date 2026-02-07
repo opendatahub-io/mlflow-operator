@@ -26,10 +26,6 @@ def action_get_registered_model(test_context: TestContext) -> None:
     """
     logger.info(f"Starting registered model retrieval in workspace '{test_context.active_workspace}'")
 
-    # Set the workspace context in MLflow before making API calls
-    logger.debug(f"Setting MLflow workspace to: '{test_context.active_workspace}'")
-    mlflow.set_workspace(test_context.active_workspace)
-
     model_name = test_context.resource_map[ResourceType.REGISTERED_MODELS][test_context.active_workspace]
     logger.debug(f"Retrieving registered model with name: {model_name}")
 
@@ -58,7 +54,6 @@ def action_create_registered_model(test_context: TestContext) -> None:
 
     # Set the workspace context in MLflow before making API calls
     logger.debug(f"Setting MLflow workspace to: '{test_context.active_workspace}'")
-    mlflow.set_workspace(test_context.active_workspace)
 
     model = test_context.user_client.create_registered_model(model_name)
     test_context.active_model_name = model.name
@@ -81,7 +76,6 @@ def action_delete_registered_model(test_context: TestContext) -> None:
 
     # Set the workspace context in MLflow before making API calls
     logger.debug(f"Setting MLflow workspace to: '{test_context.active_workspace}'")
-    mlflow.set_workspace(test_context.active_workspace)
 
     # Delete registered model
     logger.debug(f"Step 2: Deleting registered model {test_context.active_model_name}")

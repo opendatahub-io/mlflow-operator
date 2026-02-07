@@ -1,32 +1,37 @@
 import os
 import logging
-
-import pytest
 import random
+import string
+
+import mlflow
+import pytest
 from mlflow.client import MlflowClient
 
-from mlflow_tests.enums import ResourceType
-from mlflow_tests.managers import UserManager
-from mlflow_tests.managers.k8s import K8Manager
+from mlflow_tests.enums import ResourceType, KubeVerb
+from mlflow_tests.manager.user import K8UserManager
+from mlflow_tests.manager.namespace import K8Manager
 from mlflow_tests.utils.client import ClientManager
 from .constants.config import Config
-from .shared import TestContext, UserInfo, TestData
+from .shared import TestContext, UserInfo, TestData, ErrorResponse
 
 logger = logging.getLogger(__name__)
 
 random_gen = random.Random()
 
 
-def set_user_context(user_info: tuple[str, str]) -> None:
-    """Set user context for MLflow authentication.
+def set_user_context(user_info: tuple[str, str]) -> MlflowClient:
+    """Set user context for MLflow authentication and return authenticated client.
 
-    CRITICAL: This function sets MLflow authentication credentials in environment variables.
-    These environment variables are used by the global mlflow module for authentication.
+    CRITICAL: This function sets MLflow authentication credentials and returns a properly
+    configured MlflowClient that should be used for all MLflow operations.
 
     Args:
         user_info: Tuple of (username, password/token)
             - LOCAL mode: (username, password)
             - K8s mode: ("", token) - username can be empty for token auth
+
+    Returns:
+        Properly authenticated MlflowClient instance
 
     Note:
         In LOCAL mode, uses username/password authentication (Basic Auth).
@@ -39,34 +44,20 @@ def set_user_context(user_info: tuple[str, str]) -> None:
     logger.info("SETTING USER AUTHENTICATION CONTEXT")
     logger.info("=" * 80)
 
-    if Config.LOCAL:
-        # LOCAL mode: Basic authentication with username/password
-        logger.info(f"Authentication mode: LOCAL (Basic Auth)")
-        logger.info(f"Username: {username}")
-        logger.debug("Setting MLflow authentication with username/password credentials")
+    # Bearer token authentication
+    logger.info(f"Authentication mode: K8s (Bearer Token)")
+    logger.debug(f"Token length: {len(credential) if credential else 0} characters")
+    logger.debug("Setting MLflow authentication with Bearer token credentials")
 
-        # Set up authentication context
-        ClientManager.create_mlflow_client(
-            username=username,
-            password=credential,
-            tracking_uri=Config.MLFLOW_URI
-        )
-        logger.info(f"Successfully set authentication context for user: {username}")
-
-    else:
-        # K8s mode: Bearer token authentication
-        logger.info(f"Authentication mode: K8s (Bearer Token)")
-        logger.debug(f"Token length: {len(credential) if credential else 0} characters")
-        logger.debug("Setting MLflow authentication with Bearer token credentials")
-
-        # Set up authentication context
-        ClientManager.create_mlflow_client(
-            token=credential,
-            tracking_uri=Config.MLFLOW_URI
-        )
-        logger.info("Successfully set authentication context with Bearer token")
+    # Set up authentication context and get authenticated client
+    authenticated_client = ClientManager.create_mlflow_client(
+        token=credential,
+        tracking_uri=Config.MLFLOW_URI
+    )
+    logger.info("Successfully set authentication context with Bearer token")
 
     logger.info("=" * 80)
+    return authenticated_client
 
 
 class TestBase:
@@ -77,7 +68,6 @@ class TestBase:
 
     admin_client: MlflowClient
     k8_manager: K8Manager
-    user_manager: UserManager
     workspaces: list[str] = list()
     resource_map: dict[ResourceType, dict[str, list[str] | str]] = dict()
     test_context: TestContext
@@ -107,25 +97,9 @@ class TestBase:
         """
         logger.debug("Setting up admin user authentication context")
 
-        if not Config.LOCAL:
-            # K8s mode: Use Bearer token authentication
-            logger.debug("Configuring admin authentication for K8s mode with Bearer token")
-            set_user_context(("", Config.K8_API_TOKEN))
-            # Create admin client after setting authentication context
-            self.admin_client = ClientManager.create_mlflow_client(
-                token=Config.K8_API_TOKEN,
-                tracking_uri=Config.MLFLOW_URI
-            )
-        else:
-            # LOCAL mode: Use Basic authentication
-            logger.debug(f"Configuring admin authentication for LOCAL mode with username: {Config.ADMIN_USERNAME}")
-            set_user_context((Config.ADMIN_USERNAME, Config.ADMIN_PASSWORD))
-            # Create admin client after setting authentication context
-            self.admin_client = ClientManager.create_mlflow_client(
-                username=Config.ADMIN_USERNAME,
-                password=Config.ADMIN_PASSWORD,
-                tracking_uri=Config.MLFLOW_URI
-            )
+        # Use Bearer token authentication
+        logger.debug("Configuring admin authentication for K8s mode with Bearer token")
+        self.admin_client = set_user_context(("", Config.K8_API_TOKEN))
 
         logger.info("Admin user context configured successfully")
 
@@ -306,6 +280,75 @@ class TestBase:
             cleanup_errors.append(error_msg)
             return False
 
+    def _create_user(self, workspace: str, verbs: list[KubeVerb], resource_types: list[ResourceType], subresources: list[str]=None) -> UserInfo:
+        """Create user with permissions and authenticated client.
+
+        Args:
+            workspace: Workspace/namespace for the user
+            verbs: List of Kubernetes verbs to grant
+            resource_types: List of resource types to grant access to
+            subresources: Optional list of subresources
+
+        Returns:
+            UserInfo object with user credentials and workspace
+
+        Note:
+            This function sets up the authentication context for the created user.
+        """
+        # Generate random string with 8 characters (lowercase + digits)
+        # 36^8 = ~2.8 trillion possibilities, excellent for 10000 unique values
+        random_suffix = ''.join(random.choices(string.ascii_lowercase + string.digits, k=8))
+        username = f"test-user-{random_suffix}"
+        logger.info(f"Creating test user '{username}' in workspace '{workspace}'")
+        verb_names = [verb.value for verb in verbs] if isinstance(verbs, list) else [verbs.value]
+        resource_names = [rt.value for rt in resource_types]
+        logger.debug(f"User will have {verb_names} verbs on {resource_names}")
+
+        # Create the user
+        user_info = self.user_manager.create_user(username=username, namespace=workspace)
+        logger.info(f"Created user '{username}' in workspace '{workspace}'")
+        logger.debug(f"User credentials: username={user_info[0]}, credential_length={len(user_info[1])}")
+
+        # Validate user token for K8s mode
+        token = user_info[1]
+        if not token or len(token) < 50:  # K8s tokens are typically much longer
+            logger.error(f"Invalid or short token for user '{username}': length={len(token) if token else 0}")
+            raise ValueError(f"User creation failed - token too short for K8s authentication")
+        logger.info(f"User '{username}' token validation passed")
+
+        # Create role and permissions
+        logger.debug(f"Assigning {verb_names} verbs on {resource_names} to user '{username}'")
+        self.user_manager.create_role(
+            name=username,
+            workspace_name=workspace,
+            verbs=verbs if isinstance(verbs, list) else [verbs],
+            resources=resource_types,
+            subresources=subresources
+        )
+        logger.info(f"Assigned {verb_names} permissions on {resource_names} to user '{username}'")
+
+        # Set authentication context and get authenticated client
+        logger.debug(f"Setting authentication context for user '{username}'")
+        authenticated_client = set_user_context(user_info=user_info)
+        logger.info(f"Authentication context set for user '{username}'")
+
+        # Create UserInfo object with authenticated client
+        user_info_obj = UserInfo(
+            uname=user_info[0],
+            upass=user_info[1],
+            workspace=workspace,
+            resource_types=resource_types,
+            verbs=verbs if isinstance(verbs, list) else [verbs],
+            subresources=subresources,
+            client=authenticated_client
+        )
+
+        # Add user to cleanup list
+        self.test_context.add_user_for_cleanup(user_info_obj)
+        logger.debug(f"Added user '{username}' to cleanup list")
+
+        return user_info_obj
+
     @pytest.fixture(scope="function", autouse=False)
     def create_user_with_permissions(self):
         """Create a test user with specific permissions in a workspace.
@@ -313,117 +356,126 @@ class TestBase:
         Returns a function that creates users with role-based permissions and
         returns an authenticated MLflow client for that user.
         """
-        def _create_user(workspace, user_role, resource_type):
-            """Internal function to create user with permissions and authenticated client.
 
-            Args:
-                workspace: Workspace/namespace for the user
-                user_role: Role to assign (READ, EDIT, MANAGE, etc.)
-                resource_type: Resource type to grant access to
+        return self._create_user
 
-            Returns:
-                UserInfo object with user credentials and workspace
+    def _execute_test_steps(self, test_data: TestData) -> None:
+        """Execute test steps for the test.
 
-            Note:
-                This function sets up the authentication context for the created user.
-            """
-            username = f"test-user-{random_gen.randint(0,10_000)}"
-            logger.info(f"Creating test user '{username}' in workspace '{workspace}'")
-            logger.debug(f"User will have {user_role.value} role on {resource_type.value}")
-
-            # Create the user
-            user_info = self.user_manager.create_user(username=username, other_info=workspace)
-            logger.info(f"Created user '{username}' in workspace '{workspace}'")
-            logger.debug(f"User credentials: username={user_info[0]}, credential_length={len(user_info[1])}")
-
-            # Validate user token for K8s mode
-            if not Config.LOCAL:
-                token = user_info[1]
-                if not token or len(token) < 50:  # K8s tokens are typically much longer
-                    logger.error(f"Invalid or short token for user '{username}': length={len(token) if token else 0}")
-                    raise ValueError(f"User creation failed - token too short for K8s authentication")
-                logger.info(f"User '{username}' token validation passed (K8s mode)")
-
-            # Create role and permissions
-            logger.debug(f"Assigning {user_role.value} role on {resource_type.value} to user '{username}'")
-            self.user_manager.create_role(
-                name=username,
-                workspace_name=workspace,
-                role=user_role,
-                resources=[resource_type]
-            )
-            logger.info(f"Assigned {user_role.value} permissions on {resource_type.value} to user '{username}'")
-
-            # Set authentication context
-            logger.debug(f"Setting authentication context for user '{username}'")
-            set_user_context(user_info=user_info)
-            logger.info(f"Authentication context set for user '{username}'")
-
-            # Create UserInfo object
-            user_info_obj = UserInfo(uname=user_info[0], upass=user_info[1], workspace=workspace)
-
-            # Add user to cleanup list
-            self.test_context.add_user_for_cleanup(user_info_obj)
-            logger.debug(f"Added user '{username}' to cleanup list")
-
-            return user_info_obj
-        return _create_user
-
-    def _execute_actions(self, test_data: TestData) -> None:
-        """Execute action sequence for the test.
-
-        Handles both single actions and sequences of actions for complex workflows.
-        Stops execution on first error for expected failure tests.
+        Iterates over test_steps and executes actions and validations for each step.
+        Actions may fail (especially in negative tests), but validations should confirm
+        whether the failure was expected or not.
 
         Args:
-            test_data: Test configuration containing actions to execute.
+            test_data: Test configuration containing test steps to execute.
         """
-        if not test_data.action_func:
-            logger.debug("Step 4: No action to execute, proceeding to validation")
+        if not hasattr(test_data, 'test_steps') or not test_data.test_steps:
+            logger.debug("No test steps to execute")
             return
 
-        # Handle both single action and list of actions
-        actions = test_data.action_func if isinstance(test_data.action_func, list) else [test_data.action_func]
-        logger.info(f"Executing {len(actions)} action(s)")
+        # Handle both single TestStep and list of TestSteps
+        test_steps = test_data.test_steps if isinstance(test_data.test_steps, list) else [test_data.test_steps]
+        logger.info(f"Executing {len(test_steps)} test step(s)")
 
-        for i, action in enumerate(actions, 1):
-            action_name = action.__name__
-            logger.info(f"Step 4.{i}: Executing action '{action_name}'")
-            try:
-                action(self.test_context)
-                logger.info(f"Action '{action_name}' completed without exception")
-            except Exception as e:
-                # Store exception for validation to verify expected failures
-                logger.warning(f"Action '{action_name}' raised exception: {type(e).__name__}: {e}")
-                self.test_context.last_error = e
-                # For expected failures, stop executing subsequent actions
-                if i < len(actions):
-                    logger.info(f"Stopping action sequence at action {i} due to exception")
-                break
+        for i, step in enumerate(test_steps, 1):
+            logger.info(f"--- Test Step {i} ---")
 
-    def _execute_validations(self, test_data: TestData) -> None:
-        """Execute validation sequence for the test.
+            if step.user_info:
+                # Step 2: Create user with permissions
+                logger.info(f"Step 2: Creating user with {step.user_info.verbs} permissions on {[rt.value for rt in step.user_info.resource_types]} in workspace '{step.user_info.workspace}'")
+                user_info: UserInfo = self._create_user(
+                    workspace=step.user_info.workspace,
+                    verbs=step.user_info.verbs,
+                    resource_types=step.user_info.resource_types,
+                    subresources=step.user_info.subresources
+                )
+                logger.info(f"Created user: {user_info.uname}")
+                self.test_context.active_user = user_info
+                self.test_context.user_client = user_info.client
+                logger.debug(f"Created authenticated MLflow client for user: {user_info.uname}")
 
-        Handles both single validations and sequences of validations.
-        Raises AssertionError on first validation failure.
+            if step.workspace_to_use:
+                mlflow.set_workspace(step.workspace_to_use)
+
+            # Execute action if present (don't stop on failure - validation will check if it was expected)
+            if step.action_func:
+                self._execute_action(step.action_func, i)
+
+            # Execute validation if present
+            if step.validate_func:
+                # Safely get action name, handling case where action_func might be None
+                action_name = getattr(step.action_func, '__name__', '<no-action>')
+                self._execute_validation(validate_func=step.validate_func, step_number=i, action_name=action_name)
+        if test_data.user_info:
+            self.test_context.active_user = test_data.user_info
+            self.test_context.user_client = test_data.user_info.client
+
+    def _execute_action(self, action_func, step_number: int) -> None:
+        """Execute a single action function.
+
+        Actions may succeed or fail. Failures are stored in test_context.last_error
+        for validation functions to verify if the failure was expected.
 
         Args:
-            test_data: Test configuration containing validations to execute.
+            action_func: The action function to execute.
+            step_number: The step number for logging.
+        """
+        action_name = action_func.__name__
+        logger.info(f"Step {step_number}: Executing action '{action_name}'")
+
+        try:
+            action_func(self.test_context)
+            logger.info(f"Action '{action_name}' completed without exception")
+        except Exception as e:
+            # Store structured error response for validation to verify expected failures
+            logger.warning(f"Action '{action_name}' raised exception: {type(e).__name__}: {e}")
+
+            # Create structured error response with context
+            workspace = getattr(self.test_context, 'active_workspace', None)
+            user = getattr(self.test_context.active_user, 'uname', None) if self.test_context.active_user else None
+
+            self.test_context.last_error = ErrorResponse.from_exception(
+                exception=e,
+                workspace=workspace,
+                user=user
+            )
+            logger.debug(f"Created structured error response: {self.test_context.last_error.error.code} - {self.test_context.last_error.error.message}")
+
+    def _execute_validation(self, validate_func, step_number: int, action_name: str) -> None:
+        """Execute a single validation function.
+
+        Args:
+            validate_func: The validation function to execute.
+            step_number: The step number for logging.
+            action_name: The action that was executed before this validation.
 
         Raises:
-            AssertionError: If any validation fails.
+            AssertionError: If validation fails.
         """
-        # Handle both single validation and list of validations
-        validations = test_data.validate_func if isinstance(test_data.validate_func, list) else [test_data.validate_func]
-        logger.info(f"Step 5: Executing {len(validations)} validation(s)")
+        validation_name = validate_func.__name__
+        logger.info(f"Step {step_number}: Executing validation '{validation_name}' for action '{action_name}'")
 
-        for i, validation in enumerate(validations, 1):
-            validation_name = validation.__name__
-            logger.info(f"Step 5.{i}: Executing validation '{validation_name}'")
-            try:
-                validation(self.test_context)
-                logger.info(f"Validation '{validation_name}' passed successfully")
-            except AssertionError as e:
-                logger.error(f"Validation '{validation_name}' failed: {e}")
-                logger.error(f"Test FAILED: {test_data.test_name}")
-                raise
+        # Generic error handling: if action failed and this is not an "expected failure" validation,
+        # show the actual action error instead of letting validation give misleading messages
+        if (self.test_context.last_error is not None and
+            validation_name != 'validate_authentication_denied'):
+
+            error_response = self.test_context.last_error
+            user_name = self.test_context.active_user.uname if self.test_context.active_user else "unknown"
+            workspace = self.test_context.active_workspace or "unknown"
+
+            logger.error(f"Validation '{validation_name}' failed because action '{action_name}' encountered an error for user '{user_name}' in workspace '{workspace}': {error_response.error.code} - {error_response.error.message}")
+
+            # Provide detailed error message showing the actual action failure
+            error_msg = f"Action '{action_name}' failed for user {user_name} in workspace {workspace}: {error_response.error.code} - {error_response.error.message}"
+            if error_response.error.details:
+                error_msg += f"\nDetails: {error_response.error.details}"
+
+            raise AssertionError(error_msg)
+
+        try:
+            validate_func(self.test_context)
+            logger.info(f"Validation '{validation_name}' passed successfully")
+        except AssertionError as e:
+            logger.error(f"Validation '{validation_name}' for action '{action_name}' failed: {e}")
+            raise

@@ -6,7 +6,7 @@ operations (logging, listing, downloading, model operations) based on expected o
 
 import logging
 import os
-from ..shared import TestContext
+from ..shared import TestContext, ErrorResponse
 from ..constants.config import Config
 
 logger = logging.getLogger(__name__)
@@ -72,6 +72,30 @@ def validate_artifact_downloaded(test_context: TestContext) -> None:
     logger.info("Successfully validated artifact download and content match")
 
 
+def validate_model_created(test_context: TestContext) -> None:
+    """Validate that a model was successfully created.
+
+    Checks that model is created and available in test context.
+
+    Args:
+        test_context: Test context containing created model.
+
+    Raises:
+        AssertionError: If model is not created.
+    """
+    logger.info("Validating model was successfully created")
+
+    # Validate model is set
+    assert test_context.model is not None, \
+        "Model not created in test context"
+
+    # Validate model has predict method (basic sklearn interface check)
+    assert hasattr(test_context.model, 'predict'), \
+        "Created model does not have predict method"
+
+    logger.info("Successfully validated model creation")
+
+
 def validate_model_logged(test_context: TestContext) -> None:
     """Validate that a model was successfully logged to MLflow.
 
@@ -89,7 +113,7 @@ def validate_model_logged(test_context: TestContext) -> None:
     assert test_context.model_uri is not None, \
         "Model URI not set after logging model"
 
-    # Validate URI format (should start with 'runs:/' for logged models)
+    # Validate URI format (should start with 'models:/' for logged models)
     assert test_context.model_uri.startswith('models:/'), \
         f"Invalid model URI format: {test_context.model_uri}"
 
@@ -160,7 +184,10 @@ def validate_storage(test_context: TestContext) -> None:
         assert is_file, \
             f"Expected File storage (mlflow-artifacts:/...), but got: {test_context.artifact_location}"
 
-    logger.info(f"Successfully validated S3 storage: {test_context.artifact_location}")
+    if Config.ARTIFACT_STORAGE == "s3" and not Config.SERVE_ARTIFACTS:
+        logger.info(f"Successfully validated S3 storage: {test_context.artifact_location}")
+    else:
+        logger.info(f"Successfully validated File storage: {test_context.artifact_location}")
 
 
 def validate_run_created(test_context: TestContext) -> None:
@@ -177,8 +204,11 @@ def validate_run_created(test_context: TestContext) -> None:
     logger.info("Validating MLflow run was successfully created")
 
     # Validate no error occurred
-    assert test_context.last_error is None, \
-        f"Run creation failed: {test_context.last_error}"
+    if test_context.last_error is not None:
+        error_response: ErrorResponse = test_context.last_error
+        raise AssertionError(
+            f"Run creation failed: {error_response.error.code} - {error_response.error.message}"
+        )
     logger.debug("No errors detected during run creation")
 
     # Validate run ID is set
@@ -186,3 +216,27 @@ def validate_run_created(test_context: TestContext) -> None:
         "Run ID not set after starting run"
 
     logger.info(f"Successfully validated run creation (run_id: {test_context.current_run_id})")
+
+
+def validate_run_ended(test_context: TestContext) -> None:
+    """Validate that an MLflow run was successfully ended.
+
+    Checks that no error occurred during run ending and the run context is cleared.
+
+    Args:
+        test_context: Test context containing run information.
+
+    Raises:
+        AssertionError: If run ending failed or an error occurred.
+    """
+    logger.info("Validating MLflow run was successfully ended")
+
+    # Validate no error occurred
+    if test_context.last_error is not None:
+        error_response: ErrorResponse = test_context.last_error
+        raise AssertionError(
+            f"Run ending failed: {error_response.error.code} - {error_response.error.message}"
+        )
+    logger.debug("No errors detected during run ending")
+
+    logger.info("Successfully validated run ending")

@@ -28,7 +28,6 @@ def action_get_experiment(test_context: TestContext) -> None:
 
     # Set the workspace context in MLflow before making API calls
     logger.debug(f"Setting MLflow workspace to: '{test_context.active_workspace}'")
-    mlflow.set_workspace(test_context.active_workspace)
 
     experiment_id = test_context.resource_map[ResourceType.EXPERIMENTS][test_context.active_workspace]
     logger.debug(f"Retrieving experiment with ID: {experiment_id}")
