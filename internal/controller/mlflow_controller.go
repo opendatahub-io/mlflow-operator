@@ -163,8 +163,20 @@ func (r *MLflowReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		platformCABundleExists = true
 		log.V(1).Info("Found platform CA bundle ConfigMap", "name", PlatformTrustedCABundleConfigMapName, "namespace", targetNamespace)
 	} else if !errors.IsNotFound(err) {
-		// Real error (not just ConfigMap NotFound) - log and continue
-		log.Error(err, "Failed to check for platform CA bundle ConfigMap")
+		// Real error (not just ConfigMap NotFound) - this indicates a serious issue
+		// like RBAC permissions or API server problems that the admin must fix
+		msg := fmt.Sprintf("Failed to check for platform CA bundle ConfigMap %q: %v", PlatformTrustedCABundleConfigMapName, err)
+		log.Error(err, msg)
+		meta.SetStatusCondition(&mlflow.Status.Conditions, metav1.Condition{
+			Type:    "Available",
+			Status:  metav1.ConditionFalse,
+			Reason:  "PlatformCABundleError",
+			Message: msg,
+		})
+		if statusErr := r.Status().Update(ctx, mlflow); statusErr != nil {
+			log.Error(statusErr, "Failed to update MLflow status")
+		}
+		return ctrl.Result{}, fmt.Errorf("%s", msg)
 	}
 
 	// Render the Helm chart

@@ -31,6 +31,10 @@ import (
 
 const (
 	deploymentKind = "Deployment"
+
+	// CA bundle test constants - these match values from values.yaml and deployment.yaml
+	caCombinedVolume = "combined-ca-bundle"
+	caCombinedBundle = "/etc/pki/tls/certs/combined/ca-bundle.crt"
 )
 
 func TestMlflowToHelmValues_Storage(t *testing.T) {
@@ -1167,14 +1171,14 @@ func TestMlflowToHelmValues_CABundle(t *testing.T) {
 		t.Fatalf("mlflowToHelmValues() error = %v", err)
 	}
 
-	platformBundle := values["platformCABundle"].(map[string]interface{})
-	if platformBundle["enabled"].(bool) != false {
-		t.Error("platformCABundle should be disabled when ConfigMap doesn't exist")
-	}
-	// caBundle should be disabled when no CA bundles are configured
+	// caBundle should have empty configMaps when no CA bundles are configured
 	caBundle := values["caBundle"].(map[string]interface{})
-	if caBundle["enabled"].(bool) != false {
-		t.Error("caBundle should be disabled when no CA bundles are configured")
+	configMaps := caBundle["configMaps"].([]map[string]interface{})
+	if len(configMaps) != 0 {
+		t.Errorf("caBundle.configMaps should be empty, got %d", len(configMaps))
+	}
+	if caBundle["mountPaths"].(string) != "" {
+		t.Errorf("caBundle.mountPaths should be empty, got %q", caBundle["mountPaths"])
 	}
 
 	// Test: user-provided CA bundle only
@@ -1188,17 +1192,19 @@ func TestMlflowToHelmValues_CABundle(t *testing.T) {
 		t.Fatalf("mlflowToHelmValues() error = %v", err)
 	}
 
-	userBundle := values["caBundleConfigMap"].(map[string]interface{})
-	if userBundle["enabled"].(bool) != true || userBundle["name"].(string) != "my-ca" {
-		t.Error("caBundleConfigMap should be enabled with correct name")
-	}
-	// caBundle should be enabled with correct file path
 	caBundle = values["caBundle"].(map[string]interface{})
-	if caBundle["enabled"].(bool) != true {
-		t.Error("caBundle should be enabled when user CA bundle is configured")
+	configMaps = caBundle["configMaps"].([]map[string]interface{})
+	if len(configMaps) != 1 {
+		t.Fatalf("caBundle.configMaps should have 1 entry, got %d", len(configMaps))
 	}
-	if caBundle["filePath"].(string) != caCombinedBundle {
-		t.Errorf("caBundle.filePath = %v, want %v", caBundle["filePath"], caCombinedBundle)
+	if configMaps[0]["name"].(string) != "my-ca" {
+		t.Errorf("configMaps[0].name = %v, want my-ca", configMaps[0]["name"])
+	}
+	if configMaps[0]["mountPath"].(string) != caCustomMount {
+		t.Errorf("configMaps[0].mountPath = %v, want %v", configMaps[0]["mountPath"], caCustomMount)
+	}
+	if caBundle["mountPaths"].(string) != caCustomMount {
+		t.Errorf("caBundle.mountPaths = %v, want %v", caBundle["mountPaths"], caCustomMount)
 	}
 
 	// Test: ODH CA bundle only (no user-provided)
@@ -1210,20 +1216,22 @@ func TestMlflowToHelmValues_CABundle(t *testing.T) {
 		t.Fatalf("mlflowToHelmValues() error = %v", err)
 	}
 
-	platformBundle = values["platformCABundle"].(map[string]interface{})
-	if platformBundle["enabled"].(bool) != true {
-		t.Error("platformCABundle should be enabled when ConfigMap exists")
-	}
-	// caBundle should be enabled with correct file path
 	caBundle = values["caBundle"].(map[string]interface{})
-	if caBundle["enabled"].(bool) != true {
-		t.Error("caBundle should be enabled when platform CA bundle exists")
+	configMaps = caBundle["configMaps"].([]map[string]interface{})
+	if len(configMaps) != 1 {
+		t.Fatalf("caBundle.configMaps should have 1 entry, got %d", len(configMaps))
 	}
-	if caBundle["filePath"].(string) != caCombinedBundle {
-		t.Errorf("caBundle.filePath = %v, want %v", caBundle["filePath"], caCombinedBundle)
+	if configMaps[0]["name"].(string) != PlatformTrustedCABundleConfigMapName {
+		t.Errorf("configMaps[0].name = %v, want %v", configMaps[0]["name"], PlatformTrustedCABundleConfigMapName)
+	}
+	if configMaps[0]["mountPath"].(string) != caPlatformMount {
+		t.Errorf("configMaps[0].mountPath = %v, want %v", configMaps[0]["mountPath"], caPlatformMount)
+	}
+	if caBundle["mountPaths"].(string) != caPlatformMount {
+		t.Errorf("caBundle.mountPaths = %v, want %v", caBundle["mountPaths"], caPlatformMount)
 	}
 
-	// Test: both CA bundles enabled - combined bundle is used
+	// Test: both CA bundles enabled - combined bundle has both ConfigMaps
 	values, err = renderer.mlflowToHelmValues(&mlflowv1.MLflow{
 		ObjectMeta: metav1.ObjectMeta{Name: "mlflow"},
 		Spec: mlflowv1.MLflowSpec{
@@ -1234,15 +1242,22 @@ func TestMlflowToHelmValues_CABundle(t *testing.T) {
 		t.Fatalf("mlflowToHelmValues() error = %v", err)
 	}
 
-	userBundle = values["caBundleConfigMap"].(map[string]interface{})
-	platformBundle = values["platformCABundle"].(map[string]interface{})
-	if userBundle["enabled"].(bool) != true || platformBundle["enabled"].(bool) != true {
-		t.Error("both CA bundles should be enabled when both are configured")
-	}
-	// caBundle.filePath should point to combined bundle (includes system + platform + user CAs)
 	caBundle = values["caBundle"].(map[string]interface{})
-	if caBundle["filePath"].(string) != caCombinedBundle {
-		t.Errorf("caBundle.filePath = %v, want %v", caBundle["filePath"], caCombinedBundle)
+	configMaps = caBundle["configMaps"].([]map[string]interface{})
+	if len(configMaps) != 2 {
+		t.Fatalf("caBundle.configMaps should have 2 entries, got %d", len(configMaps))
+	}
+	// Platform CA should be first
+	if configMaps[0]["name"].(string) != PlatformTrustedCABundleConfigMapName {
+		t.Errorf("configMaps[0].name = %v, want %v", configMaps[0]["name"], PlatformTrustedCABundleConfigMapName)
+	}
+	// Custom CA should be second
+	if configMaps[1]["name"].(string) != "my-ca" {
+		t.Errorf("configMaps[1].name = %v, want my-ca", configMaps[1]["name"])
+	}
+	expectedMountPaths := caPlatformMount + " " + caCustomMount
+	if caBundle["mountPaths"].(string) != expectedMountPaths {
+		t.Errorf("caBundle.mountPaths = %v, want %v", caBundle["mountPaths"], expectedMountPaths)
 	}
 }
 
@@ -1328,49 +1343,37 @@ func TestRenderChart_CABundle(t *testing.T) {
 	}
 
 	// Check combined-ca-bundle volume mount exists on main container
-	// Note: Platform and custom CA bundles are only mounted on init/sidecar containers
-	// The main container only needs the combined bundle
 	volumeMounts, _, _ := unstructured.NestedSlice(container, "volumeMounts")
-	foundCombined, foundCustom := false, false
+	foundCombined := false
 	for _, vm := range volumeMounts {
 		name := vm.(map[string]interface{})["name"].(string)
 		if name == caCombinedVolume {
 			foundCombined = true
 		}
-		if name == caCustomVolume {
-			foundCustom = true
-		}
 	}
 	if !foundCombined {
 		t.Errorf("%s volume mount not found on main container", caCombinedVolume)
 	}
-	if !foundCustom {
-		t.Error("custom CA bundle volume mount not found")
-	}
 
 	// Check that init container has all required volume mounts for combining bundles
+	// With the new structure, volume names are ca-bundle-0 (platform) and ca-bundle-1 (custom)
 	initVolumeMounts, _, _ := unstructured.NestedSlice(initContainer, "volumeMounts")
-	foundInitCombined, foundInitCustom, foundInitPlatform := false, false, false
+	foundInitCombined := false
+	caVolumeCount := 0
 	for _, vm := range initVolumeMounts {
 		name := vm.(map[string]interface{})["name"].(string)
 		if name == caCombinedVolume {
 			foundInitCombined = true
 		}
-		if name == caCustomVolume {
-			foundInitCustom = true
-		}
-		if name == caPlatformVolume {
-			foundInitPlatform = true
+		if len(name) > 10 && name[:10] == "ca-bundle-" {
+			caVolumeCount++
 		}
 	}
 	if !foundInitCombined {
 		t.Errorf("init container: %s volume mount not found", caCombinedVolume)
 	}
-	if !foundInitCustom {
-		t.Error("init container: custom CA bundle volume mount not found")
-	}
-	if !foundInitPlatform {
-		t.Error("init container: platform CA bundle volume mount not found")
+	if caVolumeCount != 2 {
+		t.Errorf("init container: expected 2 ca-bundle-* volume mounts, got %d", caVolumeCount)
 	}
 
 	// Check volumes exist including combined-ca-bundle emptyDir
@@ -1386,7 +1389,8 @@ func TestRenderChart_CABundle(t *testing.T) {
 				t.Errorf("%s volume should be an emptyDir", caCombinedVolume)
 			}
 		}
-		if name == caCustomVolume || name == caPlatformVolume {
+		// Check CA ConfigMap volumes have optional: true
+		if len(name) > 10 && name[:10] == "ca-bundle-" {
 			configMap, _, _ := unstructured.NestedMap(volMap, "configMap")
 			if optional, ok := configMap["optional"].(bool); !ok || !optional {
 				t.Errorf("volume %s should have optional: true", name)

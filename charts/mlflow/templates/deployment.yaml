@@ -71,9 +71,6 @@ spec:
           configMap:
             name: {{ $cm.name }}
             optional: true
-            items:
-              - key: {{ .Values.caBundleConfigMap.key }}
-                path: custom-ca-bundle.crt
         {{- end }}
         # Combined CA bundle output volume
         - name: combined-ca-bundle
