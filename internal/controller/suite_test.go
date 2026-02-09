@@ -34,6 +34,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 
+	mlflowconfigv1 "github.com/opendatahub-io/mlflow-operator/api/mlflowconfig/v1"
 	mlflowv1 "github.com/opendatahub-io/mlflow-operator/api/v1"
 	// +kubebuilder:scaffold:imports
 )
@@ -61,6 +62,9 @@ var _ = BeforeSuite(func() {
 	ctx, cancel = context.WithCancel(context.TODO())
 
 	err := mlflowv1.AddToScheme(scheme.Scheme)
+	Expect(err).NotTo(HaveOccurred())
+
+	err = mlflowconfigv1.AddToScheme(scheme.Scheme)
 	Expect(err).NotTo(HaveOccurred())
 
 	err = consolev1.AddToScheme(scheme.Scheme)

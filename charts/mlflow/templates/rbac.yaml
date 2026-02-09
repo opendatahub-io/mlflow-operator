@@ -12,6 +12,15 @@ rules:
   - apiGroups: [""]
     resources: ["namespaces"]
     verbs: ["get", "list", "watch"]
+  # Required for namespace-specific artifact storage credentials
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames: ["mlflow-artifact-connection"]
+    verbs: ["get"]
+  # Required for workspace-aware configuration lookups
+  - apiGroups: ["mlflow.kubeflow.org"]
+    resources: ["mlflowconfigs"]
+    verbs: ["get", "list", "watch"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding

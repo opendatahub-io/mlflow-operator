@@ -4,9 +4,9 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.19.0
-  name: mlflowconfigs.mlflow.opendatahub.io
+  name: mlflowconfigs.mlflow.kubeflow.org
 spec:
-  group: mlflow.opendatahub.io
+  group: mlflow.kubeflow.org
   names:
     kind: MLflowConfig
     listKind: MLflowConfigList
@@ -49,7 +49,7 @@ spec:
                   from the secret to form the resolved artifact root.
 
                   Example:
-                    artifactRootSecret: "ds-team-s3-connection-secret"  # Contains bucket: ds-team-bucket
+                    artifactRootSecret: "mlflow-artifact-connection"  # Contains bucket: ds-team-bucket
                     artifactRootPath: "experiments"
                     resolved artifact root: s3://ds-team-bucket/experiments
                 type: string
@@ -63,7 +63,7 @@ spec:
                     apiVersion: v1
                     kind: Secret
                     metadata:
-                      name: ds-team-s3-connection-secret
+                      name: mlflow-artifact-connection
                       namespace: ds-team-namespace
                     data:
                       AWS_ACCESS_KEY_ID: <base64-encoded>
@@ -73,6 +73,9 @@ spec:
                       AWS_DEFAULT_REGION: <base64-encoded>  # Optional (default region is not always required, e.g. minio)
                 minLength: 1
                 type: string
+                x-kubernetes-validations:
+                - message: artifactRootSecret must be 'mlflow-artifact-connection'
+                  rule: self == 'mlflow-artifact-connection'
             required:
             - artifactRootSecret
             type: object

@@ -13,6 +13,14 @@ rules:
   - list
   - watch
 - apiGroups:
+  - ""
+  resourceNames:
+  - mlflow-artifact-connection
+  resources:
+  - secrets
+  verbs:
+  - get
+- apiGroups:
   - console.openshift.io
   resources:
   - consolelinks

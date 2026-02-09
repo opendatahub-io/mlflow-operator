@@ -356,12 +356,12 @@ spec:
 
 		It("should validate CEL constraint for singleton MLflowConfig resource", func() {
 			By("creating an MLflowConfig resource with the correct name 'mlflow'")
-			mlflowConfigYAML := `apiVersion: mlflow.opendatahub.io/v1
+			mlflowConfigYAML := `apiVersion: mlflow.kubeflow.org/v1
 kind: MLflowConfig
 metadata:
   name: mlflow
 spec:
-  artifactRootSecret: data-science-team-s3-credentials`
+  artifactRootSecret: mlflow-artifact-connection`
 
 			mlflowConfigFile := filepath.Join("/tmp", "mlflowconfig-valid.yaml")
 			err := os.WriteFile(mlflowConfigFile, []byte(mlflowConfigYAML), os.FileMode(0o644))
@@ -383,12 +383,12 @@ spec:
 			Expect(output).To(Equal("mlflow"), "MLflowConfig resource should exist with name 'mlflow'")
 
 			By("attempting to create an MLflowConfig resource with an invalid name")
-			invalidConfigYAML := `apiVersion: mlflow.opendatahub.io/v1
+			invalidConfigYAML := `apiVersion: mlflow.kubeflow.org/v1
 kind: MLflowConfig
 metadata:
   name: invalid-name
 spec:
-  artifactRootSecret: data-science-team-s3-credentials`
+  artifactRootSecret: mlflow-artifact-connection`
 
 			invalidConfigFile := filepath.Join("/tmp", "mlflowconfig-invalid.yaml")
 			err = os.WriteFile(invalidConfigFile, []byte(invalidConfigYAML), os.FileMode(0o644))
@@ -404,6 +404,29 @@ spec:
 			Expect(err).To(HaveOccurred(), "Should fail to create MLflowConfig with invalid name")
 			Expect(output).To(ContainSubstring("MLflowConfig resource name must be 'mlflow'"),
 				"Error message should indicate name validation failure")
+
+			By("attempting to update MLflowConfig with an invalid artifactRootSecret")
+			invalidSecretConfigYAML := `apiVersion: mlflow.kubeflow.org/v1
+kind: MLflowConfig
+metadata:
+  name: mlflow
+spec:
+  artifactRootSecret: wrong-secret-name`
+
+			invalidSecretConfigFile := filepath.Join("/tmp", "mlflowconfig-invalid-secret.yaml")
+			err = os.WriteFile(invalidSecretConfigFile, []byte(invalidSecretConfigYAML), os.FileMode(0o644))
+			Expect(err).NotTo(HaveOccurred(), "Failed to write MLflowConfig manifest with invalid artifactRootSecret")
+			defer func() {
+				if removeErr := os.Remove(invalidSecretConfigFile); removeErr != nil {
+					_, _ = fmt.Fprintf(GinkgoWriter, "failed to remove %s: %v\n", invalidSecretConfigFile, removeErr)
+				}
+			}()
+
+			cmd = exec.Command("kubectl", "apply", "-n", namespace, "-f", invalidSecretConfigFile)
+			output, err = utils.Run(cmd)
+			Expect(err).To(HaveOccurred(), "Should fail to update MLflowConfig with invalid artifactRootSecret")
+			Expect(output).To(ContainSubstring("artifactRootSecret must be 'mlflow-artifact-connection'"),
+				"Error message should indicate artifactRootSecret CEL validation failure")
 
 			By("cleaning up the valid MLflowConfig resource")
 			cmd = exec.Command("kubectl", "delete", "mlflowconfig", "mlflow", "-n", namespace)

@@ -71,7 +71,7 @@ echo "----------------------------------------------"
 # CRD configuration: (name:crd_file:crd_resource_name)
 CRDS=(
     "MLflow:config/crd/bases/mlflow.opendatahub.io_mlflows.yaml:mlflows.mlflow.opendatahub.io"
-    "MLflowConfig:config/crd/bases/mlflow.opendatahub.io_mlflowconfigs.yaml:mlflowconfigs.mlflow.opendatahub.io"
+    "MLflowConfig:config/crd/bases/mlflow.kubeflow.org_mlflowconfigs.yaml:mlflowconfigs.mlflow.kubeflow.org"
 )
 
 # Install CRDs

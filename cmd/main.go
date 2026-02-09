@@ -45,6 +45,7 @@ import (
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 
+	mlflowconfigv1 "github.com/opendatahub-io/mlflow-operator/api/mlflowconfig/v1"
 	mlflowv1 "github.com/opendatahub-io/mlflow-operator/api/v1"
 	"github.com/opendatahub-io/mlflow-operator/internal/controller"
 	// +kubebuilder:scaffold:imports
@@ -58,6 +59,7 @@ var (
 func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
 	utilruntime.Must(mlflowv1.AddToScheme(scheme))
+	utilruntime.Must(mlflowconfigv1.AddToScheme(scheme))
 	utilruntime.Must(consolev1.AddToScheme(scheme))
 	utilruntime.Must(gatewayv1.Install(scheme))
 	// +kubebuilder:scaffold:scheme

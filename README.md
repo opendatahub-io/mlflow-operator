@@ -218,7 +218,9 @@ The NetworkPolicy can be customized by modifying the Helm chart values or by cre
 ### Namespace Overrides (MLflowConfig)
 
 `MLflowConfig` is a namespaced singleton used to override artifact storage settings for a namespace.
+Use `apiVersion: mlflow.kubeflow.org/v1` for `MLflowConfig` resources.
 The `metadata.name` must be `mlflow` in every namespace where you want to apply overrides.
+The `spec.artifactRootSecret` must be `mlflow-artifact-connection` to keep Secret access tightly scoped.
 
 ### Example Configurations
 
