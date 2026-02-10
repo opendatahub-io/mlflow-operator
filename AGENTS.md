@@ -207,10 +207,26 @@ make test
 End-to-end tests are located in `test/e2e/` and require a Kind cluster:
 
 ```bash
-make test-e2e
+make test-e2e-full
 ```
 
-This will automatically create a Kind cluster, run the tests, and clean up the cluster afterwards.
+`make test-e2e` expects an already-running Kubernetes cluster and does not create one.
+`make test-e2e-full` creates a Kind cluster (`KIND_CLUSTER`, default `mlflow`), builds/loads the image, and runs e2e tests.
+Cluster cleanup is a separate step:
+
+```bash
+make cleanup-kind-cluster
+```
+
+Quick workflow:
+
+```bash
+# Full e2e run against Kind
+make test-e2e-full
+
+# Cleanup when done
+make cleanup-kind-cluster
+```
 
 ### Linting
 
