@@ -45,6 +45,14 @@ rules:
   - update
   - watch
 - apiGroups:
+  - mlflow.kubeflow.org
+  resources:
+  - mlflowconfigs
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
   - mlflow.opendatahub.io
   resources:
   - mlflows

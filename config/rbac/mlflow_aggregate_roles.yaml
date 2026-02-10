@@ -37,6 +37,7 @@ rules:
   - apiGroups:
       - mlflow.kubeflow.org
     resources:
+      - datasets
       - experiments
       - registeredmodels
       - jobs
@@ -81,6 +82,7 @@ rules:
   - apiGroups:
       - mlflow.kubeflow.org
     resources:
+      - datasets
       - experiments
       - registeredmodels
       - jobs
