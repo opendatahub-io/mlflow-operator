@@ -1188,7 +1188,7 @@ func TestMlflowToHelmValues_CABundle(t *testing.T) {
 	values, err = renderer.mlflowToHelmValues(&mlflowv1.MLflow{
 		ObjectMeta: metav1.ObjectMeta{Name: "mlflow"},
 		Spec: mlflowv1.MLflowSpec{
-			CABundleConfigMap: &mlflowv1.CABundleConfigMapSpec{Name: "my-ca", Key: "ca.crt"},
+			CABundleConfigMap: &mlflowv1.CABundleConfigMapSpec{Name: "my-ca"},
 		},
 	}, "test-ns", RenderOptions{PlatformTrustedCABundleExists: false})
 	if err != nil {
@@ -1232,7 +1232,7 @@ func TestMlflowToHelmValues_CABundle(t *testing.T) {
 	values, err = renderer.mlflowToHelmValues(&mlflowv1.MLflow{
 		ObjectMeta: metav1.ObjectMeta{Name: "mlflow"},
 		Spec: mlflowv1.MLflowSpec{
-			CABundleConfigMap: &mlflowv1.CABundleConfigMapSpec{Name: "my-ca", Key: "ca.crt"},
+			CABundleConfigMap: &mlflowv1.CABundleConfigMapSpec{Name: "my-ca"},
 		},
 	}, "test-ns", RenderOptions{PlatformTrustedCABundleExists: true})
 	if err != nil {
@@ -1261,7 +1261,7 @@ func TestRenderChart_CABundle(t *testing.T) {
 	mlflow := &mlflowv1.MLflow{
 		ObjectMeta: metav1.ObjectMeta{Name: "mlflow"},
 		Spec: mlflowv1.MLflowSpec{
-			CABundleConfigMap: &mlflowv1.CABundleConfigMapSpec{Name: "my-ca", Key: "ca.crt"},
+			CABundleConfigMap: &mlflowv1.CABundleConfigMapSpec{Name: "my-ca"},
 		},
 	}
 

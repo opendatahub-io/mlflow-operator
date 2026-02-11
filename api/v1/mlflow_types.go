@@ -188,17 +188,13 @@ type MLflowSpec struct {
 	CABundleConfigMap *CABundleConfigMapSpec `json:"caBundleConfigMap,omitempty"`
 }
 
-// CABundleConfigMapSpec specifies a ConfigMap containing a CA bundle
+// CABundleConfigMapSpec specifies a ConfigMap containing CA certificates.
+// All .crt and .pem files in the ConfigMap will be included in the combined CA bundle.
 type CABundleConfigMapSpec struct {
-	// Name is the name of the ConfigMap containing the CA bundle
+	// Name is the name of the ConfigMap containing CA certificates
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:MinLength=1
 	Name string `json:"name"`
-
-	// Key is the key in the ConfigMap that contains the CA bundle data
-	// +kubebuilder:validation:Required
-	// +kubebuilder:validation:MinLength=1
-	Key string `json:"key"`
 }
 
 // ImageConfig contains container image configuration

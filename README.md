@@ -233,7 +233,7 @@ The operator combines CA certificates from multiple sources into a single bundle
 
 #### Using a Custom CA Bundle
 
-Create a ConfigMap containing your CA certificates:
+Create a ConfigMap containing your CA certificates (all `.crt` and `.pem` files will be included):
 ```bash
 kubectl create configmap my-ca-bundle \
   --from-file=ca-bundle.crt=/path/to/your/ca-certificates.pem \
@@ -245,7 +245,6 @@ Reference it in your MLflow CR:
 spec:
   caBundleConfigMap:
     name: my-ca-bundle
-    key: ca-bundle.crt
 ```
 
 When CA bundles are present (platform or custom), PostgreSQL connections use `PGSSLMODE=verify-full`. Ensure your PostgreSQL server's certificate is signed by a CA in the bundle, or override via connection string (e.g., `?sslmode=prefer`).
