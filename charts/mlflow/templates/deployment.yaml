@@ -93,10 +93,10 @@ spec:
 {{ include "mlflow.caBundleFunctions" . | indent 14 }}
               combine_ca_bundles
           env:
-            - name: CA_BUNDLE_SYSTEM_PATH
-              value: {{ .Values.caBundle.systemCAPath | quote }}
+            - name: CA_BUNDLE_FILE_PATHS
+              value: {{ include "mlflow.caBundleFilePaths" . | quote }}
             - name: CA_BUNDLE_MOUNT_PATHS
-              value: {{ .Values.caBundle.mountPaths | quote }}
+              value: {{ include "mlflow.caBundleMountPaths" . | quote }}
             - name: CA_BUNDLE_OUTPUT
               value: {{ .Values.caBundle.outputPath | quote }}
           volumeMounts:
@@ -277,7 +277,8 @@ spec:
               # Watch loop
               LAST_CHECKSUM=$(compute_checksum)
               echo "CA bundle watcher started"
-              echo "  Sources: $CA_BUNDLE_SOURCES"
+              echo "  File paths: $CA_BUNDLE_FILE_PATHS"
+              echo "  Mount paths: $CA_BUNDLE_MOUNT_PATHS"
               echo "  Output: $CA_BUNDLE_OUTPUT"
               echo "  Watch interval: ${CA_BUNDLE_WATCH_INTERVAL}s"
               echo "  Initial checksum: $LAST_CHECKSUM"
@@ -298,10 +299,10 @@ spec:
           env:
             - name: CA_BUNDLE_WATCH_INTERVAL
               value: "{{ .Values.caBundle.watchInterval | default 30 }}"
-            - name: CA_BUNDLE_SYSTEM_PATH
-              value: {{ .Values.caBundle.systemCAPath | quote }}
+            - name: CA_BUNDLE_FILE_PATHS
+              value: {{ include "mlflow.caBundleFilePaths" . | quote }}
             - name: CA_BUNDLE_MOUNT_PATHS
-              value: {{ .Values.caBundle.mountPaths | quote }}
+              value: {{ include "mlflow.caBundleMountPaths" . | quote }}
             - name: CA_BUNDLE_OUTPUT
               value: {{ .Values.caBundle.outputPath | quote }}
           volumeMounts:

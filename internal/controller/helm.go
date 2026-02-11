@@ -21,7 +21,6 @@ import (
 	"fmt"
 	"io"
 	"path/filepath"
-	"strings"
 
 	"helm.sh/helm/v3/pkg/chart"
 	"helm.sh/helm/v3/pkg/chart/loader"
@@ -45,6 +44,7 @@ const (
 
 // CA bundle mount paths - used for mounting platform and custom CA ConfigMaps
 const (
+	systemCAPath    = "/etc/pki/tls/certs/ca-bundle.crt"
 	caPlatformMount = "/etc/pki/tls/certs/platform"
 	caCustomMount   = "/etc/pki/tls/certs/custom"
 )
@@ -130,11 +130,16 @@ func (h *HelmRenderer) mlflowToHelmValues(mlflow *mlflowv1.MLflow, namespace str
 
 	values["tls"] = tlsValues
 
-	// CA bundle configuration - build list of ConfigMap volume mounts
-	// System CA path and output path come from values.yaml defaults
-	// The init container/sidecar will glob *.crt and *.pem files from each mount
+	// CA bundle configuration - build list of file paths and ConfigMap volume mounts
+	// The init container/sidecar will:
+	//   1. Include all files from caBundle.filePaths (system CA is always first)
+	//   2. Glob *.crt and *.pem files from each ConfigMap mount path
+	// Mount paths are derived from configMaps in the template via mlflow.caBundleMountPaths
 	var caConfigMaps []map[string]interface{}
-	var caMountPaths []string
+	var caFilePaths []string
+
+	// Always include system CA bundle first
+	caFilePaths = append(caFilePaths, systemCAPath)
 
 	// Add platform CA bundle if detected
 	if opts.PlatformTrustedCABundleExists {
@@ -142,7 +147,6 @@ func (h *HelmRenderer) mlflowToHelmValues(mlflow *mlflowv1.MLflow, namespace str
 			"name":      PlatformTrustedCABundleConfigMapName,
 			"mountPath": caPlatformMount,
 		})
-		caMountPaths = append(caMountPaths, caPlatformMount)
 	}
 
 	// Add user-provided CA bundle if specified
@@ -151,12 +155,11 @@ func (h *HelmRenderer) mlflowToHelmValues(mlflow *mlflowv1.MLflow, namespace str
 			"name":      mlflow.Spec.CABundleConfigMap.Name,
 			"mountPath": caCustomMount,
 		})
-		caMountPaths = append(caMountPaths, caCustomMount)
 	}
 
 	values["caBundle"] = map[string]interface{}{
 		"configMaps": caConfigMaps,
-		"mountPaths": strings.Join(caMountPaths, " "),
+		"filePaths":  caFilePaths,
 	}
 
 	// Use config from environment variables as default, can be overridden by CR spec
