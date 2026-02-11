@@ -40,7 +40,6 @@ rules:
       - datasets
       - experiments
       - registeredmodels
-      - jobs
       - gatewaysecrets
       - gatewayendpoints
       - gatewaymodeldefinitions
@@ -85,7 +84,6 @@ rules:
       - datasets
       - experiments
       - registeredmodels
-      - jobs
       - gatewaysecrets
       - gatewayendpoints
       - gatewaymodeldefinitions
