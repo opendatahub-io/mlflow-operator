@@ -1177,8 +1177,11 @@ func TestMlflowToHelmValues_CABundle(t *testing.T) {
 	if len(configMaps) != 0 {
 		t.Errorf("caBundle.configMaps should be empty, got %d", len(configMaps))
 	}
-	if caBundle["mountPaths"].(string) != "" {
-		t.Errorf("caBundle.mountPaths should be empty, got %q", caBundle["mountPaths"])
+
+	// filePaths should always include the system CA path
+	filePaths := caBundle["filePaths"].([]string)
+	if len(filePaths) != 1 || filePaths[0] != systemCAPath {
+		t.Errorf("caBundle.filePaths should be [%s], got %v", systemCAPath, filePaths)
 	}
 
 	// Test: user-provided CA bundle only
@@ -1203,9 +1206,6 @@ func TestMlflowToHelmValues_CABundle(t *testing.T) {
 	if configMaps[0]["mountPath"].(string) != caCustomMount {
 		t.Errorf("configMaps[0].mountPath = %v, want %v", configMaps[0]["mountPath"], caCustomMount)
 	}
-	if caBundle["mountPaths"].(string) != caCustomMount {
-		t.Errorf("caBundle.mountPaths = %v, want %v", caBundle["mountPaths"], caCustomMount)
-	}
 
 	// Test: ODH CA bundle only (no user-provided)
 	values, err = renderer.mlflowToHelmValues(&mlflowv1.MLflow{
@@ -1226,9 +1226,6 @@ func TestMlflowToHelmValues_CABundle(t *testing.T) {
 	}
 	if configMaps[0]["mountPath"].(string) != caPlatformMount {
 		t.Errorf("configMaps[0].mountPath = %v, want %v", configMaps[0]["mountPath"], caPlatformMount)
-	}
-	if caBundle["mountPaths"].(string) != caPlatformMount {
-		t.Errorf("caBundle.mountPaths = %v, want %v", caBundle["mountPaths"], caPlatformMount)
 	}
 
 	// Test: both CA bundles enabled - combined bundle has both ConfigMaps
@@ -1254,10 +1251,6 @@ func TestMlflowToHelmValues_CABundle(t *testing.T) {
 	// Custom CA should be second
 	if configMaps[1]["name"].(string) != "my-ca" {
 		t.Errorf("configMaps[1].name = %v, want my-ca", configMaps[1]["name"])
-	}
-	expectedMountPaths := caPlatformMount + " " + caCustomMount
-	if caBundle["mountPaths"].(string) != expectedMountPaths {
-		t.Errorf("caBundle.mountPaths = %v, want %v", caBundle["mountPaths"], expectedMountPaths)
 	}
 }
 

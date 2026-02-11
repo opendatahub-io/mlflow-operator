@@ -166,28 +166,24 @@ tolerations: []
 affinity: {}
 
 # CA Bundle configuration for TLS verification
-# The operator populates configMaps and mountPaths from detected/user-specified CA bundles.
 # All .crt and .pem files in each mounted ConfigMap are included.
 caBundle:
-  # System CA bundle path (base certificates from container image)
-  systemCAPath: /etc/pki/tls/certs/ca-bundle.crt
+  # File paths to include in the combined CA bundle (processed in order)
+  filePaths: []
 
   # ConfigMaps to mount as volumes containing CA certificates.
   # Each entry creates a volume from a ConfigMap and mounts it at the specified path.
-  # The init container and sidecar will glob all files under each mountPath
-  # and concatenate them (along with the system CA bundle) into the combined output.
-  # The operator adds entries here for platform-detected and user-specified ConfigMaps.
+  # The init container and sidecar will glob all .crt and .pem files under each mountPath.
   # Example:
   #   configMaps:
-  #     - name: odh-trusted-ca-bundle
+  #     - name: platform-trusted-ca-bundle
   #       mountPath: /etc/pki/tls/certs/platform
   #     - name: my-custom-ca-bundle
   #       mountPath: /etc/pki/tls/certs/custom
   configMaps: []
 
   # Output path for the combined CA bundle PEM file
-  # The directory portion is used as the emptyDir mount path (derived via `dir` in templates)
+  # The directory portion is used as the emptyDir mount path
   outputPath: /etc/pki/tls/certs/combined/ca-bundle.crt
 
-  mountPaths: ""   # Space-separated list of mount paths (computed by operator)
   watchInterval: 30  # Seconds between checks for source file changes
