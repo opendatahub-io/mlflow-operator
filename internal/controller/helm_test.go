@@ -1508,6 +1508,190 @@ func TestRenderChart_NoCABundle(t *testing.T) {
 	}
 }
 
+func TestMlflowToHelmValues_Metrics(t *testing.T) {
+	renderer := &HelmRenderer{}
+
+	tests := []struct {
+		name           string
+		mlflow         *mlflowv1.MLflow
+		namespace      string
+		wantEnabled    bool
+		wantServerName string
+	}{
+		{
+			name: "metrics always enabled with CA-based tlsConfig",
+			mlflow: &mlflowv1.MLflow{
+				ObjectMeta: metav1.ObjectMeta{Name: "mlflow"},
+				Spec:       mlflowv1.MLflowSpec{},
+			},
+			namespace:      "test-namespace",
+			wantEnabled:    true,
+			wantServerName: "mlflow.test-namespace.svc",
+		},
+		{
+			name: "metrics with custom CR name includes suffix in serverName",
+			mlflow: &mlflowv1.MLflow{
+				ObjectMeta: metav1.ObjectMeta{Name: "custom-mlflow"},
+				Spec:       mlflowv1.MLflowSpec{},
+			},
+			namespace:      "opendatahub",
+			wantEnabled:    true,
+			wantServerName: "mlflow-custom-mlflow.opendatahub.svc",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			g := gomega.NewWithT(t)
+
+			values, err := renderer.mlflowToHelmValues(tt.mlflow, tt.namespace, RenderOptions{})
+			g.Expect(err).NotTo(HaveOccurred())
+
+			metrics, ok := values["metrics"].(map[string]interface{})
+			g.Expect(ok).To(BeTrue(), "metrics should be present in values")
+
+			enabled, ok := metrics["enabled"].(bool)
+			g.Expect(ok).To(BeTrue(), "metrics.enabled should be present")
+			g.Expect(enabled).To(Equal(tt.wantEnabled))
+
+			// tlsConfig should always contain CA-based verification
+			tlsConfig, hasTLSConfig := metrics["tlsConfig"].(map[string]interface{})
+			g.Expect(hasTLSConfig).To(BeTrue(), "metrics.tlsConfig should always be present")
+
+			// Verify CA config
+			ca, ok := tlsConfig["ca"].(map[string]interface{})
+			g.Expect(ok).To(BeTrue(), "tlsConfig.ca should be present")
+
+			configMap, ok := ca["configMap"].(map[string]interface{})
+			g.Expect(ok).To(BeTrue(), "tlsConfig.ca.configMap should be present")
+			g.Expect(configMap["name"]).To(Equal("openshift-service-ca.crt"))
+			g.Expect(configMap["key"]).To(Equal("service-ca.crt"))
+
+			// Verify serverName
+			serverName, ok := tlsConfig["serverName"].(string)
+			g.Expect(ok).To(BeTrue(), "tlsConfig.serverName should be present")
+			g.Expect(serverName).To(Equal(tt.wantServerName))
+		})
+	}
+}
+
+func TestRenderChart_ServiceMonitorWithTLSConfig(t *testing.T) {
+	g := gomega.NewWithT(t)
+	renderer := NewHelmRenderer("../../charts/mlflow")
+
+	mlflow := &mlflowv1.MLflow{
+		ObjectMeta: metav1.ObjectMeta{Name: "test-mlflow"},
+		Spec:       mlflowv1.MLflowSpec{},
+	}
+
+	// Render chart - CA-based tlsConfig is always set
+	objs, err := renderer.RenderChart(mlflow, "opendatahub", RenderOptions{})
+	g.Expect(err).NotTo(gomega.HaveOccurred())
+
+	// Find the ServiceMonitor
+	var serviceMonitor *unstructured.Unstructured
+	for _, obj := range objs {
+		if obj.GetKind() == "ServiceMonitor" {
+			serviceMonitor = obj
+			break
+		}
+	}
+	g.Expect(serviceMonitor).NotTo(gomega.BeNil(), "ServiceMonitor should be rendered when metrics.enabled=true")
+
+	// Verify ServiceMonitor metadata
+	g.Expect(serviceMonitor.GetName()).To(gomega.Equal("mlflow-metrics-monitor-test-mlflow"))
+	g.Expect(serviceMonitor.GetNamespace()).To(gomega.Equal("opendatahub"))
+
+	// Verify labels include app.kubernetes.io/name
+	labels := serviceMonitor.GetLabels()
+	g.Expect(labels["app"]).To(gomega.Equal("mlflow"))
+	g.Expect(labels["app.kubernetes.io/name"]).To(gomega.Equal("mlflow-test-mlflow"))
+
+	// Verify endpoints configuration
+	endpoints, found, err := unstructured.NestedSlice(serviceMonitor.Object, "spec", "endpoints")
+	g.Expect(err).NotTo(gomega.HaveOccurred())
+	g.Expect(found).To(gomega.BeTrue())
+	g.Expect(endpoints).To(gomega.HaveLen(1))
+
+	endpoint := endpoints[0].(map[string]interface{})
+	g.Expect(endpoint["path"]).To(gomega.Equal("/metrics"))
+	g.Expect(endpoint["port"]).To(gomega.Equal("https"))
+	g.Expect(endpoint["scheme"]).To(gomega.Equal("https"))
+
+	// Verify TLS config with CA bundle reference
+	tlsConfig, ok := endpoint["tlsConfig"].(map[string]interface{})
+	g.Expect(ok).To(gomega.BeTrue(), "tlsConfig should be present")
+
+	ca, ok := tlsConfig["ca"].(map[string]interface{})
+	g.Expect(ok).To(gomega.BeTrue(), "tlsConfig.ca should be present")
+
+	configMap, ok := ca["configMap"].(map[string]interface{})
+	g.Expect(ok).To(gomega.BeTrue(), "tlsConfig.ca.configMap should be present")
+	g.Expect(configMap["name"]).To(gomega.Equal("openshift-service-ca.crt"))
+	g.Expect(configMap["key"]).To(gomega.Equal("service-ca.crt"))
+
+	// Verify serverName for certificate validation
+	serverName, ok := tlsConfig["serverName"].(string)
+	g.Expect(ok).To(gomega.BeTrue(), "tlsConfig.serverName should be present")
+	g.Expect(serverName).To(gomega.Equal("mlflow-test-mlflow.opendatahub.svc"))
+
+	// Verify selector matches Service labels
+	matchLabels, found, err := unstructured.NestedStringMap(serviceMonitor.Object, "spec", "selector", "matchLabels")
+	g.Expect(err).NotTo(gomega.HaveOccurred())
+	g.Expect(found).To(gomega.BeTrue())
+	g.Expect(matchLabels["app"]).To(gomega.Equal("mlflow"))
+	g.Expect(matchLabels["app.kubernetes.io/name"]).To(gomega.Equal("mlflow-test-mlflow"))
+}
+
+func TestRenderChart_ServiceMonitorDefaultCR(t *testing.T) {
+	g := gomega.NewWithT(t)
+	renderer := NewHelmRenderer("../../charts/mlflow")
+
+	// Default CR name "mlflow" should produce no suffix in service name
+	mlflow := &mlflowv1.MLflow{
+		ObjectMeta: metav1.ObjectMeta{Name: "mlflow"},
+		Spec:       mlflowv1.MLflowSpec{},
+	}
+
+	objs, err := renderer.RenderChart(mlflow, "default", RenderOptions{})
+	g.Expect(err).NotTo(gomega.HaveOccurred())
+
+	// Find the ServiceMonitor
+	var serviceMonitor *unstructured.Unstructured
+	for _, obj := range objs {
+		if obj.GetKind() == "ServiceMonitor" {
+			serviceMonitor = obj
+			break
+		}
+	}
+	g.Expect(serviceMonitor).NotTo(gomega.BeNil(), "ServiceMonitor should be rendered when metrics.enabled=true")
+
+	// Verify endpoints configuration
+	endpoints, found, err := unstructured.NestedSlice(serviceMonitor.Object, "spec", "endpoints")
+	g.Expect(err).NotTo(gomega.HaveOccurred())
+	g.Expect(found).To(gomega.BeTrue())
+	g.Expect(endpoints).To(gomega.HaveLen(1))
+
+	endpoint := endpoints[0].(map[string]interface{})
+
+	// Verify TLS config always has CA-based verification
+	tlsConfig, ok := endpoint["tlsConfig"].(map[string]interface{})
+	g.Expect(ok).To(gomega.BeTrue(), "tlsConfig should be present")
+
+	ca, ok := tlsConfig["ca"].(map[string]interface{})
+	g.Expect(ok).To(gomega.BeTrue(), "tlsConfig.ca should be present")
+
+	configMap, ok := ca["configMap"].(map[string]interface{})
+	g.Expect(ok).To(gomega.BeTrue(), "tlsConfig.ca.configMap should be present")
+	g.Expect(configMap["name"]).To(gomega.Equal("openshift-service-ca.crt"))
+	g.Expect(configMap["key"]).To(gomega.Equal("service-ca.crt"))
+
+	// Verify serverName uses the default service name (no suffix for "mlflow" CR name)
+	serverName, ok := tlsConfig["serverName"].(string)
+	g.Expect(ok).To(gomega.BeTrue(), "tlsConfig.serverName should be present")
+	g.Expect(serverName).To(gomega.Equal("mlflow.default.svc"))
+}
+
 // Helper function to create pointers
 func ptr[T any](v T) *T {
 	return &v
