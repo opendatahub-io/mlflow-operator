@@ -1515,28 +1515,41 @@ func TestMlflowToHelmValues_Metrics(t *testing.T) {
 		name           string
 		mlflow         *mlflowv1.MLflow
 		namespace      string
+		isOpenShift    bool
 		wantEnabled    bool
 		wantServerName string
 	}{
 		{
-			name: "metrics always enabled with CA-based tlsConfig",
+			name: "OpenShift: metrics enabled with CA-based tlsConfig",
 			mlflow: &mlflowv1.MLflow{
 				ObjectMeta: metav1.ObjectMeta{Name: "mlflow"},
 				Spec:       mlflowv1.MLflowSpec{},
 			},
 			namespace:      "test-namespace",
+			isOpenShift:    true,
 			wantEnabled:    true,
 			wantServerName: "mlflow.test-namespace.svc",
 		},
 		{
-			name: "metrics with custom CR name includes suffix in serverName",
+			name: "OpenShift: custom CR name includes suffix in serverName",
 			mlflow: &mlflowv1.MLflow{
 				ObjectMeta: metav1.ObjectMeta{Name: "custom-mlflow"},
 				Spec:       mlflowv1.MLflowSpec{},
 			},
 			namespace:      "opendatahub",
+			isOpenShift:    true,
 			wantEnabled:    true,
 			wantServerName: "mlflow-custom-mlflow.opendatahub.svc",
+		},
+		{
+			name: "non-OpenShift: metrics enabled with insecureSkipVerify",
+			mlflow: &mlflowv1.MLflow{
+				ObjectMeta: metav1.ObjectMeta{Name: "mlflow"},
+				Spec:       mlflowv1.MLflowSpec{},
+			},
+			namespace:   "default",
+			isOpenShift: false,
+			wantEnabled: true,
 		},
 	}
 
@@ -1544,7 +1557,8 @@ func TestMlflowToHelmValues_Metrics(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			g := gomega.NewWithT(t)
 
-			values, err := renderer.mlflowToHelmValues(tt.mlflow, tt.namespace, RenderOptions{})
+			opts := RenderOptions{IsOpenShift: tt.isOpenShift}
+			values, err := renderer.mlflowToHelmValues(tt.mlflow, tt.namespace, opts)
 			g.Expect(err).NotTo(HaveOccurred())
 
 			metrics, ok := values["metrics"].(map[string]interface{})
@@ -1554,23 +1568,35 @@ func TestMlflowToHelmValues_Metrics(t *testing.T) {
 			g.Expect(ok).To(BeTrue(), "metrics.enabled should be present")
 			g.Expect(enabled).To(Equal(tt.wantEnabled))
 
-			// tlsConfig should always contain CA-based verification
 			tlsConfig, hasTLSConfig := metrics["tlsConfig"].(map[string]interface{})
 			g.Expect(hasTLSConfig).To(BeTrue(), "metrics.tlsConfig should always be present")
 
-			// Verify CA config
-			ca, ok := tlsConfig["ca"].(map[string]interface{})
-			g.Expect(ok).To(BeTrue(), "tlsConfig.ca should be present")
+			if tt.isOpenShift {
+				// Verify CA config
+				ca, ok := tlsConfig["ca"].(map[string]interface{})
+				g.Expect(ok).To(BeTrue(), "tlsConfig.ca should be present")
 
-			configMap, ok := ca["configMap"].(map[string]interface{})
-			g.Expect(ok).To(BeTrue(), "tlsConfig.ca.configMap should be present")
-			g.Expect(configMap["name"]).To(Equal("openshift-service-ca.crt"))
-			g.Expect(configMap["key"]).To(Equal("service-ca.crt"))
+				configMap, ok := ca["configMap"].(map[string]interface{})
+				g.Expect(ok).To(BeTrue(), "tlsConfig.ca.configMap should be present")
+				g.Expect(configMap["name"]).To(Equal("openshift-service-ca.crt"))
+				g.Expect(configMap["key"]).To(Equal("service-ca.crt"))
 
-			// Verify serverName
-			serverName, ok := tlsConfig["serverName"].(string)
-			g.Expect(ok).To(BeTrue(), "tlsConfig.serverName should be present")
-			g.Expect(serverName).To(Equal(tt.wantServerName))
+				// Verify serverName
+				serverName, ok := tlsConfig["serverName"].(string)
+				g.Expect(ok).To(BeTrue(), "tlsConfig.serverName should be present")
+				g.Expect(serverName).To(Equal(tt.wantServerName))
+			} else {
+				// Verify insecureSkipVerify fallback
+				insecureSkipVerify, ok := tlsConfig["insecureSkipVerify"].(bool)
+				g.Expect(ok).To(BeTrue(), "tlsConfig.insecureSkipVerify should be present")
+				g.Expect(insecureSkipVerify).To(BeTrue())
+
+				_, hasCA := tlsConfig["ca"]
+				g.Expect(hasCA).To(BeFalse(), "tlsConfig.ca should not be present on non-OpenShift")
+
+				_, hasServerName := tlsConfig["serverName"]
+				g.Expect(hasServerName).To(BeFalse(), "tlsConfig.serverName should not be present on non-OpenShift")
+			}
 		})
 	}
 }
@@ -1584,8 +1610,8 @@ func TestRenderChart_ServiceMonitorWithTLSConfig(t *testing.T) {
 		Spec:       mlflowv1.MLflowSpec{},
 	}
 
-	// Render chart - CA-based tlsConfig is always set
-	objs, err := renderer.RenderChart(mlflow, "opendatahub", RenderOptions{})
+	// Render chart on OpenShift - CA-based tlsConfig should be set
+	objs, err := renderer.RenderChart(mlflow, "opendatahub", RenderOptions{IsOpenShift: true})
 	g.Expect(err).NotTo(gomega.HaveOccurred())
 
 	// Find the ServiceMonitor
@@ -1641,17 +1667,17 @@ func TestRenderChart_ServiceMonitorWithTLSConfig(t *testing.T) {
 	g.Expect(matchLabels["app"]).To(gomega.Equal("mlflow-test-mlflow"))
 }
 
-func TestRenderChart_ServiceMonitorDefaultCR(t *testing.T) {
+func TestRenderChart_ServiceMonitorInsecureSkipVerify(t *testing.T) {
 	g := gomega.NewWithT(t)
 	renderer := NewHelmRenderer("../../charts/mlflow")
 
-	// Default CR name "mlflow" should produce no suffix in service name
 	mlflow := &mlflowv1.MLflow{
 		ObjectMeta: metav1.ObjectMeta{Name: "mlflow"},
 		Spec:       mlflowv1.MLflowSpec{},
 	}
 
-	objs, err := renderer.RenderChart(mlflow, "default", RenderOptions{})
+	// Render on non-OpenShift - should fall back to insecureSkipVerify
+	objs, err := renderer.RenderChart(mlflow, "default", RenderOptions{IsOpenShift: false})
 	g.Expect(err).NotTo(gomega.HaveOccurred())
 
 	// Find the ServiceMonitor
@@ -1672,22 +1698,20 @@ func TestRenderChart_ServiceMonitorDefaultCR(t *testing.T) {
 
 	endpoint := endpoints[0].(map[string]interface{})
 
-	// Verify TLS config always has CA-based verification
+	// Verify TLS config falls back to insecureSkipVerify on non-OpenShift
 	tlsConfig, ok := endpoint["tlsConfig"].(map[string]interface{})
 	g.Expect(ok).To(gomega.BeTrue(), "tlsConfig should be present")
 
-	ca, ok := tlsConfig["ca"].(map[string]interface{})
-	g.Expect(ok).To(gomega.BeTrue(), "tlsConfig.ca should be present")
+	insecureSkipVerify, ok := tlsConfig["insecureSkipVerify"].(bool)
+	g.Expect(ok).To(gomega.BeTrue(), "tlsConfig.insecureSkipVerify should be present")
+	g.Expect(insecureSkipVerify).To(gomega.BeTrue())
 
-	configMap, ok := ca["configMap"].(map[string]interface{})
-	g.Expect(ok).To(gomega.BeTrue(), "tlsConfig.ca.configMap should be present")
-	g.Expect(configMap["name"]).To(gomega.Equal("openshift-service-ca.crt"))
-	g.Expect(configMap["key"]).To(gomega.Equal("service-ca.crt"))
+	// Verify no CA or serverName is set
+	_, hasCA := tlsConfig["ca"]
+	g.Expect(hasCA).To(gomega.BeFalse(), "tlsConfig.ca should not be present on non-OpenShift")
 
-	// Verify serverName uses the default service name (no suffix for "mlflow" CR name)
-	serverName, ok := tlsConfig["serverName"].(string)
-	g.Expect(ok).To(gomega.BeTrue(), "tlsConfig.serverName should be present")
-	g.Expect(serverName).To(gomega.Equal("mlflow.default.svc"))
+	_, hasServerName := tlsConfig["serverName"]
+	g.Expect(hasServerName).To(gomega.BeFalse(), "tlsConfig.serverName should not be present on non-OpenShift")
 }
 
 // Helper function to create pointers
