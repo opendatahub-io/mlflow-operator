@@ -71,6 +71,9 @@ type HelmRenderer struct {
 type RenderOptions struct {
 	// PlatformTrustedCABundleExists indicates if the platform CA bundle ConfigMap exists in the target namespace
 	PlatformTrustedCABundleExists bool
+	// IsOpenShift indicates if the cluster is an OpenShift platform (detected via ConsoleLink CRD availability).
+	// When true, the operator configures service-ca-based TLS verification for Prometheus metrics scraping.
+	IsOpenShift bool
 }
 
 // NewHelmRenderer creates a new HelmRenderer
@@ -376,15 +379,16 @@ func (h *HelmRenderer) mlflowToHelmValues(mlflow *mlflowv1.MLflow, namespace str
 		"annotations": serviceAnnotations,
 	}
 
-	// Metrics configuration - always enabled with service-ca TLS verification.
-	// The operator always sets the service-ca annotation for TLS cert provisioning,
-	// so we can always reference the service-ca CA bundle ConfigMap for verification.
-	serviceName := "mlflow" + getResourceSuffix(mlflow.Name)
-	serverName := fmt.Sprintf("%s.%s.svc", serviceName, namespace)
-
-	values["metrics"] = map[string]interface{}{
+	// Metrics configuration - always enabled.
+	// On OpenShift, configure service-ca-based TLS verification for Prometheus scraping.
+	// On non-OpenShift clusters, fall back to insecureSkipVerify.
+	metricsConfig := map[string]interface{}{
 		"enabled": true,
-		"tlsConfig": map[string]interface{}{
+	}
+	if opts.IsOpenShift {
+		serviceName := "mlflow" + getResourceSuffix(mlflow.Name)
+		serverName := fmt.Sprintf("%s.%s.svc", serviceName, namespace)
+		metricsConfig["tlsConfig"] = map[string]interface{}{
 			"ca": map[string]interface{}{
 				"configMap": map[string]interface{}{
 					"name": serviceCABundleConfigMapName,
@@ -392,8 +396,13 @@ func (h *HelmRenderer) mlflowToHelmValues(mlflow *mlflowv1.MLflow, namespace str
 				},
 			},
 			"serverName": serverName,
-		},
+		}
+	} else {
+		metricsConfig["tlsConfig"] = map[string]interface{}{
+			"insecureSkipVerify": true,
+		}
 	}
+	values["metrics"] = metricsConfig
 
 	if mlflow.Spec.PodSecurityContext != nil {
 		// Convert PodSecurityContext to map
