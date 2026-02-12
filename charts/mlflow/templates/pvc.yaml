@@ -5,7 +5,7 @@ metadata:
   name: mlflow-pvc{{ .Values.resourceSuffix }}
   namespace: {{ .Values.namespace }}
   labels:
-    app: mlflow
+    app: mlflow{{ .Values.resourceSuffix }}
     {{- with .Values.commonLabels }}
     {{- toYaml . | nindent 4 }}
     {{- end }}

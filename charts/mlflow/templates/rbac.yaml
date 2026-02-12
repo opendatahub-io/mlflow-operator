@@ -27,7 +27,7 @@ kind: ClusterRoleBinding
 metadata:
   name: mlflow{{ .Values.resourceSuffix }}
   labels:
-    app: mlflow
+    app: mlflow{{ .Values.resourceSuffix }}
     {{- with .Values.commonLabels }}
     {{- toYaml . | nindent 4 }}
     {{- end }}

@@ -47,6 +47,9 @@ const (
 	systemCAPath    = "/etc/pki/tls/certs/ca-bundle.crt"
 	caPlatformMount = "/etc/pki/tls/certs/platform"
 	caCustomMount   = "/etc/pki/tls/certs/custom"
+
+	serviceCABundleConfigMapName = "openshift-service-ca.crt"
+	serviceCABundleConfigMapKey  = "service-ca.crt"
 )
 
 // getResourceSuffix returns the resource suffix for naming MLflow resources.
@@ -68,6 +71,9 @@ type HelmRenderer struct {
 type RenderOptions struct {
 	// PlatformTrustedCABundleExists indicates if the platform CA bundle ConfigMap exists in the target namespace
 	PlatformTrustedCABundleExists bool
+	// IsOpenShift indicates if the cluster is an OpenShift platform (detected via ConsoleLink CRD availability).
+	// When true, the operator configures service-ca-based TLS verification for Prometheus metrics scraping.
+	IsOpenShift bool
 }
 
 // NewHelmRenderer creates a new HelmRenderer
@@ -372,6 +378,31 @@ func (h *HelmRenderer) mlflowToHelmValues(mlflow *mlflowv1.MLflow, namespace str
 		"port":        8443,
 		"annotations": serviceAnnotations,
 	}
+
+	// Metrics configuration - always enabled.
+	// On OpenShift, configure service-ca-based TLS verification for Prometheus scraping.
+	// On non-OpenShift clusters, fall back to insecureSkipVerify.
+	metricsConfig := map[string]interface{}{
+		"enabled": true,
+	}
+	if opts.IsOpenShift {
+		serviceName := "mlflow" + getResourceSuffix(mlflow.Name)
+		serverName := fmt.Sprintf("%s.%s.svc", serviceName, namespace)
+		metricsConfig["tlsConfig"] = map[string]interface{}{
+			"ca": map[string]interface{}{
+				"configMap": map[string]interface{}{
+					"name": serviceCABundleConfigMapName,
+					"key":  serviceCABundleConfigMapKey,
+				},
+			},
+			"serverName": serverName,
+		}
+	} else {
+		metricsConfig["tlsConfig"] = map[string]interface{}{
+			"insecureSkipVerify": true,
+		}
+	}
+	values["metrics"] = metricsConfig
 
 	if mlflow.Spec.PodSecurityContext != nil {
 		// Convert PodSecurityContext to map

@@ -11,6 +11,7 @@ rules:
 - apiGroups:
   - ""
   resources:
+  - configmaps
   - persistentvolumeclaims
   - secrets
   - serviceaccounts
@@ -39,6 +40,18 @@ rules:
   - networking.k8s.io
   resources:
   - networkpolicies
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - monitoring.coreos.com
+  resources:
+  - servicemonitors
   verbs:
   - create
   - delete

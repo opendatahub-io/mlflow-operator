@@ -166,6 +166,8 @@ func (r *MLflowReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	renderer := NewHelmRenderer(helmChartPath)
 	renderOpts := RenderOptions{
 		PlatformTrustedCABundleExists: platformCABundleExists,
+		// If ConsoleLink is available, we can assume we are on OpenShift
+		IsOpenShift: r.ConsoleLinkAvailable,
 	}
 	objects, err := renderer.RenderChart(mlflow, targetNamespace, renderOpts)
 	if err != nil {
