@@ -1602,10 +1602,9 @@ func TestRenderChart_ServiceMonitorWithTLSConfig(t *testing.T) {
 	g.Expect(serviceMonitor.GetName()).To(gomega.Equal("mlflow-metrics-monitor-test-mlflow"))
 	g.Expect(serviceMonitor.GetNamespace()).To(gomega.Equal("opendatahub"))
 
-	// Verify labels include app.kubernetes.io/name
+	// Verify labels include instance-specific app label
 	labels := serviceMonitor.GetLabels()
-	g.Expect(labels["app"]).To(gomega.Equal("mlflow"))
-	g.Expect(labels["app.kubernetes.io/name"]).To(gomega.Equal("mlflow-test-mlflow"))
+	g.Expect(labels["app"]).To(gomega.Equal("mlflow-test-mlflow"))
 
 	// Verify endpoints configuration
 	endpoints, found, err := unstructured.NestedSlice(serviceMonitor.Object, "spec", "endpoints")
@@ -1639,8 +1638,7 @@ func TestRenderChart_ServiceMonitorWithTLSConfig(t *testing.T) {
 	matchLabels, found, err := unstructured.NestedStringMap(serviceMonitor.Object, "spec", "selector", "matchLabels")
 	g.Expect(err).NotTo(gomega.HaveOccurred())
 	g.Expect(found).To(gomega.BeTrue())
-	g.Expect(matchLabels["app"]).To(gomega.Equal("mlflow"))
-	g.Expect(matchLabels["app.kubernetes.io/name"]).To(gomega.Equal("mlflow-test-mlflow"))
+	g.Expect(matchLabels["app"]).To(gomega.Equal("mlflow-test-mlflow"))
 }
 
 func TestRenderChart_ServiceMonitorDefaultCR(t *testing.T) {

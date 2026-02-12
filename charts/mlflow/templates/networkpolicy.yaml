@@ -4,14 +4,14 @@ metadata:
   name: mlflow{{ .Values.resourceSuffix }}
   namespace: {{ .Values.namespace }}
   labels:
-    app: mlflow
+    app: mlflow{{ .Values.resourceSuffix }}
     {{- with .Values.commonLabels }}
     {{- toYaml . | nindent 4 }}
     {{- end }}
 spec:
   podSelector:
     matchLabels:
-      app: mlflow
+      app: mlflow{{ .Values.resourceSuffix }}
   policyTypes:
     - Ingress
     - Egress
