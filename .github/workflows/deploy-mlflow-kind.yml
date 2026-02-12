@@ -3,6 +3,7 @@ name: Deploy MLflow on Kind
 env:
   NAMESPACE: 'opendatahub'
   CLUSTER_NAME: 'mlflow'
+  IMG: 'localhost/mlflow-operator:v0.0.1'
 
 on:
   workflow_dispatch:
@@ -107,16 +108,14 @@ jobs:
           version: v0.29.0
           node_image: kindest/node:${{ matrix.k8s_version }}
           cluster_name: ${{ inputs.cluster_name || env.CLUSTER_NAME }}
-          registry: 'true'
 
       - name: Build and load MLflow operator image
         id: build-operator
         run: |
-          # Build the operator image and load it into Kind cluster
-          OPERATOR_IMG=kind-registry:5000/mlflow-operator:latest
-          docker build -t "$OPERATOR_IMG" .
-          docker push "$OPERATOR_IMG"
-          echo "operator_image=$OPERATOR_IMG" >> "$GITHUB_OUTPUT"
+          # Build the operator image and load it directly into the Kind cluster
+          make docker-build IMG=${{ env.IMG }}
+          kind load docker-image ${{ env.IMG }} --name "${{ inputs.cluster_name || env.CLUSTER_NAME }}"
+          echo "operator_image=${{ env.IMG }}" >> "$GITHUB_OUTPUT"
 
       - name: Deploy MLflow
         id: deploy-mlflow
