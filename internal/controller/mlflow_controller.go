@@ -188,6 +188,29 @@ func (r *MLflowReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		return ctrl.Result{}, err
 	}
 
+	// Inject RHOAI-specific db-migration init container into the Deployment.
+	// Runs `mlflow db fix-migration-gap` before the server starts to handle
+	// the RHOAI 3.3 -> 3.4 Alembic migration gap. Safe and idempotent.
+	if err := injectMigrationInitContainer(objects); err != nil {
+		log.Error(err, "Failed to inject migration init container")
+		meta.SetStatusCondition(&mlflow.Status.Conditions, metav1.Condition{
+			Type:    "Available",
+			Status:  metav1.ConditionFalse,
+			Reason:  "MigrationInitContainerFailed",
+			Message: fmt.Sprintf("Failed to inject db-migration init container: %v", err),
+		})
+		meta.SetStatusCondition(&mlflow.Status.Conditions, metav1.Condition{
+			Type:    "Progressing",
+			Status:  metav1.ConditionFalse,
+			Reason:  "MigrationInitContainerFailed",
+			Message: fmt.Sprintf("Failed to inject db-migration init container: %v", err),
+		})
+		if statusErr := r.updateStatus(ctx, mlflow); statusErr != nil {
+			log.Error(statusErr, "Failed to update MLflow status after retries")
+		}
+		return ctrl.Result{}, err
+	}
+
 	// Apply rendered manifests
 	for _, obj := range objects {
 		// MLflow CR is cluster-scoped so set owner reference for all resources
