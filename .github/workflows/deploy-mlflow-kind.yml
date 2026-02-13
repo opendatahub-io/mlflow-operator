@@ -100,6 +100,26 @@ jobs:
       - name: Free up disk space
         uses: kubeflow/pipelines/.github/actions/github-disk-cleanup@master
 
+      - name: Configure Docker for local registry
+        run: |
+          # The Kind registry (kind-registry:5000) serves over plain HTTP, but
+          # Docker defaults to HTTPS for all registry communication. Without this
+          # configuration, `docker push` fails with:
+          #   "http: server gave HTTP response to HTTPS client"
+          # Note: kind-action configures containerd inside the Kind nodes, but the
+          # host Docker daemon needs its own insecure-registries configuration.
+          #
+          # Additionally, Docker Engine v29+ (shipped in ubuntu-24.04 runner image
+          # 20260209+) enables the containerd-snapshotter by default, which ignores
+          # the insecure-registries setting. Disabling it restores classic behavior.
+          # See: https://github.com/actions/runner-images/issues/13474
+          #
+          # This must run BEFORE Kind cluster creation so the registry container
+          # starts with the correct Docker daemon configuration in place.
+          echo '{"insecure-registries": ["kind-registry:5000"], "features": {"containerd-snapshotter": false}}' \
+            | sudo tee /etc/docker/daemon.json
+          sudo systemctl restart docker
+
       - name: Create k8s Kind Cluster
         uses: helm/kind-action@v1.12.0
         id: cluster-create
