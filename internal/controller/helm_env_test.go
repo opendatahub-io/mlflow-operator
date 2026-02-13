@@ -398,7 +398,7 @@ func TestRenderChart_EnvVars(t *testing.T) {
 	var mlflowContainer map[string]interface{}
 	for _, c := range containers {
 		container := c.(map[string]interface{})
-		if container["name"] == "mlflow" {
+		if container["name"] == ResourceName {
 			mlflowContainer = container
 			break
 		}
@@ -534,7 +534,7 @@ func TestRenderChart_WorkspaceLabelSelectorEnvVar(t *testing.T) {
 	var mlflowContainer map[string]any
 	for _, c := range containers {
 		container := c.(map[string]any)
-		if container["name"] == "mlflow" {
+		if container["name"] == ResourceName {
 			mlflowContainer = container
 			break
 		}
@@ -601,7 +601,7 @@ func TestRenderChart_WorkspaceLabelSelectorNilOmitsEnvVar(t *testing.T) {
 	var mlflowContainer map[string]any
 	for _, c := range containers {
 		container := c.(map[string]any)
-		if container["name"] == "mlflow" {
+		if container["name"] == ResourceName {
 			mlflowContainer = container
 			break
 		}
@@ -657,7 +657,7 @@ func TestRenderChart_WorkspaceLabelSelectorEmptyOmitsEnvVar(t *testing.T) {
 	var mlflowContainer map[string]any
 	for _, c := range containers {
 		container := c.(map[string]any)
-		if container["name"] == "mlflow" {
+		if container["name"] == ResourceName {
 			mlflowContainer = container
 			break
 		}
