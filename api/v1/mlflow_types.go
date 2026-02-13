@@ -24,6 +24,7 @@ import (
 // MLflowSpec defines the desired state of MLflow
 // +kubebuilder:validation:XValidation:rule="has(self.defaultArtifactRoot) || (has(self.serveArtifacts) && self.serveArtifacts)",message="defaultArtifactRoot must be set when serveArtifacts is not true"
 // +kubebuilder:validation:XValidation:rule="!has(self.defaultArtifactRoot) || !self.defaultArtifactRoot.startsWith('file://') || (has(self.serveArtifacts) && self.serveArtifacts)",message="serveArtifacts must be enabled when defaultArtifactRoot uses file-based storage (file:// prefix)"
+// +kubebuilder:validation:XValidation:rule="(has(self.backendStoreUri) && size(self.backendStoreUri) > 0) || has(self.backendStoreUriFrom)",message="backendStoreUri or backendStoreUriFrom must be set"
 // +kubebuilder:validation:XValidation:rule="!(has(self.backendStoreUri) && has(self.backendStoreUriFrom))",message="backendStoreUri and backendStoreUriFrom are mutually exclusive"
 // +kubebuilder:validation:XValidation:rule="!(has(self.registryStoreUri) && has(self.registryStoreUriFrom))",message="registryStoreUri and registryStoreUriFrom are mutually exclusive"
 // +kubebuilder:validation:XValidation:rule="!has(self.backendStoreUri) || (!self.backendStoreUri.startsWith('sqlite://') && !self.backendStoreUri.startsWith('file://')) || has(self.storage)",message="storage must be configured when using file-based backend store (sqlite:// or file:// prefix)"
@@ -73,7 +74,7 @@ type MLflowSpec struct {
 	// Examples:
 	//   - "sqlite:////mlflow/mlflow.db" (requires Storage to be configured)
 	// Note: For URIs containing credentials, prefer using BackendStoreURIFrom for security.
-	// If not specified, defaults to "sqlite:////mlflow/mlflow.db"
+	// This must be set explicitly unless BackendStoreURIFrom is provided.
 	// +optional
 	BackendStoreURI *string `json:"backendStoreUri,omitempty"`
 
@@ -161,6 +162,11 @@ type MLflowSpec struct {
 	// +optional
 	PodLabels map[string]string `json:"podLabels,omitempty"`
 
+	// PodAnnotations are annotations to add only to the MLflow pod, not to other resources.
+	// Use this for pod-specific annotations like Prometheus scraping or sidecar configuration.
+	// +optional
+	PodAnnotations map[string]string `json:"podAnnotations,omitempty"`
+
 	// PodSecurityContext specifies the security context for the MLflow pod
 	// +optional
 	PodSecurityContext *corev1.PodSecurityContext `json:"podSecurityContext,omitempty"`
@@ -180,6 +186,19 @@ type MLflowSpec struct {
 	// Affinity specifies the pod's scheduling constraints
 	// +optional
 	Affinity *corev1.Affinity `json:"affinity,omitempty"`
+
+	// ExtraAllowedHosts is a list of additional hostnames that the MLflow server should accept.
+	// By default, the operator automatically generates allowed hosts based on the service DNS names
+	// (e.g., "mlflow.namespace.svc.cluster.local", "mlflow.namespace.svc", "mlflow.namespace", "mlflow"),
+	// plus "localhost" and "127.0.0.1" for port-forwarding and debugging scenarios,
+	// plus the gateway hostname from the MLFLOW_URL configuration for UI access.
+	// Use this field to add additional hostnames such as external routes, ingress hosts, or
+	// custom DNS names that clients may use to access the MLflow server.
+	// Examples:
+	//   - "mlflow.example.com" (external DNS name)
+	//   - "mlflow-route-myproject.apps.cluster.example.com" (OpenShift Route)
+	// +optional
+	ExtraAllowedHosts []string `json:"extraAllowedHosts,omitempty"`
 
 	// CABundleConfigMap specifies a ConfigMap containing a CA certificate bundle.
 	// The bundle will be mounted into the MLflow container and configured for use
