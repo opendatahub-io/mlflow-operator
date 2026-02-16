@@ -707,6 +707,7 @@ class MLflowDeployer:
             with open(os.getenv('GITHUB_OUTPUT'), 'a') as f:
                 f.write(f"mlflow_url=http://localhost:8080\n")
                 f.write(f"namespace={self.args.namespace}\n")
+                f.write(f"s3_endpoint={self.args.s3_endpoint}\n")
 
     def get_pods_for_deployment(self, deployment_name, namespace):
         """Get pod names for a given deployment"""
