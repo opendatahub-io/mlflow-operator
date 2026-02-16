@@ -1,0 +1,330 @@
+name: Integration Tests
+
+env:
+  NAMESPACE: 'opendatahub'
+  CLUSTER_NAME: 'mlflow'
+  JUNIT_XML: 'integration-tests.xml'
+  HTML_REPORT: 'integration-tests.html'
+  PYTEST_ARGS: '-v --tb=short --strict-markers --disable-warnings'
+  AWS_ACCESS_KEY_ID: 'minio'
+  AWS_SECRET_ACCESS_KEY: 'minio123'
+  MLFLOW_TRACKING_URI: "https://localhost:8080"
+  MLFLOW_TRACKING_INSECURE_TLS: "true"
+  TESTS_LOG_LEVEL: "DEBUG"
+
+on:
+  workflow_dispatch:
+    inputs:
+      cluster_name:
+        description: 'K8s Cluster Name'
+        required: false
+        default: 'mlflow'
+
+      backend_store:
+        description: 'Backend store type'
+        required: false
+        default: 'sqlite'
+        type: choice
+        options:
+          - sqlite
+          - postgres
+
+      registry_store:
+        description: 'Backend registry type'
+        required: false
+        default: 'sqlite'
+        type: choice
+        options:
+          - sqlite
+          - postgres
+
+      artifact_storage:
+        description: 'Artifact storage type'
+        required: false
+        default: 'file'
+        type: choice
+        options:
+          - file
+          - s3
+
+      serve_artifacts:
+        description: 'Whether to serve artifacts'
+        required: false
+        default: true
+        type: boolean
+
+  push:
+    branches:
+      - main
+
+  pull_request:
+
+jobs:
+  integration-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      matrix:
+        k8s_version: [ "v1.34.0" ]
+        serve_artifacts: [ "true", "false" ]
+        artifact_storage: [ "file", "s3" ]
+        backend_store: [ "sqlite", "postgres" ]
+        registry_store: [ "sqlite", "postgres" ]
+        python_version: [ "3.13" ]
+        include:
+          - k8s_version: "v1.29.0"
+            backend_store: "sqlite"
+            artifact_storage: "file"
+            serve_artifacts: "true"
+            registry_store: "sqlite"
+            python_version: "3.13"
+          - k8s_version: "v1.29.0"
+            backend_store: "postgres"
+            artifact_storage: "s3"
+            serve_artifacts: "false"
+            registry_store: "postgres"
+            python_version: "3.13"
+      fail-fast: false # So that failure in 1 type of parameterized job does not cause other jobs to terminate prematurely
+    name: MLflow Integration tests - K8sVersion=${{ matrix.k8s_version }} serve_artifacts=${{ matrix.serve_artifacts }} artifact_storage=${{ matrix.artifact_storage }} backend_store=${{ matrix.backend_store }} registry_store=${{ matrix.registry_store }} python_version=${{ matrix.python_version }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python_version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python_version }}
+
+      - name: Free up disk space
+        uses: kubeflow/pipelines/.github/actions/github-disk-cleanup@master
+
+      - name: Create k8s Kind Cluster
+        uses: helm/kind-action@v1.12.0
+        id: cluster-create
+        with:
+          version: v0.29.0
+          node_image: kindest/node:${{ matrix.k8s_version }}
+          cluster_name: ${{ inputs.cluster_name || env.CLUSTER_NAME }}
+          registry: 'true'
+
+      - name: Build and load MLflow operator image
+        id: build-operator
+        run: |
+          # Configure Docker to use insecure registry
+          sudo mkdir -p /etc/docker
+          echo '{
+            "insecure-registries": ["kind-registry:5000"]
+          }' | sudo tee /etc/docker/daemon.json
+          sudo systemctl restart docker
+          sleep 5
+
+          # Build the operator image and push to Kind registry
+          OPERATOR_IMG=kind-registry:5000/mlflow-operator:latest
+          docker build -t "$OPERATOR_IMG" .
+          docker push "$OPERATOR_IMG"
+          echo "operator_image=$OPERATOR_IMG" >> "$GITHUB_OUTPUT"
+
+      - name: Deploy MLflow
+        id: deploy-mlflow
+        uses: ./.github/actions/deploy
+        with:
+          python_version: ${{ matrix.python_version }}
+          namespace: ${{ env.NAMESPACE }}
+          mlflow_image: quay.io/${{ github.repository_owner == 'opendatahub-io' && 'opendatahub' || 'rhoai' }}/mlflow:${{ github.base_ref == 'main' && 'odh-stable' || github.base_ref || 'odh-stable' }}
+          mlflow_operator_image: ${{ steps.build-operator.outputs.operator_image }}
+          backend_store: ${{ inputs.backend_store || matrix.backend_store }}
+          artifact_storage: ${{ inputs.artifact_storage || matrix.artifact_storage }}
+          registry_store: ${{ inputs.registry_store || matrix.registry_store }}
+          serve_artifacts: ${{ inputs.serve_artifacts || matrix.serve_artifacts }}
+          s3_access_key: ${{ env.AWS_ACCESS_KEY_ID }}
+          s3_secret_key: ${{ env.AWS_SECRET_ACCESS_KEY }}
+
+      - name: Verify deployment
+        run: |
+          echo "✅ MLflow deployed successfully!"
+          echo "📍 Namespace: ${{ steps.deploy-mlflow.outputs.namespace }}"
+          echo "🌐 MLflow URL: ${{ steps.deploy-mlflow.outputs.mlflow_url }}"
+
+          # Verify MLflow is running
+          kubectl get pods -n "${{ steps.deploy-mlflow.outputs.namespace }}"
+          kubectl get svc -n "${{ steps.deploy-mlflow.outputs.namespace }}"
+
+      - name: Wait for MLflow to be ready and forward port
+        run: |
+          echo "⏳ Waiting for MLflow to be fully ready..."
+          kubectl wait --for=condition=ready pod -l app=mlflow --timeout=300s -n "${{ steps.deploy-mlflow.outputs.namespace }}"
+
+          # Forward MLflow service port to localhost:8080
+          echo "🔍 Verifying MLflow API readiness..."
+          kubectl port-forward service/mlflow 8080:8443 -n ${{ steps.deploy-mlflow.outputs.namespace }} &
+
+      - name: Setup PostgreSQL port forward
+        id: setup-postgres
+        if: ${{ (inputs.backend_store || matrix.backend_store) == 'postgres' }}
+        run: |
+          echo "🐘 Setting up PostgreSQL port forward for database access..."
+
+          # Wait for PostgreSQL to be ready
+          echo "⏳ Waiting for PostgreSQL to be fully ready..."
+          kubectl wait --for=condition=ready pod -l app=postgres --timeout=300s -n "${{ steps.deploy-mlflow.outputs.namespace }}"
+
+          # Forward PostgreSQL service port to localhost:5432
+          echo "🔍 Setting up PostgreSQL port forward..."
+          kubectl port-forward service/postgres-service 5432:5432 -n ${{ steps.deploy-mlflow.outputs.namespace }} &
+
+          # Give port-forward a moment to establish
+          sleep 5
+          echo "✅ PostgreSQL accessible at localhost:5432"
+
+          # Set backend store URI for tests
+          echo "MLFLOW_BACKEND_STORE_URI=postgresql://postgres:mysecretpassword@localhost:5432/mydatabase" >> "$GITHUB_ENV"
+
+      - name: Setup MinIO port forward
+        id: setup-minio
+        if: ${{ (inputs.artifact_storage == 's3' || matrix.artifact_storage == 's3') && ((inputs.serve_artifacts == 'false') || (matrix.serve_artifacts == 'false')) }}
+        run: |
+          echo "🪣 Setting up MinIO port forward for S3 testing..."
+          echo "📍 S3 Endpoint: ${{ steps.deploy-mlflow.outputs.s3_endpoint }}"
+
+          # Wait for MinIO service to be ready
+          echo "⏳ Waiting for MinIO to be fully ready..."
+          kubectl wait --for=condition=ready pod -l app=seaweedfs --timeout=300s -n "${{ steps.deploy-mlflow.outputs.namespace }}"
+
+          # Forward MinIO service port to localhost:9000
+          echo "🔍 Setting up MinIO port forward..."
+          kubectl port-forward service/minio-service 9000:9000 -n ${{ steps.deploy-mlflow.outputs.namespace }} &
+
+          # Give port-forward a moment to establish
+          sleep 5
+          echo "✅ MinIO accessible at http://localhost:9000"
+
+          # Set output for other steps to use
+          echo "minio_localhost_endpoint=http://localhost:9000" >> "$GITHUB_OUTPUT"
+
+      - name: Extract Kubernetes admin token
+        id: extract-token
+        run: |
+          echo "🔑 Creating service account and extracting admin token..."
+
+          # Create service account for tests
+          kubectl create serviceaccount mlflow-test-admin -n default
+
+          # Create cluster admin role binding
+          kubectl create clusterrolebinding mlflow-test-admin-binding \
+            --clusterrole=cluster-admin \
+            --serviceaccount=default:mlflow-test-admin
+
+          # Create token for the service account
+          KUBE_TOKEN=$(kubectl create token mlflow-test-admin -n default --duration=1h)
+
+          echo "✅ Successfully created service account and extracted token"
+          echo "::add-mask::$KUBE_TOKEN"
+
+          # Set environment variable for tests
+          echo "kube_token=$KUBE_TOKEN" >> "$GITHUB_ENV"
+
+      - name: Install Python test dependencies
+        run: |
+          echo "📦 Installing test dependencies..."
+          cd mlflow-tests
+          pip install --upgrade pip
+          pip install -e .
+          pip install pytest-html
+
+      - name: Set up test environment
+        id: setup-tests
+        run: |
+          # Create test results directory
+          mkdir -p test-results
+          echo "test_results_dir=test-results" >> "$GITHUB_OUTPUT"
+          echo "junit_xml=$JUNIT_XML" >> "$GITHUB_OUTPUT"
+
+      - name: Run integration tests
+        id: run-tests
+        continue-on-error: true
+        env:
+          MLFLOW_S3_ENDPOINT_URL: ${{ steps.setup-minio.outputs.minio_localhost_endpoint }}
+          artifact_storage: ${{ inputs.artifact_storage || matrix.artifact_storage }}
+          serve_artifacts: ${{ inputs.serve_artifacts || matrix.serve_artifacts }}
+        run: |
+          echo "🧪 Running MLflow integration tests..."
+          cd mlflow-tests
+
+          # Run pytest with comprehensive reporting
+          python -m pytest tests/ \
+            ${{ env.PYTEST_ARGS }} \
+            --junitxml="../test-results/${{ env.JUNIT_XML }}" \
+            --html="../test-results/${{ env.HTML_REPORT }}" \
+            --self-contained-html \
+            --log-cli-level=${{ env.TESTS_LOG_LEVEL }} \
+            --log-cli-format='%(asctime)s.%(msecs)03d [%(levelname)s] %(name)s: %(message)s' \
+            --log-cli-date-format='%Y-%m-%d %H:%M:%S'
+
+          # Capture test result for summary
+          TEST_EXIT_CODE=$?
+          echo "test_exit_code=$TEST_EXIT_CODE" >> "$GITHUB_OUTPUT"
+
+          if [ $TEST_EXIT_CODE -eq 0 ]; then
+            echo "✅ All integration tests passed!"
+          else
+            echo "❌ Some integration tests failed (exit code: $TEST_EXIT_CODE)"
+          fi
+
+          exit $TEST_EXIT_CODE
+
+      - name: Upload test results
+        uses: actions/upload-artifact@v4
+        id: upload-report
+        if: (!cancelled())
+        with:
+          name: integration-test-results-${{ matrix.k8s_version }}-${{ matrix.backend_store }}-${{ matrix.registry_store }}-${{ matrix.artifact_storage }}-${{ matrix.serve_artifacts }}-${{ matrix.python_version }}
+          path: test-results/${{ env.HTML_REPORT }}
+          retention-days: 30
+
+      - name: Generate test summary
+        uses: kubeflow/pipelines/.github/actions/junit-summary@master
+        if: (!cancelled())
+        with:
+          xml_files: test-results/${{ env.JUNIT_XML }}
+          custom_data: '{\"HTML Report\": \"${{ steps.upload-report.outputs.artifact-url }}\"}'
+        continue-on-error: true
+
+      - name: Collect debug logs
+        id: collect-logs
+        if: ${{ steps.run-tests.outcome != 'success' && !cancelled() }}
+        run: |
+          echo "🔍 Collecting debug information..."
+
+          # Create debug directory
+          mkdir -p debug-logs
+
+          # Collect Kubernetes logs
+          kubectl get pods -n "${{ steps.deploy-mlflow.outputs.namespace }}" -o wide > debug-logs/pods.txt
+          kubectl get svc -n "${{ steps.deploy-mlflow.outputs.namespace }}" -o wide > debug-logs/services.txt
+          kubectl get events -n "${{ steps.deploy-mlflow.outputs.namespace }}" --sort-by='.lastTimestamp' > debug-logs/events.txt
+
+          # Collect MLflow logs
+          for pod in $(kubectl get pods -n "${{ steps.deploy-mlflow.outputs.namespace }}" -l app=mlflow -o jsonpath='{.items[*].metadata.name}'); do
+            echo "📋 Collecting logs for pod: $pod"
+            kubectl logs "$pod" -n "${{ steps.deploy-mlflow.outputs.namespace }}" > "debug-logs/${pod}.log" 2>&1 || echo "Failed to get logs for $pod"
+          done
+
+          # Collect operator logs
+          for pod in $(kubectl get pods -n "${{ steps.deploy-mlflow.outputs.namespace }}" -l control-plane=controller-manager -o jsonpath='{.items[*].metadata.name}'); do
+            echo "📋 Collecting logs for operator pod: $pod"
+            kubectl logs "$pod" -n "${{ steps.deploy-mlflow.outputs.namespace }}" > "debug-logs/${pod}-operator.log" 2>&1 || echo "Failed to get logs for $pod"
+          done
+
+      - name: Upload debug logs
+        uses: actions/upload-artifact@v4
+        if: ${{ steps.collect-logs.outcome == 'success' && !cancelled() }}
+        with:
+          name: debug-logs-${{ matrix.k8s_version }}-${{ matrix.backend_store }}-${{ matrix.registry_store }}-${{ matrix.artifact_storage }}-${{ matrix.serve_artifacts }}-${{ matrix.python_version }}
+          path: debug-logs/
+          retention-days: 7
+
+      - name: Mark Workflow failure if test step failed
+        if: steps.run-tests.outcome != 'success' && !cancelled()
+        shell: bash
+        run: exit 1
