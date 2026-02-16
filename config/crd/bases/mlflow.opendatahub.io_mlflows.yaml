@@ -988,7 +988,7 @@ spec:
                   Examples:
                     - "sqlite:////mlflow/mlflow.db" (requires Storage to be configured)
                   Note: For URIs containing credentials, prefer using BackendStoreURIFrom for security.
-                  If not specified, defaults to "sqlite:////mlflow/mlflow.db"
+                  This must be set explicitly unless BackendStoreURIFrom is provided.
                 type: string
               backendStoreUriFrom:
                 description: |-
@@ -1204,6 +1204,21 @@ spec:
                       x-kubernetes-map-type: atomic
                   type: object
                 type: array
+              extraAllowedHosts:
+                description: |-
+                  ExtraAllowedHosts is a list of additional hostnames that the MLflow server should accept.
+                  By default, the operator automatically generates allowed hosts based on the service DNS names
+                  (e.g., "mlflow.namespace.svc.cluster.local", "mlflow.namespace.svc", "mlflow.namespace", "mlflow"),
+                  plus "localhost" and "127.0.0.1" for port-forwarding and debugging scenarios,
+                  plus the gateway hostname from the MLFLOW_URL configuration for UI access.
+                  Use this field to add additional hostnames such as external routes, ingress hosts, or
+                  custom DNS names that clients may use to access the MLflow server.
+                  Examples:
+                    - "mlflow.example.com" (external DNS name)
+                    - "mlflow-route-myproject.apps.cluster.example.com" (OpenShift Route)
+                items:
+                  type: string
+                type: array
               image:
                 description: |-
                   Image specifies the MLflow container image.
@@ -1228,6 +1243,13 @@ spec:
                   type: string
                 description: NodeSelector is a selector which must be true for the
                   pod to fit on a node
+                type: object
+              podAnnotations:
+                additionalProperties:
+                  type: string
+                description: |-
+                  PodAnnotations are annotations to add only to the MLflow pod, not to other resources.
+                  Use this for pod-specific annotations like Prometheus scraping or sidecar configuration.
                 type: object
               podLabels:
                 additionalProperties:
@@ -2044,6 +2066,9 @@ spec:
                 file-based storage (file:// prefix)
               rule: '!has(self.defaultArtifactRoot) || !self.defaultArtifactRoot.startsWith(''file://'')
                 || (has(self.serveArtifacts) && self.serveArtifacts)'
+            - message: backendStoreUri or backendStoreUriFrom must be set
+              rule: (has(self.backendStoreUri) && size(self.backendStoreUri) > 0)
+                || has(self.backendStoreUriFrom)
             - message: backendStoreUri and backendStoreUriFrom are mutually exclusive
               rule: '!(has(self.backendStoreUri) && has(self.backendStoreUriFrom))'
             - message: registryStoreUri and registryStoreUriFrom are mutually exclusive

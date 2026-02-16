@@ -61,6 +61,13 @@ spec:
     - secretRef:
         name: aws-credentials  # Contains AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY
 
+  # Additional allowed hostnames (optional)
+  # By default, the operator configures MLflow to accept requests from service DNS names
+  # (e.g., mlflow.<namespace>.svc.cluster.local). Add external hostnames here if needed:
+  # extraAllowedHosts:
+  #   - mlflow.example.com
+  #   - mlflow-route-myproject.apps.cluster.example.com
+
   # Environment variables
   env:
     - name: MLFLOW_LOGGING_LEVEL
