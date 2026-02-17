@@ -37,6 +37,10 @@ import (
 //go:embed assets/mlflow_console_link_icon.svg
 var consoleLinkIconSVG []byte
 
+const (
+	ServiceMonitorCRDName = "ServiceMonitor"
+)
+
 // IsConsoleLinkAvailable checks if ConsoleLink CRD is available in the cluster using discovery API
 func IsConsoleLinkAvailable(discoveryClient discovery.DiscoveryInterface) (bool, error) {
 	ctx := context.Background()
@@ -92,6 +96,32 @@ func IsHTTPRouteAvailable(discoveryClient discovery.DiscoveryInterface) (bool, e
 	}
 
 	log.V(1).Info("HTTPRoute CRD not found in resource list")
+	return false, nil
+}
+
+// IsServiceMonitorAvailable checks if ServiceMonitor CRD is available in the cluster using discovery API
+func IsServiceMonitorAvailable(discoveryClient discovery.DiscoveryInterface) (bool, error) {
+	ctx := context.Background()
+	log := logf.FromContext(ctx)
+
+	gv := schema.GroupVersion{Group: "monitoring.coreos.com", Version: "v1"}
+	resourceList, err := discoveryClient.ServerResourcesForGroupVersion(gv.String())
+	if err != nil {
+		if errors.IsNotFound(err) || discovery.IsGroupDiscoveryFailedError(err) {
+			log.V(1).Info(fmt.Sprintf("%s CRD not available in cluster", ServiceMonitorCRDName))
+			return false, nil
+		}
+		return false, fmt.Errorf("failed to check for %s availability: %w", ServiceMonitorCRDName, err)
+	}
+
+	for _, resource := range resourceList.APIResources {
+		if resource.Kind == ServiceMonitorCRDName {
+			log.V(1).Info(fmt.Sprintf("%s CRD is available in cluster", ServiceMonitorCRDName))
+			return true, nil
+		}
+	}
+
+	log.V(1).Info(fmt.Sprintf("%s CRD not found in resource list", ServiceMonitorCRDName))
 	return false, nil
 }
 
