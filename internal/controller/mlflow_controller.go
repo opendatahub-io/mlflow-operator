@@ -64,7 +64,6 @@ type MLflowReconciler struct {
 // +kubebuilder:rbac:groups="",resources=secrets,resourceNames=mlflow-artifact-connection,verbs=get
 // +kubebuilder:rbac:groups=mlflow.kubeflow.org,resources=mlflowconfigs,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=namespaces,verbs=get;list;watch
-// +kubebuilder:rbac:groups="",resources=configmaps,verbs=get;list;watch
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterroles,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterrolebindings,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=console.openshift.io,resources=consolelinks,verbs=get;list;watch;create;update;patch;delete
