@@ -28,6 +28,7 @@ import (
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
 
 	consolev1 "github.com/openshift/api/console/v1"
+	monitoringv1 "github.com/prometheus-operator/prometheus-operator/pkg/apis/monitoring/v1"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
@@ -61,6 +62,7 @@ func init() {
 	utilruntime.Must(mlflowv1.AddToScheme(scheme))
 	utilruntime.Must(mlflowconfigv1.AddToScheme(scheme))
 	utilruntime.Must(consolev1.AddToScheme(scheme))
+	utilruntime.Must(monitoringv1.AddToScheme(scheme))
 	utilruntime.Must(gatewayv1.Install(scheme))
 	// +kubebuilder:scaffold:scheme
 }
@@ -187,6 +189,17 @@ func main() {
 		setupLog.Info("HTTPRoute CRD not available, skipping cache configuration")
 	}
 
+	// Conditionally add ServiceMonitor to cache if available
+	serviceMonitorAvailable, err := controller.IsServiceMonitorAvailable(discoveryClient)
+	if err != nil {
+		setupLog.Error(err, "Failed to check ServiceMonitor availability")
+	} else if serviceMonitorAvailable {
+		setupLog.Info("ServiceMonitor CRD available, adding to cache with label selector")
+		byObjectCache[&monitoringv1.ServiceMonitor{}] = cache.ByObject{Label: labelSelector}
+	} else {
+		setupLog.Info("ServiceMonitor CRD not available, skipping cache configuration")
+	}
+
 	mgr, err := ctrl.NewManager(cfg, ctrl.Options{
 		Scheme:                 scheme,
 		Metrics:                metricsServerOptions,
@@ -223,12 +236,13 @@ func main() {
 	}
 
 	if err := (&controller.MLflowReconciler{
-		Client:               mgr.GetClient(),
-		Scheme:               mgr.GetScheme(),
-		Namespace:            namespace,
-		ChartPath:            "charts/mlflow",
-		ConsoleLinkAvailable: consoleLinkAvailable,
-		HTTPRouteAvailable:   httpRouteAvailable,
+		Client:                  mgr.GetClient(),
+		Scheme:                  mgr.GetScheme(),
+		Namespace:               namespace,
+		ChartPath:               "charts/mlflow",
+		ConsoleLinkAvailable:    consoleLinkAvailable,
+		HTTPRouteAvailable:      httpRouteAvailable,
+		ServiceMonitorAvailable: serviceMonitorAvailable,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "MLflow")
 		os.Exit(1)
