@@ -1,0 +1,7 @@
+# Syft configuration for SBOM generation.
+exclude:
+  - ./.github/**
+  - ./config/**
+  - ./test/**
+  - ./docs/**
+  - ./hack/**
