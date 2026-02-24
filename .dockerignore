@@ -22,3 +22,6 @@
 !PROJECT
 !.golangci.yml
 !AGENTS.md
+
+# Test assets
+!mlflow-tests/
