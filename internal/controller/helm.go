@@ -74,6 +74,9 @@ type RenderOptions struct {
 	// IsOpenShift indicates if the cluster is an OpenShift platform (detected via ConsoleLink CRD availability).
 	// When true, the operator configures service-ca-based TLS verification for Prometheus metrics scraping.
 	IsOpenShift bool
+	// ServiceMonitorAvailable indicates if the ServiceMonitor CRD (monitoring.coreos.com/v1) is available.
+	// When false, metrics.enabled is set to false to prevent rendering the ServiceMonitor manifest.
+	ServiceMonitorAvailable bool
 }
 
 // NewHelmRenderer creates a new HelmRenderer
@@ -379,11 +382,11 @@ func (h *HelmRenderer) mlflowToHelmValues(mlflow *mlflowv1.MLflow, namespace str
 		"annotations": serviceAnnotations,
 	}
 
-	// Metrics configuration - always enabled.
+	// Metrics configuration - only enabled when the ServiceMonitor CRD is present in the cluster.
 	// On OpenShift, configure service-ca-based TLS verification for Prometheus scraping.
 	// On non-OpenShift clusters, fall back to insecureSkipVerify.
 	metricsConfig := map[string]interface{}{
-		"enabled": true,
+		"enabled": opts.ServiceMonitorAvailable,
 	}
 	if opts.IsOpenShift {
 		serviceName := "mlflow" + getResourceSuffix(mlflow.Name)

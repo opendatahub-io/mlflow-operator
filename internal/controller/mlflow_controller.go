@@ -168,7 +168,8 @@ func (r *MLflowReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	renderOpts := RenderOptions{
 		PlatformTrustedCABundleExists: platformCABundleExists,
 		// If ConsoleLink is available, we can assume we are on OpenShift
-		IsOpenShift: r.ConsoleLinkAvailable,
+		IsOpenShift:             r.ConsoleLinkAvailable,
+		ServiceMonitorAvailable: r.ServiceMonitorAvailable,
 	}
 	objects, err := renderer.RenderChart(mlflow, targetNamespace, renderOpts)
 	if err != nil {

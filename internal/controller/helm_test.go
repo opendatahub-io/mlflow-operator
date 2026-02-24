@@ -1512,12 +1512,13 @@ func TestMlflowToHelmValues_Metrics(t *testing.T) {
 	renderer := &HelmRenderer{}
 
 	tests := []struct {
-		name           string
-		mlflow         *mlflowv1.MLflow
-		namespace      string
-		isOpenShift    bool
-		wantEnabled    bool
-		wantServerName string
+		name                    string
+		mlflow                  *mlflowv1.MLflow
+		namespace               string
+		isOpenShift             bool
+		serviceMonitorAvailable bool
+		wantEnabled             bool
+		wantServerName          string
 	}{
 		{
 			name: "OpenShift: metrics enabled with CA-based tlsConfig",
@@ -1525,10 +1526,11 @@ func TestMlflowToHelmValues_Metrics(t *testing.T) {
 				ObjectMeta: metav1.ObjectMeta{Name: "mlflow"},
 				Spec:       mlflowv1.MLflowSpec{},
 			},
-			namespace:      "test-namespace",
-			isOpenShift:    true,
-			wantEnabled:    true,
-			wantServerName: "mlflow.test-namespace.svc",
+			namespace:               "test-namespace",
+			isOpenShift:             true,
+			serviceMonitorAvailable: true,
+			wantEnabled:             true,
+			wantServerName:          "mlflow.test-namespace.svc",
 		},
 		{
 			name: "OpenShift: custom CR name includes suffix in serverName",
@@ -1536,10 +1538,11 @@ func TestMlflowToHelmValues_Metrics(t *testing.T) {
 				ObjectMeta: metav1.ObjectMeta{Name: "custom-mlflow"},
 				Spec:       mlflowv1.MLflowSpec{},
 			},
-			namespace:      "opendatahub",
-			isOpenShift:    true,
-			wantEnabled:    true,
-			wantServerName: "mlflow-custom-mlflow.opendatahub.svc",
+			namespace:               "opendatahub",
+			isOpenShift:             true,
+			serviceMonitorAvailable: true,
+			wantEnabled:             true,
+			wantServerName:          "mlflow-custom-mlflow.opendatahub.svc",
 		},
 		{
 			name: "non-OpenShift: metrics enabled with insecureSkipVerify",
@@ -1547,9 +1550,21 @@ func TestMlflowToHelmValues_Metrics(t *testing.T) {
 				ObjectMeta: metav1.ObjectMeta{Name: "mlflow"},
 				Spec:       mlflowv1.MLflowSpec{},
 			},
-			namespace:   "default",
-			isOpenShift: false,
-			wantEnabled: true,
+			namespace:               "default",
+			isOpenShift:             false,
+			serviceMonitorAvailable: true,
+			wantEnabled:             true,
+		},
+		{
+			name: "ServiceMonitor CRD absent: metrics disabled regardless of platform",
+			mlflow: &mlflowv1.MLflow{
+				ObjectMeta: metav1.ObjectMeta{Name: "mlflow"},
+				Spec:       mlflowv1.MLflowSpec{},
+			},
+			namespace:               "default",
+			isOpenShift:             false,
+			serviceMonitorAvailable: false,
+			wantEnabled:             false,
 		},
 	}
 
@@ -1557,7 +1572,7 @@ func TestMlflowToHelmValues_Metrics(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			g := gomega.NewWithT(t)
 
-			opts := RenderOptions{IsOpenShift: tt.isOpenShift}
+			opts := RenderOptions{IsOpenShift: tt.isOpenShift, ServiceMonitorAvailable: tt.serviceMonitorAvailable}
 			values, err := renderer.mlflowToHelmValues(tt.mlflow, tt.namespace, opts)
 			g.Expect(err).NotTo(HaveOccurred())
 
@@ -1611,7 +1626,7 @@ func TestRenderChart_ServiceMonitorWithTLSConfig(t *testing.T) {
 	}
 
 	// Render chart on OpenShift - CA-based tlsConfig should be set
-	objs, err := renderer.RenderChart(mlflow, "opendatahub", RenderOptions{IsOpenShift: true})
+	objs, err := renderer.RenderChart(mlflow, "opendatahub", RenderOptions{IsOpenShift: true, ServiceMonitorAvailable: true})
 	g.Expect(err).NotTo(gomega.HaveOccurred())
 
 	// Find the ServiceMonitor
@@ -1677,7 +1692,7 @@ func TestRenderChart_ServiceMonitorInsecureSkipVerify(t *testing.T) {
 	}
 
 	// Render on non-OpenShift - should fall back to insecureSkipVerify
-	objs, err := renderer.RenderChart(mlflow, "default", RenderOptions{IsOpenShift: false})
+	objs, err := renderer.RenderChart(mlflow, "default", RenderOptions{IsOpenShift: false, ServiceMonitorAvailable: true})
 	g.Expect(err).NotTo(gomega.HaveOccurred())
 
 	// Find the ServiceMonitor
