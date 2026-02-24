@@ -25,3 +25,4 @@
 
 # Test assets
 !mlflow-tests/
+mlflow-tests/.venv/

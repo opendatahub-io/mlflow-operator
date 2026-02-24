@@ -45,14 +45,16 @@ service via its cluster-internal DNS name, bypassing the OpenShift gateway entir
 # From the repository root
 podman build -f mlflow-tests/images/test.Dockerfile -t mlflow-tests:latest .
 
-# Run the container locally (kubeconfig must be mounted)
+# --user root is required locally because the host kubeconfig is typically chmod 600.
+# This is safe with local podman; OpenShift SCCs prevent root containers in-cluster.
 podman run --rm \
+  --user root \
   -v $HOME/.kube:/mlflow/.kube:z \
   -e KUBECONFIG=/mlflow/.kube/config \
   -e IN_CLUSTER_MODE=false \
   mlflow-tests:latest
 ```
-podman run --rm -v $HOME/.kube:/mlflow/.kube:z -e KUBECONFIG=/mlflow/.kube/config mlflow-tests:latest
+
 ## CLI flags
 
 All flags are optional. Defaults are shown.

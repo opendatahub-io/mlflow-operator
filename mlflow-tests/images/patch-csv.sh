@@ -129,17 +129,22 @@ download_and_prepare_mlflow_operator_manifests() {
     mkdir -p "$mlflow_operator_path"
     echo "Downloading MLflow operator repository from GitHub..." >&2
 
+    # GitHub replaces '/' with '-' in archive directory names, and '/' is unsafe
+    # in local filenames. Derive a filesystem-safe slug from the branch name.
+    local branch_slug="${mlflow_operator_branch//\//-}"
+
     # Retry logic: attempt download up to 3 times (1 initial + 2 retries)
     local download_success=false
     local max_attempts=3
     local attempt=1
     local download_url="https://github.com/${mlflow_operator_owner}/${mlflow_operator_repo}/archive/refs/heads/${mlflow_operator_branch}.tar.gz"
+    local tarball="$mlflow_operator_path/${branch_slug}.tar.gz"
 
     echo "Downloading MLflow operator from: $download_url" >&2
 
     while [[ $attempt -le $max_attempts && $download_success == false ]]; do
         echo "Download attempt $attempt of $max_attempts..." >&2
-        if wget -q "$download_url" -O "$mlflow_operator_path/${mlflow_operator_branch}.tar.gz"; then
+        if curl -fsSL "$download_url" -o "$tarball"; then
             download_success=true
             echo "Download successful on attempt $attempt" >&2
         else
@@ -154,11 +159,19 @@ download_and_prepare_mlflow_operator_manifests() {
 
     if [[ $download_success == true ]]; then
         echo "Extracting MLflow operator repository..." >&2
-        tar -xzf "$mlflow_operator_path/${mlflow_operator_branch}.tar.gz" -C "$mlflow_operator_path"
-        rm -f "$mlflow_operator_path/${mlflow_operator_branch}.tar.gz"
+        tar -xzf "$tarball" -C "$mlflow_operator_path"
+        rm -f "$tarball"
 
         echo "Preparing MLflow operator manifest source directory..." >&2
-        local base_config_path="$mlflow_operator_path/${mlflow_operator_repo}-${mlflow_operator_branch}/config"
+        # GitHub names the extracted directory <repo>-<branch-slug>
+        local base_config_path="$mlflow_operator_path/${mlflow_operator_repo}-${branch_slug}/config"
+
+        if [[ ! -d "$base_config_path" ]]; then
+            echo "ERROR: Expected config directory not found after extraction: $base_config_path" >&2
+            echo "Contents of $mlflow_operator_path:" >&2
+            ls "$mlflow_operator_path" >&2
+            return 1
+        fi
 
         echo "MLflow operator manifest source directory found, processing..." >&2
 
@@ -178,7 +191,7 @@ EOF
         echo "$base_config_path"
         return 0
     else
-        echo "Failed to download MLflow operator repository after $max_attempts attempts" >&2
+        echo "ERROR: Failed to download MLflow operator repository after $max_attempts attempts" >&2
         return 1
     fi
 }
