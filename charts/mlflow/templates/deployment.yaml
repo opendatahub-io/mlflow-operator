@@ -214,6 +214,10 @@ spec:
             - name: MLFLOW_SERVER_CORS_ALLOWED_ORIGINS
               value: {{ .Values.mlflow.corsAllowedOrigins | quote }}
             {{- end }}
+            {{- if .Values.mlflow.workspaceLabelSelector }}
+            - name: MLFLOW_K8S_WORKSPACE_LABEL_SELECTOR
+              value: {{ .Values.mlflow.workspaceLabelSelector | quote }}
+            {{- end }}
             {{- range .Values.env }}
             - name: {{ .name }}
               {{- if .valueFrom }}

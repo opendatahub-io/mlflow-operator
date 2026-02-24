@@ -214,6 +214,11 @@ func (in *MLflowSpec) DeepCopyInto(out *MLflowSpec) {
 		*out = make([]string, len(*in))
 		copy(*out, *in)
 	}
+	if in.WorkspaceLabelSelector != nil {
+		in, out := &in.WorkspaceLabelSelector, &out.WorkspaceLabelSelector
+		*out = new(metav1.LabelSelector)
+		(*in).DeepCopyInto(*out)
+	}
 	if in.Env != nil {
 		in, out := &in.Env, &out.Env
 		*out = make([]corev1.EnvVar, len(*in))

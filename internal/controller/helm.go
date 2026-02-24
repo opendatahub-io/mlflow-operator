@@ -29,6 +29,7 @@ import (
 	"helm.sh/helm/v3/pkg/chartutil"
 	"helm.sh/helm/v3/pkg/engine"
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/yaml"
@@ -370,6 +371,15 @@ func (h *HelmRenderer) mlflowToHelmValues(mlflow *mlflowv1.MLflow, namespace str
 		workers = *mlflow.Spec.Workers
 	}
 
+	var workspaceLabelSelector string
+	if mlflow.Spec.WorkspaceLabelSelector != nil {
+		selector, err := metav1.LabelSelectorAsSelector(mlflow.Spec.WorkspaceLabelSelector)
+		if err != nil {
+			return nil, fmt.Errorf("invalid workspaceLabelSelector: %w", err)
+		}
+		workspaceLabelSelector = selector.String()
+	}
+
 	mlflowConfig := map[string]interface{}{
 		"backendStoreUri":      backendStoreURI,
 		"registryStoreUri":     registryStoreURI,
@@ -382,6 +392,10 @@ func (h *HelmRenderer) mlflowToHelmValues(mlflow *mlflowv1.MLflow, namespace str
 		"port":                 8443,
 		"allowedHosts":         allowedHosts,
 		"staticPrefix":         StaticPrefix, // Hardcoded for operator deployments
+	}
+
+	if workspaceLabelSelector != "" {
+		mlflowConfig["workspaceLabelSelector"] = workspaceLabelSelector
 	}
 
 	// Add secret references if provided
