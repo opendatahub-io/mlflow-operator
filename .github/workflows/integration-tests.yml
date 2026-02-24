@@ -85,6 +85,7 @@ jobs:
             registry_store: "postgres"
             python_version: "3.13"
       fail-fast: false # So that failure in 1 type of parameterized job does not cause other jobs to terminate prematurely
+      max-parallel: 10 # Limit the number of parallel jobs to avoid overwhelming the runners, and causing false test failures
     name: MLflow Integration tests - K8sVersion=${{ matrix.k8s_version }} serve_artifacts=${{ matrix.serve_artifacts }} artifact_storage=${{ matrix.artifact_storage }} backend_store=${{ matrix.backend_store }} registry_store=${{ matrix.registry_store }} python_version=${{ matrix.python_version }}
 
     steps:
