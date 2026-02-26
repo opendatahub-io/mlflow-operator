@@ -4,7 +4,8 @@ These actions exercise the MLflow Kubernetes workspace discovery API.
 """
 
 import logging
-import os
+import random
+import string
 
 import requests
 
@@ -12,6 +13,7 @@ from ..constants.config import Config
 from ..shared import TestContext
 
 logger = logging.getLogger(__name__)
+random_gen = random.Random()
 
 
 def _extract_names(obj) -> set[str]:
@@ -29,10 +31,16 @@ def _extract_names(obj) -> set[str]:
         for key in ("workspaces", "items", "namespaces"):
             if key in obj:
                 out |= _extract_names(obj[key])
-        if "name" in obj and isinstance(obj["name"], str):
-            out.add(obj["name"])
-        for v in obj.values():
-            out |= _extract_names(v)
+
+        name = obj.get("name")
+        if isinstance(name, str):
+            out.add(name)
+
+        metadata = obj.get("metadata")
+        if isinstance(metadata, dict):
+            meta_name = metadata.get("name")
+            if isinstance(meta_name, str):
+                out.add(meta_name)
         return out
     return set()
 
@@ -42,10 +50,12 @@ def action_create_unlabeled_namespace(test_context: TestContext) -> None:
     if test_context.k8_manager is None:
         raise RuntimeError("test_context.k8_manager is not set")
 
-    namespace = f"unlabeled-workspace-{os.getpid()}"
+    random_suffix = "".join(random_gen.choices(string.ascii_lowercase + string.digits, k=8))
+    namespace = f"unlabeled-workspace-{random_suffix}"
     logger.info(f"Creating unlabeled namespace: {namespace}")
     test_context.k8_manager.create_namespace(namespace)
     test_context.unlabeled_namespace = namespace
+    test_context.add_namespace_for_cleanup(namespace)
 
 
 def action_list_workspaces(test_context: TestContext) -> None:
@@ -54,7 +64,13 @@ def action_list_workspaces(test_context: TestContext) -> None:
     headers = {"Authorization": f"Bearer {Config.K8_API_TOKEN}"}
 
     logger.info(f"Listing workspaces via {url}")
-    resp = requests.get(url, headers=headers, verify=False, timeout=30)
+    verify: bool | str = True
+    if str(Config.DISABLE_TLS).lower() == "true":
+        verify = False
+    elif Config.CA_BUNDLE:
+        verify = Config.CA_BUNDLE
+
+    resp = requests.get(url, headers=headers, verify=verify, timeout=30)
     if resp.status_code != 200:
         raise AssertionError(f"GET {url} -> {resp.status_code}: {resp.text}")
 
@@ -71,6 +87,7 @@ def action_delete_unlabeled_namespace(test_context: TestContext) -> None:
 
     try:
         test_context.k8_manager.delete_namespace(test_context.unlabeled_namespace)
+        test_context.namespaces_to_delete.discard(test_context.unlabeled_namespace)
     except Exception as e:
         logger.warning(f"Failed to delete namespace {test_context.unlabeled_namespace}: {e}")
 
