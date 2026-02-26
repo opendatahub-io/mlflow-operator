@@ -19,7 +19,7 @@ patch_csv() {
 
     # Step 1: Create PersistentVolumeClaim
     echo "Creating PVC for mlflow-operator component manifests..."
-    if oc apply -f "$overlays_dir/mlflow-operator-pvc.yaml" -n "$NAMESPACE_NAME"; then
+    if kubectl apply -f "$overlays_dir/mlflow-operator-pvc.yaml" -n "$NAMESPACE_NAME"; then
         echo "PVC created successfully"
     else
         echo "Failed to create PVC, continuing anyway..."
@@ -51,12 +51,12 @@ patch_csv() {
 
     # Step 5: Restart operator deployment
     echo "Restarting MLflow operator deployment to pick up changes..."
-    if oc rollout restart deploy -n "$NAMESPACE_NAME" -l "$operator_label"; then
+    if kubectl rollout restart deploy -n "$NAMESPACE_NAME" -l "$operator_label"; then
         echo "Operator deployment restart initiated"
 
         # Wait for rollout to complete
         echo "Waiting for deployment rollout to complete..."
-        if oc rollout status deploy -n "$NAMESPACE_NAME" -l "$operator_label" --timeout=300s; then
+        if kubectl rollout status deploy -n "$NAMESPACE_NAME" -l "$operator_label" --timeout=300s; then
             echo "Operator deployment rollout completed successfully"
         else
             echo "Warning: Deployment rollout did not complete within timeout"
@@ -83,11 +83,11 @@ apply_csv_patch_and_wait_for_mlflow_operator() {
     echo "Checking if mlflow-operator volume mount already exists..." >&2
 
     # Check if the volume mount already exists
-    if oc get csv "$csv_name" -n "$namespace_name" -o jsonpath='{.spec.install.spec.deployments[0].spec.template.spec.containers[0].volumeMounts[*].name}' | grep -q "mlflow-operator-manifests"; then
+    if kubectl get csv "$csv_name" -n "$namespace_name" -o jsonpath='{.spec.install.spec.deployments[0].spec.template.spec.containers[0].volumeMounts[*].name}' | grep -q "mlflow-operator-manifests"; then
         echo "mlflow-operator volume mount already exists, skipping patch..." >&2
     else
         echo "Applying CSV patch to mount mlflow-operator manifests volume..." >&2
-        if oc patch csv "$csv_name" -n "$namespace_name" --type json --patch-file "$overlays_dir/mlflow-operator-csv-patch.json"; then
+        if kubectl patch csv "$csv_name" -n "$namespace_name" --type json --patch-file "$overlays_dir/mlflow-operator-csv-patch.json"; then
             echo "CSV patch applied successfully" >&2
         else
             echo "Failed to apply CSV patch, exiting..." >&2
@@ -107,7 +107,7 @@ apply_csv_patch_and_wait_for_mlflow_operator() {
     fi
 
     # Wait up to 5 minutes for pod to be ready
-    if oc wait --for='jsonpath={.status.conditions[?(@.type=="Ready")].status}=True' po -l "$operator_label" -n "$namespace_name" --timeout=300s >&2; then
+    if kubectl wait --for='jsonpath={.status.conditions[?(@.type=="Ready")].status}=True' po -l "$operator_label" -n "$namespace_name" --timeout=300s >&2; then
         echo "Operator pod is ready" >&2
     else
         echo "Warning: Operator pod did not become ready within timeout, continuing anyway..." >&2
@@ -207,7 +207,7 @@ copy_mlflow_operator_manifests_to_pods() {
 
         # Get all running operator pod names
         local pod_names
-        pod_names=$(oc get po -l "$operator_label" -n "$namespace_name" --field-selector=status.phase=Running -o jsonpath="{.items[*].metadata.name}" 2>/dev/null)
+        pod_names=$(kubectl get po -l "$operator_label" -n "$namespace_name" --field-selector=status.phase=Running -o jsonpath="{.items[*].metadata.name}" 2>/dev/null)
 
         if [[ -n "$pod_names" ]]; then
             # Convert space-separated names to array
@@ -222,7 +222,7 @@ copy_mlflow_operator_manifests_to_pods() {
                 echo "Copying manifests to pod: $pod_name"
                 local full_pod_name="$namespace_name/$pod_name"
 
-                if oc cp "$base_config_path/." "$full_pod_name":"/opt/manifests/mlflow-operator"; then
+                if kubectl cp "$base_config_path/." "$full_pod_name":"/opt/manifests/mlflow-operator"; then
                     echo "✓ Successfully copied manifests to $pod_name"
                     ((copy_success_count++))
                 else
@@ -265,7 +265,7 @@ wait_for_mlflow_operator_controller_manager() {
 
     while [[ $elapsed_time -lt $max_wait_time ]]; do
         # Check if the MLflow operator controller manager pod exists and is running
-        local mlflow_operator_pod_status=$(oc get pods -n "$NAMESPACE_NAME" --field-selector=status.phase=Running --no-headers 2>/dev/null | grep "mlflow-operator-controller-manager" | wc -l)
+        local mlflow_operator_pod_status=$(kubectl get pods -n "$NAMESPACE_NAME" --field-selector=status.phase=Running --no-headers 2>/dev/null | grep "mlflow-operator-controller-manager" | wc -l)
 
         if [[ $mlflow_operator_pod_status -gt 0 ]]; then
             echo "✓ MLflow operator controller manager pod is running"
@@ -296,7 +296,7 @@ find_csv_and_update() {
 
     # Get list of all namespaces
     local NAMESPACE_LIST
-    NAMESPACE_LIST=$(oc get namespaces -o jsonpath='{.items[*].metadata.name}')
+    NAMESPACE_LIST=$(kubectl get namespaces -o jsonpath='{.items[*].metadata.name}')
 
     # Check for RHOAI Applications namespace
     if echo "$NAMESPACE_LIST" | grep -q "$OPERATOR_NAMESPACE_RHOAI"; then
@@ -304,7 +304,7 @@ find_csv_and_update() {
 
         # Get CSV matching rhods-operator*
         local RHODS_CSV
-        RHODS_CSV=$(oc get csv -n "$OPERATOR_NAMESPACE_RHOAI" --no-headers | grep "rhods-operator" | awk '{print $1}' | head -1)
+        RHODS_CSV=$(kubectl get csv -n "$OPERATOR_NAMESPACE_RHOAI" --no-headers | grep "rhods-operator" | awk '{print $1}' | head -1)
 
         if [[ -n "$RHODS_CSV" ]]; then
             echo "Found RHODS CSV: $RHODS_CSV"
@@ -319,7 +319,7 @@ find_csv_and_update() {
 
         # Get CSV matching opendatahub-operator*
         local ODH_CSV
-        ODH_CSV=$(oc get csv -n "$OPERATOR_NAMESPACE_ODH" --no-headers | grep "opendatahub-operator" | awk '{print $1}' | head -1)
+        ODH_CSV=$(kubectl get csv -n "$OPERATOR_NAMESPACE_ODH" --no-headers | grep "opendatahub-operator" | awk '{print $1}' | head -1)
 
         if [[ -n "$ODH_CSV" ]]; then
             echo "Found ODH CSV: $ODH_CSV"
