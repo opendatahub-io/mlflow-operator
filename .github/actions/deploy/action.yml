@@ -127,6 +127,11 @@ inputs:
     required: false
     default: 'false'
 
+  workspace_label_selector:
+    description: 'Optional Kubernetes LabelSelector to restrict which namespaces are exposed as MLflow workspaces (e.g. mlflow-enabled=true)'
+    required: false
+    default: ''
+
 outputs:
   mlflow_url:
     description: 'MLflow service URL for port forwarding'
@@ -179,6 +184,7 @@ runs:
           --s3-access-key "${{ inputs.s3_access_key }}" \
           --s3-secret-key "${{ inputs.s3_secret_key }}" \
           --s3-endpoint "${{ inputs.s3_endpoint }}" \
+          --workspace-label-selector "${{ inputs.workspace_label_selector }}" \
           ${{ inputs.postgres_tls == 'true' && '--postgres-tls' || '' }} \
           ${{ inputs.seaweedfs_tls == 'true' && '--seaweedfs-tls' || '' }}
 
