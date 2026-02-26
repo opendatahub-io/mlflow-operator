@@ -109,13 +109,10 @@ spec:
           fi
 
           echo "SeaweedFS S3 initialization completed - service is ready for MLflow"
-        securityContext:  # Using restricted profile
+        securityContext:
           allowPrivilegeEscalation: false
           privileged: false
           runAsNonRoot: true
-          # image defaults to root user
-          runAsUser: 1001
-          runAsGroup: 1001
           capabilities:
             drop:
             - ALL
