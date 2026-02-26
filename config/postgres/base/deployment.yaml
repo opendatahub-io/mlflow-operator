@@ -16,7 +16,7 @@ spec:
     spec:
       containers:
         - name: postgres
-          image: postgres:13 # Use a stable Postgres version
+          image: postgres:13
           ports:
             - containerPort: 5432
           env:
@@ -29,11 +29,6 @@ spec:
                 secretKeyRef:
                   name: postgres-secret
                   key: POSTGRES_PASSWORD
-            # Use a subdirectory so initdb isn't blocked by lost+found at the PVC
-            # root, and so OpenShift's restricted SCC doesn't need to chmod the
-            # mount point itself.
-            - name: PGDATA
-              value: /var/lib/postgresql/data/pgdata
           volumeMounts:
             - name: postgres-storage
               mountPath: /var/lib/postgresql/data

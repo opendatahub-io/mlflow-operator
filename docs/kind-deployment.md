@@ -265,21 +265,42 @@ config/overlays/kind/
 ├── manager-patch.yaml              # Operator manager patches
 ├── manager-rolebinding-patch.yaml  # RBAC patches
 ├── metrics-auth-rolebinding-patch.yaml
-├── mlflow-tls.yaml                 # TLS secret template
-├── postgres/                       # PostgreSQL manifests
+└── mlflow-tls.yaml                 # TLS secret template
+```
+
+The platform-agnostic (and openshift-specific overlay) Postgres manifests are organized as follows:
+```
+config/postgres/                    # PostgreSQL manifests
+├── base/
+│   ├── kustomization.yaml
+│   ├── params.env
 │   ├── deployment.yaml
 │   ├── pvc.yaml
 │   ├── secret.yaml
 │   └── service.yaml
-└── seaweedfs/                      # SeaweedFS (S3) manifests
-    └── base/
-        ├── kustomization.yaml
-        └── seaweedfs/
-            ├── seaweedfs-deployment.yaml
-            ├── seaweedfs-service.yaml
-            ├── seaweedfs-pvc.yaml
-            ├── minio-service.yaml
-            └── ...
+└── openshift/                      # OpenShift-specific overrides
+    ├── kustomization.yaml
+    └── pgdata-patch.yaml
+```
+
+The platform-agnostic (and openshift-specific overlay) SeaweedFS manifests are organized as follows:
+```
+config/seaweedfs/                   # SeaweedFS (S3) manifests
+├── base/
+│   ├── kustomization.yaml
+│   ├── params.env
+│   ├── seaweedfs-deployment.yaml
+│   ├── seaweedfs-service.yaml
+│   ├── seaweedfs-pvc.yaml
+│   ├── seaweedfs-service-account.yaml
+│   ├── seaweedfs-networkpolicy.yaml
+│   ├── seaweedfs-create-admin-user-job.yaml
+│   ├── minio-service.yaml
+│   └── mlflow-aws-secret.yaml
+└── openshift/                      # OpenShift-specific overrides
+    ├── kustomization.yaml
+    ├── deployment-secctx-patch.yaml
+    └── job-secctx-patch.yaml
 ```
 
 The deployment script is located at:

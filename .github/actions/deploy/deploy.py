@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-MLflow Deployment Script for Kind Clusters
+MLflow Deployment Script for Kubernetes Clusters
 
 This script deploys MLflow operator and creates an MLflow instance with configurable
 storage backends (SQLite/PostgreSQL) and artifact storage (file/S3).
@@ -265,8 +265,9 @@ class MLflowDeployer:
         """Deploy SeaweedFS for S3-compatible storage"""
         print("🌊 Deploying SeaweedFS...")
 
-        seaweedfs_path = self.repo_root / "config" / "overlays" / "kind" / "seaweedfs" / "base"
-        seaweedfs_params_env = seaweedfs_path / "seaweedfs" / "params.env"
+        platform_overlay = "openshift" if self.args.platform == "openshift" else "base"
+        seaweedfs_path = self.repo_root / "config" / "seaweedfs" / platform_overlay
+        seaweedfs_params_env = self.repo_root / "config" / "seaweedfs" / "base" / "params.env"
 
         self.run_command([
             "sed", "-i", f"s#SEAWEEDFS_IMAGE=.*#SEAWEEDFS_IMAGE={self.args.seaweedfs_image}#",
@@ -479,8 +480,9 @@ class MLflowDeployer:
         """Deploy PostgreSQL for database storage"""
         print("🐘 Deploying PostgreSQL...")
 
-        postgres_path = self.repo_root / "config" / "overlays" / "kind" / "postgres"
-        postgres_params_env = postgres_path / "params.env"
+        platform_overlay = "openshift" if self.args.platform == "openshift" else "base"
+        postgres_path = self.repo_root / "config" / "postgres" / platform_overlay
+        postgres_params_env = self.repo_root / "config" / "postgres" / "base" / "params.env"
 
         self.run_command([
             "sed", "-i", f"s#POSTGRES_IMAGE=.*#POSTGRES_IMAGE={self.args.postgres_image}#",
@@ -878,7 +880,7 @@ class MLflowDeployer:
 
     def deploy(self):
         """Main deployment orchestration"""
-        print("🚀 Starting MLflow deployment on Kind cluster...")
+        print("🚀 Starting MLflow deployment on Kubernetes cluster...")
         print(f"Configuration:")
         print(f"  Namespace: {self.args.namespace}")
         print(f"  Backend Store: {self.args.backend_store}")
@@ -928,7 +930,7 @@ class MLflowDeployer:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Deploy MLflow on Kind cluster")
+    parser = argparse.ArgumentParser(description="Deploy MLflow on Kubernetes cluster")
 
     # Basic configuration
     parser.add_argument("--namespace", default="mlflow",
@@ -952,6 +954,13 @@ def main():
     parser.add_argument("--backend-store-uri", default="sqlite:////mlflow/mlflow.db")
     parser.add_argument("--registry-store-uri", default="sqlite:////mlflow/mlflow.db")
     parser.add_argument("--artifacts-destination", default="file:///mlflow/artifacts")
+
+    # Target platform — selects the appropriate kustomize overlay for infrastructure
+    parser.add_argument("--platform", default="base", choices=["base", "openshift"],
+                       help="Target platform (default: base). Selects the postgres/seaweedfs "
+                            "overlay: 'base' uses the platform-agnostic overlay (ie for Kind "
+                            "or other Kubernetes clusters), 'openshift' uses the "
+                            "OpenShift overlay with platform-specific patches.")
 
     # Infrastructure images (override to avoid Docker Hub rate limits)
     parser.add_argument("--postgres-image", default="postgres:13",

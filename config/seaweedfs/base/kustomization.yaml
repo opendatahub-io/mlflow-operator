@@ -12,7 +12,6 @@ resources:
 - minio-service.yaml
 - mlflow-aws-secret.yaml
 
-# Create ConfigMap from params.env for environment variable substitution
 configMapGenerator:
 - name: seaweedfs-params
   envs:

@@ -19,6 +19,7 @@ spec:
         application-crd-id: $APPLICATION_CRD_ID
     spec:
       securityContext:
+        fsGroup: 1001
         seccompProfile:
           type: RuntimeDefault
       containers:
@@ -61,10 +62,13 @@ spec:
           successThreshold: 1
           failureThreshold: 18
           timeoutSeconds: 8
-        securityContext:
+        securityContext:  # Using restricted profile
           allowPrivilegeEscalation: false
           privileged: false
           runAsNonRoot: true
+          # image defaults to root user
+          runAsUser: 1001
+          runAsGroup: 1001
           capabilities:
             drop:
             - ALL
