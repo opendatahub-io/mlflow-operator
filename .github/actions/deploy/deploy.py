@@ -903,15 +903,24 @@ class MLflowDeployer:
 
             # Step 2: Deploy dependencies based on configuration
             if self.args.backend_store == "postgres" or self.args.registry_store == "postgres":
-                self.deploy_postgres()
+                if not self.args.skip_infrastructure:
+                    self.deploy_postgres()
+                else:
+                    print("⏭️  Skipping PostgreSQL deployment (--skip-infrastructure set)")
                 self.create_postgres_secret()
 
             if self.args.artifact_storage == "s3":
                 self.create_s3_secret()
-                self.deploy_seaweedfs()
+                if not self.args.skip_infrastructure:
+                    self.deploy_seaweedfs()
+                else:
+                    print("⏭️  Skipping SeaweedFS deployment (--skip-infrastructure set)")
 
-            # Step 3: Deploy MLflow operator
-            self.deploy_mlflow_operator()
+            # Step 3: Deploy MLflow operator (skipped when operator is already installed)
+            if not self.args.skip_operator:
+                self.deploy_mlflow_operator()
+            else:
+                print("⏭️  Skipping MLflow operator deployment (--skip-operator set)")
 
             # Step 4: Create MLflow CR
             self.deploy_mlflow()
@@ -939,6 +948,11 @@ def main():
                        help="Full MLflow image name and tag")
     parser.add_argument("--mlflow-operator-image", default="quay.io/opendatahub/mlflow-operator:odh-stable",
                        help="Full MLflow operator image name and tag")
+    parser.add_argument("--skip-operator", action="store_true", default=False,
+                       help="Skip deploying the MLflow operator (assume it is already installed)")
+    parser.add_argument("--skip-infrastructure", action="store_true", default=False,
+                       help="Skip deploying PostgreSQL and SeaweedFS (assume they are pre-existing); "
+                            "credentials secrets are still created")
 
     # Storage configuration
     parser.add_argument("--backend-store", choices=["sqlite", "postgres"],
