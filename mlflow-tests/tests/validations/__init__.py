@@ -30,6 +30,9 @@ from .validation_utils import (
     validate_resource_retrieved_or_created,
     validate_no_error,
 )
+from .workspace_validations import (
+    validate_workspaces_filtered,
+)
 
 __all__ = [
     "validate_experiment_retrieved",
@@ -50,4 +53,5 @@ __all__ = [
     "validate_resource_retrieved_or_created",
     "validate_no_error",
     "validate_custom_artifact_location",
+    "validate_workspaces_filtered",
 ]

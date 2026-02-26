@@ -78,6 +78,7 @@ class TestBase:
         """Initialize instance attributes from session-scoped clients."""
         self.admin_client, self.k8_manager, self.user_manager, self.workspaces = setup_clients
         self.test_context = TestContext(workspaces=self.workspaces)
+        self.test_context.k8_manager = self.k8_manager
 
     @pytest.fixture(autouse=True)
     def init_experiments_and_runs(self, create_experiments_and_runs):

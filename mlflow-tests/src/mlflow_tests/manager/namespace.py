@@ -33,3 +33,31 @@ class K8Manager:
         except ApiException as e:
             if e.status != 409:  # Ignore if already exists
                 raise
+
+    def label_namespace(self, name: str, labels: dict[str, str]) -> None:
+        """Apply labels to a Kubernetes namespace.
+
+        Args:
+            name: Namespace name
+            labels: Labels to merge into the namespace metadata
+
+        Raises:
+            ApiException: If patching fails
+        """
+        patch = {"metadata": {"labels": labels}}
+        self.core_v1_api.patch_namespace(name=name, body=patch)
+
+    def delete_namespace(self, name: str) -> None:
+        """Delete a Kubernetes namespace.
+
+        Args:
+            name: Namespace name
+
+        Raises:
+            ApiException: If deletion fails (except not found)
+        """
+        try:
+            self.core_v1_api.delete_namespace(name=name)
+        except ApiException as e:
+            if e.status != 404:
+                raise
