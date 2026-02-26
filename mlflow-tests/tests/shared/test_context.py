@@ -2,11 +2,14 @@ from mlflow_tests.enums import ResourceType
 from .user_info import UserInfo
 from .error_models import ErrorResponse
 from dataclasses import dataclass, field
-from typing import Optional, Any
+from typing import Optional, Any, TYPE_CHECKING
 import logging
 from mlflow import MlflowClient
 
 logger = logging.getLogger(__name__)
+
+if TYPE_CHECKING:
+    from mlflow_tests.manager.namespace import K8Manager
 
 
 @dataclass
@@ -62,6 +65,9 @@ class TestContext:
     model: Optional[Any] = None
     model_uri: Optional[str] = None
     artifact_location: Optional[str] = None
+    k8_manager: Optional["K8Manager"] = None
+    discovered_workspaces: set[str] = field(default_factory=set)
+    unlabeled_namespace: Optional[str] = None
 
     def add_experiment_for_cleanup(self, experiment_id: str, workspace: str) -> None:
         """Add an experiment to the cleanup list with workspace context.

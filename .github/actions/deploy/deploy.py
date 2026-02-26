@@ -596,6 +596,12 @@ class MLflowDeployer:
                 # For non-file storage, defaultArtifactRoot should be a subdirectory
                 mlflow_cr["spec"]["defaultArtifactRoot"] = f"{self.args.artifacts_destination}/runs"
 
+        mlflow_cr["spec"]["workspaceLabelSelector"] = {
+            "matchLabels": {
+                "mlflow-enabled": "true",
+            }
+        }
+
         # Add storage for local file/sqlite backends
         if not use_postgres_backend or not use_postgres_registry or not use_s3_artifacts:
             mlflow_cr["spec"]["storage"] = {

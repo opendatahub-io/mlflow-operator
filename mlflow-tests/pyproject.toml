@@ -33,6 +33,7 @@ markers = [
     "Artifacts: Test artifact operations and S3 storage verification",
     "Experiments: Test experiment RBAC and management operations",
     "Models: Test registered model RBAC and management operations",
+    "Workspaces: Test Kubernetes workspace discovery and filtering",
 ]
 testpaths = ["tests"]
 python_files = ["test_*.py"]
