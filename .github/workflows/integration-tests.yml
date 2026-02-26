@@ -139,6 +139,7 @@ jobs:
           serve_artifacts: ${{ inputs.serve_artifacts || matrix.serve_artifacts }}
           s3_access_key: ${{ env.AWS_ACCESS_KEY_ID }}
           s3_secret_key: ${{ env.AWS_SECRET_ACCESS_KEY }}
+          workspace_label_selector: 'mlflow-enabled=true'
 
       - name: Verify deployment
         run: |

@@ -223,6 +223,19 @@ class TestBase:
                     logger.warning(error_msg)
                     cleanup_errors.append(error_msg)
 
+        # Cleanup namespaces
+        if getattr(self.test_context, "namespaces_to_delete", None) and getattr(self.test_context, "k8_manager", None):
+            namespaces = sorted(self.test_context.namespaces_to_delete)
+            logger.info(f"Cleaning up {len(namespaces)} test namespace(s)")
+            for namespace in namespaces:
+                try:
+                    logger.info(f"Deleting test namespace: {namespace}")
+                    self.test_context.k8_manager.delete_namespace(namespace)
+                except Exception as e:
+                    error_msg = f"Failed to delete test namespace {namespace}: {e}"
+                    logger.warning(error_msg)
+                    cleanup_errors.append(error_msg)
+
         # Restore original workspace if it was set
         if original_workspace:
             try:

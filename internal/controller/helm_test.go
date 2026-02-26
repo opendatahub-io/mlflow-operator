@@ -17,8 +17,8 @@ limitations under the License.
 package controller
 
 import (
-	"testing"
 	"strings"
+	"testing"
 
 	"github.com/onsi/gomega"   // nolint:staticcheck // Named import for gomega.NewWithT; dual import for readability
 	. "github.com/onsi/gomega" // Dot import for matchers like HaveOccurred
@@ -31,7 +31,8 @@ import (
 )
 
 const (
-	deploymentKind = "Deployment"
+	deploymentKind      = "Deployment"
+	mlflowContainerName = "mlflow"
 
 	// CA bundle test constants - these match values from values.yaml and deployment.yaml
 	caCombinedVolume = "combined-ca-bundle"
@@ -851,7 +852,7 @@ func TestRenderChart_EnvVars(t *testing.T) {
 	var mlflowContainer map[string]interface{}
 	for _, c := range containers {
 		container := c.(map[string]interface{})
-		if container["name"] == "mlflow" {
+		if container["name"] == mlflowContainerName {
 			mlflowContainer = container
 			break
 		}
@@ -988,7 +989,7 @@ func TestRenderChart_WorkspaceLabelSelectorEnvVar(t *testing.T) {
 	var mlflowContainer map[string]interface{}
 	for _, c := range containers {
 		container := c.(map[string]interface{})
-		if container["name"] == "mlflow" {
+		if container["name"] == mlflowContainerName {
 			mlflowContainer = container
 			break
 		}
