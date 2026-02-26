@@ -266,6 +266,12 @@ class MLflowDeployer:
         print("🌊 Deploying SeaweedFS...")
 
         seaweedfs_path = self.repo_root / "config" / "overlays" / "kind" / "seaweedfs" / "base"
+        seaweedfs_params_env = seaweedfs_path / "seaweedfs" / "params.env"
+
+        self.run_command([
+            "sed", "-i", f"s#SEAWEEDFS_IMAGE=.*#SEAWEEDFS_IMAGE={self.args.seaweedfs_image}#",
+            str(seaweedfs_params_env),
+        ], f"Setting seaweedfs image to {self.args.seaweedfs_image}")
 
         # Note: base params.env namespace already updated by deploy_mlflow_operator()
         print(f"📝 SeaweedFS will deploy to namespace '{self.args.namespace}' (from base params.env)")
@@ -474,6 +480,12 @@ class MLflowDeployer:
         print("🐘 Deploying PostgreSQL...")
 
         postgres_path = self.repo_root / "config" / "overlays" / "kind" / "postgres"
+        postgres_params_env = postgres_path / "params.env"
+
+        self.run_command([
+            "sed", "-i", f"s#POSTGRES_IMAGE=.*#POSTGRES_IMAGE={self.args.postgres_image}#",
+            str(postgres_params_env),
+        ], f"Setting postgres image to {self.args.postgres_image}")
 
         # Note: PostgreSQL overlay doesn't use namespace parameter, so we apply directly to target namespace
         cmd = f"cd {postgres_path} && kustomize build . | kubectl apply -n {self.args.namespace} -f -"
@@ -940,6 +952,12 @@ def main():
     parser.add_argument("--backend-store-uri", default="sqlite:////mlflow/mlflow.db")
     parser.add_argument("--registry-store-uri", default="sqlite:////mlflow/mlflow.db")
     parser.add_argument("--artifacts-destination", default="file:///mlflow/artifacts")
+
+    # Infrastructure images (override to avoid Docker Hub rate limits)
+    parser.add_argument("--postgres-image", default="postgres:13",
+                       help="PostgreSQL container image (default: postgres:13)")
+    parser.add_argument("--seaweedfs-image", default="chrislusf/seaweedfs:4.07",
+                       help="SeaweedFS container image (default: chrislusf/seaweedfs:4.07)")
 
     # PostgreSQL configuration
     parser.add_argument("--postgres-host", default="")
