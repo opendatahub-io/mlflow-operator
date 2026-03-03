@@ -26,14 +26,13 @@ cd mlflow-tests
 IN_CLUSTER_MODE=false bash images/test-run.sh
 
 # Use a custom MLflow server image (recommended when testing against a specific commit)
-IN_CLUSTER_MODE=false bash images/test-run.sh \
-  --mlflow-image=quay.io/opendatahub/mlflow:master
+IN_CLUSTER_MODE=false MLFLOW_IMAGE=quay.io/opendatahub/mlflow:master bash images/test-run.sh
 
 # Skip deployment (MLflow CR already exists on the cluster)
 IN_CLUSTER_MODE=false SKIP_DEPLOYMENT=true bash images/test-run.sh
 
 # Skip cleanup (leave the MLflow CR and role bindings in place after the run)
-IN_CLUSTER_MODE=false bash images/test-run.sh --skip-cleanup=true
+IN_CLUSTER_MODE=false SKIP_CLEANUP=true bash images/test-run.sh
 ```
 
 ## Running tests in-cluster (CI / container)
@@ -50,47 +49,80 @@ podman build -f mlflow-tests/images/test.Dockerfile -t mlflow-tests:latest .
 podman run --rm \
   --user root \
   -v $HOME/.kube:/mlflow/.kube:z \
-  -e KUBECONFIG=/mlflow/.kube/config \
   -e IN_CLUSTER_MODE=false \
   mlflow-tests:latest
 ```
 
-## CLI flags
-
-All flags are optional. Defaults are shown.
-
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--mlflow-image=<image>` | `quay.io/opendatahub/mlflow:master` | Full image reference for the MLflow server to deploy. Overrides `--mlflow-tag`. |
-| `--mlflow-tag=<tag>` | `master` | Image tag for `quay.io/opendatahub/mlflow`. Ignored if `--mlflow-image` is set. |
-| `--storage-type=<type>` | `file` | Artifact storage backend. Supported: `file`, `s3`. |
-| `--db-type=<type>` | `sqlite` | Metadata store backend. Supported: `sqlite`, `postgresql`. |
-| `--deploy-mlflow-operator=<bool>` | `true` | Whether to patch the operator CSV with a custom branch before deploying. |
-| `--mlflow-operator-owner=<owner>` | `opendatahub-io` | GitHub owner of the mlflow-operator repo (used for CSV patching). |
-| `--mlflow-operator-repo=<repo>` | `mlflow-operator` | GitHub repo name (used for CSV patching). |
-| `--mlflow-operator-branch=<branch>` | `main` | Branch to pull manifests from (used for CSV patching). |
-
+The `KUBECONFIG` environment variable defaults to `/mlflow/.kube/config` in the image. If your
+kubeconfig lives at a non-standard path, override it: `-v $KUBECONFIG:/mlflow/.kube/config:z`.
 
 ## Environment variables
 
-The script sources `images/.env` for defaults. All values can be overridden by setting the
-corresponding environment variable before invoking the script.
+The script is configured entirely via environment variables. Variables can also be set in
+`images/.env` (sourced automatically). Run `bash images/test-run.sh --help` for the full list.
+
+### MLflow image
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `IN_CLUSTER_MODE` | `true` | Set to `false` for local out-of-cluster runs (enables port-forwarding). |
+| `MLFLOW_IMAGE` | _(unset)_ | Full image reference for the MLflow server. Overrides `MLFLOW_TAG` when set. |
+| `MLFLOW_TAG` | `master` | Image tag appended to `MLFLOW_IMAGE_REPO`. |
+| `MLFLOW_IMAGE_REPO` | `quay.io/opendatahub/mlflow` | Image repository used when `MLFLOW_IMAGE` is not set. |
+| `MLFLOW_OPERATOR_IMAGE` | `quay.io/opendatahub/mlflow-operator:odh-stable` | Full image reference for the MLflow operator. |
+
+### Storage
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `STORAGE_TYPE` | `file` | Artifact storage backend. Supported: `file`, `s3`. |
+| `DB_TYPE` | `sqlite` | Metadata store backend. Supported: `sqlite`, `postgres`. |
+| `AWS_ACCESS_KEY_ID` | _(unset)_ | S3 access key (`STORAGE_TYPE=s3` only). |
+| `AWS_SECRET_ACCESS_KEY` | _(unset)_ | S3 secret key (`STORAGE_TYPE=s3` only). |
+| `BUCKET` | _(unset)_ | S3 bucket name (`STORAGE_TYPE=s3` only). |
+| `S3_ENDPOINT_URL` | _(unset)_ | S3 endpoint URL (`STORAGE_TYPE=s3` only). |
+| `DB_HOST` | _(auto)_ | PostgreSQL hostname (`DB_TYPE=postgres` only). |
+| `DB_PORT` | `5432` | PostgreSQL port (`DB_TYPE=postgres` only). |
+| `DB_USER` | `postgres` | PostgreSQL username (`DB_TYPE=postgres` only). |
+| `DB_PASSWORD` | _(unset)_ | PostgreSQL password (`DB_TYPE=postgres` only). |
+| `DB_NAME` | `mydatabase` | PostgreSQL database name (`DB_TYPE=postgres` only). |
+| `DB_SSLMODE` | _(unset)_ | SSL mode for the PostgreSQL connection URI. |
+
+### Infrastructure image overrides
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `POSTGRES_IMAGE` | _(unset)_ | Override the PostgreSQL container image deployed by the script. |
+| `SEAWEEDFS_IMAGE` | _(unset)_ | Override the SeaweedFS container image deployed by the script. |
+
+### Operator / OpenShift
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `DEPLOY_MLFLOW_OPERATOR` | `false` | Set to `true` on OpenShift/OLM clusters to patch the CSV instead of deploying via kustomize. |
+| `MLFLOW_OPERATOR_OWNER` | `opendatahub-io` | GitHub owner for CSV manifest download. |
+| `MLFLOW_OPERATOR_REPO` | `mlflow-operator` | GitHub repo name for CSV manifest download. |
+| `MLFLOW_OPERATOR_BRANCH` | `main` | Branch to pull manifests from for CSV patching. |
+| `INFRASTRUCTURE_PLATFORM` | _(auto)_ | Infrastructure overlay: `kind` or `openshift`. Auto-derived from `DEPLOY_MLFLOW_OPERATOR`. |
+
+### Skip / control flags
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `SKIP_DEPLOYMENT` | `false` | Skip all cluster deployment (use pre-existing resources). |
+| `SKIP_OPERATOR` | `false` | Skip operator deployment only. |
+| `SKIP_INFRASTRUCTURE` | `false` | Skip PostgreSQL/SeaweedFS deployment. |
+| `SKIP_CLEANUP` | `false` | Leave resources in place after the run (useful for debugging). |
+
+### Other
+
+| Variable | Default | Description |
+|----------|---------|-------------|
 | `NAMESPACE` | `opendatahub` | Namespace where the MLflow Operator is deployed. |
-| `SKIP_DEPLOYMENT` | `true` | Skip deploying/rolling out a new MLflow Operator (use an existing one). |
-| `SKIP_CLEANUP` | `false` | Skip cleaning up generated components after tests complete (MLFlow CR, RoleBinding, etc.). |
+| `MLFLOW_SA_NAME` | `mlflow-sa` | Service account name created by the operator. |
+| `IN_CLUSTER_MODE` | `true` | Set to `false` for local out-of-cluster runs (enables port-forwarding). |
+| `workspaces` | `workspace1-<random>,workspace2-<random>` | Comma-separated list of workspace namespaces to create and test against. |
 | `TEST_RESULTS_DIR` | `/tmp/test-results` | Directory for JUnit XML output. |
-| `workspaces` | `workspace1-<random_hash>,workspace2-<random_hash>` | Comma-separated list of workspace namespaces to create and test against. |
-| `S3_SECRET_NAME` | `mlflow-s3-secret` | Name of the Secret containing S3 credentials (S3 storage only). |
-| `DB_SECRET_NAME` | `mlflow-db-secret` | Name of the Secret containing DB credentials (PostgreSQL only). |
-| `DB_HOST` | `postgres.example.com` | PostgreSQL hostname (PostgreSQL only). |
-| `DB_PORT` | `5432` | PostgreSQL port (PostgreSQL only). |
-| `DB_USER` | `mlflow` | PostgreSQL username (PostgreSQL only). |
-| `DB_PASSWORD` | `password` | PostgreSQL password (PostgreSQL only). |
-| `DB_NAME` | `mlflow` | PostgreSQL database name (PostgreSQL only). |
+| `DEPLOY_PY` | `<repo>/.github/actions/deploy/deploy.py` | Path to the deploy helper script. |
 
 ## Storage configuration
 
@@ -99,7 +131,7 @@ corresponding environment variable before invoking the script.
 Uses SQLite for metadata and a local PVC for artifacts. Suitable for quick local testing.
 
 ```bash
-bash images/test-run.sh --storage-type=file --db-type=sqlite
+STORAGE_TYPE=file DB_TYPE=sqlite bash images/test-run.sh
 ```
 
 ### S3 artifact storage
@@ -108,18 +140,18 @@ Requires `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `BUCKET`, and `S3_ENDPOIN
 
 ```bash
 AWS_ACCESS_KEY_ID=... AWS_SECRET_ACCESS_KEY=... BUCKET=my-bucket S3_ENDPOINT_URL=https://... \
-  bash images/test-run.sh --storage-type=s3
+  STORAGE_TYPE=s3 bash images/test-run.sh
 ```
 
 ### PostgreSQL metadata store
 
-**NOTE**: This hasn't been implemented for integration testing yet
+**NOTE**: This hasn't been implemented for integration testing yet.
 
 Requires `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, and `DB_NAME` to be configured (via `.env`
 or environment variables).
 
 ```bash
-bash images/test-run.sh --db-type=postgresql
+DB_TYPE=postgres DB_HOST=... DB_PASSWORD=... bash images/test-run.sh
 ```
 
 ## Architecture notes
@@ -136,5 +168,5 @@ bash images/test-run.sh --db-type=postgresql
 
 - **Client/server version alignment**: the test client is installed from
   `opendatahub-io/mlflow@master` (pinned in `uv.lock`). The MLflow server image must be built from
-  the same commit for the workspace feature probe endpoint to match. Use `--mlflow-image` to supply
+  the same commit for the workspace feature probe endpoint to match. Use `MLFLOW_IMAGE` to supply
   a freshly built image when updating the lockfile.
