@@ -70,14 +70,15 @@ Operator / OpenShift:
   MLFLOW_OPERATOR_OWNER   GitHub owner for CSV manifest download (default: opendatahub-io)
   MLFLOW_OPERATOR_REPO    GitHub repo for CSV manifest download  (default: mlflow-operator)
   MLFLOW_OPERATOR_BRANCH  GitHub branch for CSV manifest download (default: main)
-  INFRASTRUCTURE_PLATFORM Infrastructure overlay: kind|openshift
-                          (auto-derived from DEPLOY_MLFLOW_OPERATOR when not set)
+  INFRASTRUCTURE_PLATFORM Infrastructure overlay: kind|openshift (default: openshift)
 
 Skip / control flags:
   SKIP_DEPLOYMENT       true|false — skip all cluster deployment (default: false)
   SKIP_OPERATOR         true|false — skip operator deployment only (default: false)
   SKIP_INFRASTRUCTURE   true|false — skip PostgreSQL/SeaweedFS deployment (default: false)
   SKIP_CLEANUP          true|false — leave resources in place after the run (default: false)
+  FAIL_FAST             true|false — stop after the first backend suite failure (default: true)
+                        Set to false to run all backends even if one fails.
 
 Other:
   NAMESPACE             Target namespace (default: opendatahub)
@@ -132,23 +133,18 @@ SKIP_DEPLOYMENT="${SKIP_DEPLOYMENT:-false}"
 SKIP_OPERATOR="${SKIP_OPERATOR:-false}"
 SKIP_INFRASTRUCTURE="${SKIP_INFRASTRUCTURE:-false}"
 SKIP_CLEANUP="${SKIP_CLEANUP:-false}"
+FAIL_FAST="${FAIL_FAST:-true}"
 IN_CLUSTER_MODE="${IN_CLUSTER_MODE:-true}"
 
 # Suites to run.  Each entry is an artifact storage backend (file|s3); the script
 # deploys a fresh MLflow CR per suite, runs the full test suite, then tears it down.
-ARTIFACT_BACKENDS="${ARTIFACT_BACKENDS:-file,s3}"
+# Backward compatibility: STORAGE_TYPE=s3 (old single-suite interface) is honoured
+# when ARTIFACT_BACKENDS is not explicitly set.
+ARTIFACT_BACKENDS="${ARTIFACT_BACKENDS:-${STORAGE_TYPE:-file,s3}}"
 TEST_LABELS="${TEST_LABELS:-}"
 
-# Platform for infrastructure overlays.  Automatically set to "openshift" when
-# DEPLOY_MLFLOW_OPERATOR=true (OLM / OpenShift), otherwise defaults to "kind".
-# Override explicitly with PLATFORM=openshift|kind if needed.
-if [ -z "${INFRASTRUCTURE_PLATFORM:-}" ]; then
-    if [ "${DEPLOY_MLFLOW_OPERATOR}" = "true" ]; then
-        CLUSTER_PLATFORM="openshift"
-    else
-        CLUSTER_PLATFORM="kind"
-    fi
-fi
+# Platform for infrastructure overlays: kind|openshift (default: openshift).
+INFRASTRUCTURE_PLATFORM="${INFRASTRUCTURE_PLATFORM:-openshift}"
 
 # Infrastructure image overrides
 POSTGRES_IMAGE="${POSTGRES_IMAGE:-}"
@@ -164,6 +160,7 @@ WORKSPACE_LIST="${workspaces:-workspace1-${RANDOM_SUFFIX},workspace2-${RANDOM_SU
 export workspaces="$WORKSPACE_LIST"
 
 PF_PID=""
+_CREATED_WORKSPACES=""  # tracks only namespaces created by this run (not pre-existing)
 # Set to true after the first suite so subsequent suites skip re-deploying the operator.
 _OPERATOR_DEPLOYED=false
 
@@ -172,21 +169,39 @@ MLFLOW_RESOLVED_IMAGE="${MLFLOW_IMAGE:-${MLFLOW_IMAGE_REPO}:${MLFLOW_TAG}}"
 API_BASE="https://${MLFLOW_NAME}.${NAMESPACE}.svc.cluster.local:8443"
 
 # ─── Shared teardown (EXIT trap) ──────────────────────────────────────────────
-# Cleans up resources that are shared across suites: workspace namespaces,
-# workspace role bindings, the MLflow SA role binding, and the cluster-level
-# auth-delegator binding.  Any partially-created MLflow CR from a failed suite
-# is also removed here as a safety net (teardown_suite removes it normally).
+# Removes all resources created by this run: workspace namespaces (only those the
+# script itself created, not pre-existing ones), role bindings, the MLflow CR, and
+# any self-deployed infrastructure (PostgreSQL, SeaweedFS). Infrastructure teardown
+# attempts both backends unconditionally; --ignore-not-found makes it a no-op for
+# whichever was not deployed.
 
 cleanup() {
     [ -n "$PF_PID" ] && kill -0 "$PF_PID" 2>/dev/null && kill "$PF_PID"
     for ws in $(echo "$WORKSPACE_LIST" | tr ',' ' '); do
         ws=$(echo "$ws" | xargs); [ -z "$ws" ] && continue
         kubectl delete rolebinding "mlflow-permissions-${MLFLOW_NAME}" -n "$ws" --ignore-not-found 2>/dev/null || true
+    done
+    # Only delete namespaces this run created; pre-existing namespaces are left intact.
+    for ws in $(echo "$_CREATED_WORKSPACES" | tr ',' ' '); do
+        ws=$(echo "$ws" | xargs); [ -z "$ws" ] && continue
         kubectl delete namespace "$ws" --ignore-not-found 2>/dev/null || true
     done
     kubectl delete mlflow "$MLFLOW_NAME" -n "$NAMESPACE" --ignore-not-found 2>/dev/null || true
     kubectl delete rolebinding "mlflow-permissions-${MLFLOW_NAME}" -n "$NAMESPACE" --ignore-not-found 2>/dev/null || true
     kubectl delete clusterrolebinding "mlflow-auth-delegator-${MLFLOW_NAME}" --ignore-not-found 2>/dev/null || true
+
+    if [ "$SKIP_INFRASTRUCTURE" != "true" ]; then
+        local infra_overlay="$INFRASTRUCTURE_PLATFORM"
+        echo "  Removing self-deployed infrastructure..."
+        kustomize build "$REPO_ROOT/config/postgres/$infra_overlay" \
+            | kubectl delete --ignore-not-found -n "$NAMESPACE" -f - 2>/dev/null || true
+        export APPLICATION_CRD_ID=mlflow-pipelines \
+               PROFILE_NAMESPACE_LABEL=mlflow-profile \
+               S3_ADMIN_USER=kind-admin
+        kustomize build "$REPO_ROOT/config/seaweedfs/$infra_overlay" \
+            | envsubst '$NAMESPACE,$APPLICATION_CRD_ID,$PROFILE_NAMESPACE_LABEL,$S3_ADMIN_USER' \
+            | kubectl delete --ignore-not-found -f - 2>/dev/null || true
+    fi
 }
 
 if [ "$SKIP_CLEANUP" != "true" ]; then
@@ -264,7 +279,10 @@ run_suite() {
     # ── Workspace namespaces (idempotent) ────────────────────────────────────────
     for ws in $(echo "$WORKSPACE_LIST" | tr ',' ' '); do
         ws=$(echo "$ws" | xargs); [ -z "$ws" ] && continue
-        kubectl get namespace "$ws" &>/dev/null || kubectl create namespace "$ws"
+        if ! kubectl get namespace "$ws" &>/dev/null; then
+            kubectl create namespace "$ws"
+            _CREATED_WORKSPACES="${_CREATED_WORKSPACES:+${_CREATED_WORKSPACES},}${ws}"
+        fi
     done
 
     # ── Deploy ──────────────────────────────────────────────────────────────────
@@ -277,7 +295,7 @@ run_suite() {
             --namespace             "$NAMESPACE"
             --mlflow-image          "$MLFLOW_RESOLVED_IMAGE"
             --mlflow-operator-image "$MLFLOW_OPERATOR_IMAGE"
-            --platform              "$CLUSTER_PLATFORM"
+            --platform              "$INFRASTRUCTURE_PLATFORM"
         )
 
         [ -n "${POSTGRES_IMAGE:-}"  ] && deploy_args+=(--postgres-image  "$POSTGRES_IMAGE")
@@ -304,8 +322,12 @@ run_suite() {
                 [ -n "${BUCKET:-}"                ] && deploy_args+=(--s3-bucket     "$BUCKET")
                 [ -n "${S3_ENDPOINT_URL:-}"       ] && deploy_args+=(--s3-endpoint   "$S3_ENDPOINT_URL")
                 ;;
-            *)
+            file)
                 deploy_args+=(--artifact-storage file)
+                ;;
+            *)
+                echo "ERROR: Unsupported ARTIFACT_BACKENDS value: '${STORAGE_TYPE}'. Supported: file, s3" >&2
+                return 1
                 ;;
         esac
 
@@ -380,12 +402,11 @@ run_suite() {
     cd "$SCRIPT_DIR"
 
     # ── Between-suite teardown ───────────────────────────────────────────────────
-    # Only the MLflow CR is removed between suites; RBAC, infra, and workspace
-    # namespaces are kept and reused by the next suite.
-    if [ "$SKIP_CLEANUP" != "true" ]; then
-        [ -n "$PF_PID" ] && kill -0 "$PF_PID" 2>/dev/null && kill "$PF_PID" && PF_PID=""
-        kubectl delete mlflow "$MLFLOW_NAME" -n "$NAMESPACE" --ignore-not-found 2>/dev/null || true
-    fi
+    # Always remove the MLflow CR so the next suite gets a clean slate.
+    # SKIP_CLEANUP only suppresses the final EXIT trap, not this per-suite reset.
+    # --wait ensures finalizers have completed before the next suite's deploy.py apply.
+    [ -n "$PF_PID" ] && kill -0 "$PF_PID" 2>/dev/null && kill "$PF_PID" && PF_PID=""
+    kubectl delete mlflow "$MLFLOW_NAME" -n "$NAMESPACE" --ignore-not-found --wait --timeout=120s 2>/dev/null || true
 
     return "$suite_exit"
 }
@@ -399,7 +420,10 @@ OVERALL_EXIT=0
 for STORAGE_TYPE in $(echo "$ARTIFACT_BACKENDS" | tr ',' ' '); do
     STORAGE_TYPE=$(echo "$STORAGE_TYPE" | xargs)
     [ -z "$STORAGE_TYPE" ] && continue
-    run_suite || OVERALL_EXIT=$?
+    if ! run_suite; then
+        OVERALL_EXIT=1
+        [ "$FAIL_FAST" = "true" ] && break
+    fi
 done
 
 echo ""
