@@ -128,7 +128,7 @@ inputs:
     default: 'false'
 
   workspace_label_selector:
-    description: 'Optional Kubernetes LabelSelector to restrict which namespaces are exposed as MLflow workspaces (e.g. mlflow-enabled=true)'
+    description: 'Optional Kubernetes LabelSelector to restrict which namespaces are exposed as MLflow workspaces (e.g. {"matchLabels":{"mlflow-enabled":"true"}})'
     required: false
     default: ''
 
@@ -185,6 +185,7 @@ runs:
           --s3-secret-key "${{ inputs.s3_secret_key }}" \
           --s3-endpoint "${{ inputs.s3_endpoint }}" \
           --workspace-label-selector "${{ inputs.workspace_label_selector }}" \
+          --workspace-label-selector '${{ inputs.workspace_label_selector }}' \
           ${{ inputs.postgres_tls == 'true' && '--postgres-tls' || '' }} \
           ${{ inputs.seaweedfs_tls == 'true' && '--seaweedfs-tls' || '' }}
 
