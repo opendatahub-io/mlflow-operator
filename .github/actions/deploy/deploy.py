@@ -8,12 +8,12 @@ storage backends (SQLite/PostgreSQL) and artifact storage (file/S3).
 
 import argparse
 import json
-import subprocess
-import yaml
 import os
+import subprocess
 import sys
-import time
 import tempfile
+import time
+import yaml
 from pathlib import Path
 from typing import List, Union
 from urllib.parse import quote_plus
@@ -808,21 +808,7 @@ class MLflowDeployer:
         selector = (self.args.workspace_label_selector or "").strip()
         if selector:
             try:
-                if selector.startswith("{") or selector.startswith("[") or "matchLabels" in selector or ":" in selector:
-                    selector_obj = yaml.safe_load(selector)
-                else:
-                    match_labels = {}
-                    for pair in selector.split(","):
-                        pair = pair.strip()
-                        if not pair:
-                            continue
-                        if "=" not in pair:
-                            raise ValueError(f"invalid matchLabels pair {pair!r} (expected key=value)")
-                        key, value = pair.split("=", 1)
-                        match_labels[key.strip()] = value.strip()
-                    if not match_labels:
-                        raise ValueError("workspace label selector cannot be empty")
-                    selector_obj = {"matchLabels": match_labels}
+                selector_obj = json.loads(selector)
 
                 if not isinstance(selector_obj, dict):
                     raise ValueError("workspace label selector must deserialize to an object")
