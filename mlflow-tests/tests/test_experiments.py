@@ -26,6 +26,7 @@ logger = logging.getLogger(__name__)
 
 
 @pytest.mark.Experiments
+@pytest.mark.smoke
 class TestExperiments(TestBase):
     """Test Experiments"""
 
