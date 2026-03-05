@@ -30,6 +30,7 @@ package = true
 
 [tool.pytest.ini_options]
 markers = [
+    "smoke: Fast sanity-check tests suitable for pre-merge smoke runs",
     "Artifacts: Test artifact operations and S3 storage verification",
     "Experiments: Test experiment RBAC and management operations",
     "Models: Test registered model RBAC and management operations",
