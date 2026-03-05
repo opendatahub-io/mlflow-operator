@@ -59,6 +59,8 @@ combine_ca_bundles() {
   local temp="${output}.tmp"
   local count=0
 
+  umask 0077
+
   # Initialize temp file
   echo -n "" > "$temp"
 
@@ -84,6 +86,7 @@ combine_ca_bundles() {
 
   # Atomically replace the output file
   mv "$temp" "$output"
+  chmod 0644 "$output"
 
   echo "Combined $count CA bundle sources into $output"
   echo "Certificate count: $(grep -c 'BEGIN CERTIFICATE' "$output" || echo 0)"

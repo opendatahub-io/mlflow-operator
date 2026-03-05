@@ -16,13 +16,43 @@ spec:
     - Ingress
     - Egress
   ingress:
-    # Allow ingress to the public-facing port
     - ports:
         - protocol: TCP
-          port: {{ .Values.mlflow.port }}  # HTTPS port on MLflow container
-      # Allow from all namespaces - can be restricted further if needed
-      from: []
+          port: {{ .Values.mlflow.port }}
+      from:
+        - podSelector: {}
+        # MLflow is a cluster-wide service accessed by the ODH/RHOAI gateway,
+        # dashboard, and Prometheus from varying namespaces depending on
+        # deployment mode. All traffic requires a valid Kubernetes auth token,
+        # so cluster-internal reachability on this port is acceptable.
+        - namespaceSelector: {}
   egress:
-    # Allow all egress for database connections, S3, etc.
-    - to: []
-      ports: []
+    # DNS resolution
+    - ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # HTTPS for S3-compatible object storage, external services, and the Kubernetes API
+    - ports:
+        - protocol: TCP
+          port: 443
+        - protocol: TCP
+          port: 6443
+    # PostgreSQL
+    - ports:
+        - protocol: TCP
+          port: 5432
+    # MySQL
+    - ports:
+        - protocol: TCP
+          port: 3306
+    # S3-compatible object storage (MinIO on 9000, SeaweedFS on 8333)
+    - ports:
+        - protocol: TCP
+          port: 9000
+        - protocol: TCP
+          port: 8333
+    {{- with .Values.networkPolicy.additionalEgressRules }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}

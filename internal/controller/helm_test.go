@@ -22,9 +22,11 @@ import (
 	"github.com/onsi/gomega"   // nolint:staticcheck // Named import for gomega.NewWithT; dual import for readability
 	. "github.com/onsi/gomega" // Dot import for matchers like HaveOccurred
 	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/util/intstr"
 
 	mlflowv1 "github.com/opendatahub-io/mlflow-operator/api/v1"
 )
@@ -1680,6 +1682,25 @@ func TestRenderChart_ServiceMonitorWithTLSConfig(t *testing.T) {
 	g.Expect(err).NotTo(gomega.HaveOccurred())
 	g.Expect(found).To(gomega.BeTrue())
 	g.Expect(matchLabels["app"]).To(gomega.Equal("mlflow-test-mlflow"))
+
+	// On OpenShift, TLS secret should use 0640 (416) since SCC provides fsGroup
+	deployment := findObject(objs, deploymentKind, "mlflow-test-mlflow")
+	g.Expect(deployment).NotTo(gomega.BeNil())
+	volumes, found, err := unstructured.NestedSlice(deployment.Object, "spec", "template", "spec", "volumes")
+	g.Expect(err).NotTo(gomega.HaveOccurred())
+	g.Expect(found).To(gomega.BeTrue())
+	foundTLS := false
+	for _, v := range volumes {
+		vol := v.(map[string]interface{})
+		if vol["name"] == "mlflow-tls" {
+			foundTLS = true
+			mode, foundMode, err := unstructured.NestedInt64(vol, "secret", "defaultMode")
+			g.Expect(err).NotTo(gomega.HaveOccurred())
+			g.Expect(foundMode).To(gomega.BeTrue(), "defaultMode should be set")
+			g.Expect(mode).To(gomega.Equal(int64(416)), "OpenShift TLS defaultMode should be 0640 (416)")
+		}
+	}
+	g.Expect(foundTLS).To(gomega.BeTrue(), "mlflow-tls volume should be present")
 }
 
 func TestRenderChart_ServiceMonitorInsecureSkipVerify(t *testing.T) {
@@ -1727,6 +1748,104 @@ func TestRenderChart_ServiceMonitorInsecureSkipVerify(t *testing.T) {
 
 	_, hasServerName := tlsConfig["serverName"]
 	g.Expect(hasServerName).To(gomega.BeFalse(), "tlsConfig.serverName should not be present on non-OpenShift")
+
+	// On vanilla Kubernetes, TLS secret should use 0644 (420) since there is no fsGroup
+	deployment := findObject(objs, deploymentKind, "mlflow")
+	g.Expect(deployment).NotTo(gomega.BeNil())
+	volumes, found, err := unstructured.NestedSlice(deployment.Object, "spec", "template", "spec", "volumes")
+	g.Expect(err).NotTo(gomega.HaveOccurred())
+	g.Expect(found).To(gomega.BeTrue())
+	foundTLS := false
+	for _, v := range volumes {
+		vol := v.(map[string]interface{})
+		if vol["name"] == "mlflow-tls" {
+			foundTLS = true
+			mode, foundMode, err := unstructured.NestedInt64(vol, "secret", "defaultMode")
+			g.Expect(err).NotTo(gomega.HaveOccurred())
+			g.Expect(foundMode).To(gomega.BeTrue(), "defaultMode should be set")
+			g.Expect(mode).To(gomega.Equal(int64(420)), "non-OpenShift TLS defaultMode should be 0644 (420)")
+		}
+	}
+	g.Expect(foundTLS).To(gomega.BeTrue(), "mlflow-tls volume should be present")
+}
+
+func TestRenderChart_NetworkPolicy(t *testing.T) {
+	g := gomega.NewWithT(t)
+	renderer := NewHelmRenderer("../../charts/mlflow")
+
+	// Default: expected egress ports are present
+	objs, err := renderer.RenderChart(&mlflowv1.MLflow{
+		ObjectMeta: metav1.ObjectMeta{Name: "mlflow"},
+		Spec:       mlflowv1.MLflowSpec{},
+	}, "test-ns", RenderOptions{})
+	g.Expect(err).NotTo(HaveOccurred())
+
+	np := findObject(objs, "NetworkPolicy", "mlflow")
+	g.Expect(np).NotTo(BeNil(), "NetworkPolicy should be rendered")
+
+	egress, found, err := unstructured.NestedSlice(np.Object, "spec", "egress")
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(found).To(BeTrue())
+	g.Expect(egress).To(HaveLen(5), "should have 5 default egress rules (DNS, HTTPS+K8sAPI, PostgreSQL, MySQL, S3)")
+
+	allPorts := collectEgressPorts(egress)
+	for _, expected := range []int64{53, 443, 6443, 5432, 3306, 9000, 8333} {
+		g.Expect(allPorts).To(ContainElement(expected), "egress should allow port %d", expected)
+	}
+
+	// Additional egress rules are appended
+	objs, err = renderer.RenderChart(&mlflowv1.MLflow{
+		ObjectMeta: metav1.ObjectMeta{Name: "mlflow"},
+		Spec: mlflowv1.MLflowSpec{
+			NetworkPolicyAdditionalEgressRules: []networkingv1.NetworkPolicyEgressRule{
+				{
+					Ports: []networkingv1.NetworkPolicyPort{
+						{
+							Protocol: ptr(corev1.ProtocolTCP),
+							Port:     ptr(intstr.FromInt32(15432)),
+						},
+					},
+				},
+			},
+		},
+	}, "test-ns", RenderOptions{})
+	g.Expect(err).NotTo(HaveOccurred())
+
+	np = findObject(objs, "NetworkPolicy", "mlflow")
+	g.Expect(np).NotTo(BeNil())
+
+	egress, found, err = unstructured.NestedSlice(np.Object, "spec", "egress")
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(found).To(BeTrue())
+	g.Expect(egress).To(HaveLen(6), "should have 5 default + 1 additional egress rule")
+	g.Expect(collectEgressPorts(egress)).To(ContainElement(int64(15432)))
+}
+
+func findObject(objs []*unstructured.Unstructured, kind, name string) *unstructured.Unstructured {
+	for _, obj := range objs {
+		if obj.GetKind() == kind && obj.GetName() == name {
+			return obj
+		}
+	}
+	return nil
+}
+
+func collectEgressPorts(egressRules []interface{}) []int64 {
+	var ports []int64
+	for _, rule := range egressRules {
+		ruleMap := rule.(map[string]interface{})
+		rulePorts, ok := ruleMap["ports"].([]interface{})
+		if !ok {
+			continue
+		}
+		for _, p := range rulePorts {
+			portMap := p.(map[string]interface{})
+			if port, ok := portMap["port"]; ok {
+				ports = append(ports, port.(int64))
+			}
+		}
+	}
+	return ports
 }
 
 // Helper function to create pointers
