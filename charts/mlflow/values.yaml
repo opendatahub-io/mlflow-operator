@@ -121,6 +121,12 @@ mlflow:
   port: 8443
   # Allowed hosts (will be generated based on routes/services)
   allowedHosts: []
+  # CORS allowed origins (comma-separated list of origins).
+  # When set, configures the MLFLOW_SERVER_CORS_ALLOWED_ORIGINS env var.
+  # The operator populates this automatically with safe defaults (service names, gateway, localhost).
+  # For standalone Helm deployments, set this manually, e.g.:
+  #   corsAllowedOrigins: "https://my-app.example.com,https://localhost:8443"
+  corsAllowedOrigins: ""
   # Static URL prefix for MLflow (e.g., "/mlflow" for proxied deployments)
   # This also gets set as the --root-path for uvicorn in the deployment template.
   # Leave empty for direct access without a prefix
