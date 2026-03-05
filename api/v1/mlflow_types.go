@@ -30,6 +30,7 @@ import (
 // +kubebuilder:validation:XValidation:rule="!has(self.registryStoreUri) || (!self.registryStoreUri.startsWith('sqlite://') && !self.registryStoreUri.startsWith('file://')) || has(self.storage)",message="storage must be configured when using file-based registry store (sqlite:// or file:// prefix)"
 // +kubebuilder:validation:XValidation:rule="!has(self.artifactsDestination) || !self.artifactsDestination.startsWith('file://') || has(self.storage)",message="storage must be configured when artifactsDestination uses file-based storage (file:// prefix)"
 // +kubebuilder:validation:XValidation:rule="!has(self.artifactsDestination) || !self.artifactsDestination.startsWith('file://') || (has(self.serveArtifacts) && self.serveArtifacts)",message="serveArtifacts must be enabled when artifactsDestination uses file-based storage (file:// prefix)"
+// +kubebuilder:validation:XValidation:rule="!has(self.env) || self.env.all(e, e.name != 'MLFLOW_SERVER_DISABLE_SECURITY_MIDDLEWARE')",message="setting the MLFLOW_SERVER_DISABLE_SECURITY_MIDDLEWARE environment variable is not allowed"
 type MLflowSpec struct {
 	// Image specifies the MLflow container image.
 	// If not specified, use the default image

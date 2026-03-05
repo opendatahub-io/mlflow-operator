@@ -233,5 +233,28 @@ var _ = Describe("MLflow Controller", func() {
 			}
 			Expect(k8sClient.Create(ctx, mlflow)).To(Succeed())
 		})
+
+		It("rejects MLFLOW_SERVER_DISABLE_SECURITY_MIDDLEWARE env var", func() {
+			artifactRoot := "s3://bucket/artifacts"
+			mlflow := &mlflowv1.MLflow{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: resourceName,
+				},
+				Spec: mlflowv1.MLflowSpec{
+					DefaultArtifactRoot: &artifactRoot,
+					BackendStoreURI:     &pgStoreURI,
+					RegistryStoreURI:    &pgStoreURI,
+					Env: []corev1.EnvVar{
+						{
+							Name:  "MLFLOW_SERVER_DISABLE_SECURITY_MIDDLEWARE",
+							Value: "true",
+						},
+					},
+				},
+			}
+			err := k8sClient.Create(ctx, mlflow)
+			Expect(errors.IsInvalid(err)).To(BeTrue())
+			Expect(err.Error()).To(ContainSubstring("MLFLOW_SERVER_DISABLE_SECURITY_MIDDLEWARE"))
+		})
 	})
 })
