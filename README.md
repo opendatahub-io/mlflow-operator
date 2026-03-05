@@ -207,6 +207,26 @@ kubectl create secret generic mlflow-db-credentials \
   -n <namespace>
 ```
 
+### CORS Configuration
+
+The operator automatically configures `MLFLOW_SERVER_CORS_ALLOWED_ORIGINS` with safe defaults:
+- Kubernetes service names (short, namespaced, and FQDN forms)
+- The data science gateway domain (from the operator's `MLFLOW_URL` env var)
+- `localhost` and `127.0.0.1` (for development and Kind integration tests)
+
+To allow additional origins, use `extraAllowedOrigins` in the MLflow CR:
+```yaml
+spec:
+  extraAllowedOrigins:
+    - "https://my-app.example.com"
+    - "https://jupyter.example.com:8888"
+```
+
+For standalone Helm deployments (without the operator), set `mlflow.corsAllowedOrigins` directly:
+```sh
+helm install mlflow . --set mlflow.corsAllowedOrigins="https://my-app.example.com,https://other.example.com"
+```
+
 ### Network Security
 
 The operator automatically creates a NetworkPolicy that:

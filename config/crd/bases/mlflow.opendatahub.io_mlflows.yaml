@@ -1237,6 +1237,17 @@ spec:
                       x-kubernetes-map-type: atomic
                   type: object
                 type: array
+              extraAllowedOrigins:
+                description: |-
+                  ExtraAllowedOrigins is a list of additional origins to allow for CORS requests.
+                  The operator preconfigures safe defaults including Kubernetes service names,
+                  the data science gateway domain, and localhost.
+                  Use this field to add additional origins beyond the defaults.
+                  Each entry should be a full origin (scheme://host[:port]), e.g. "https://my-app.example.com".
+                items:
+                  type: string
+                maxItems: 64
+                type: array
               image:
                 description: |-
                   Image specifies the MLflow container image.

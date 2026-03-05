@@ -20,7 +20,9 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"net/url"
 	"path/filepath"
+	"strings"
 
 	"helm.sh/helm/v3/pkg/chart"
 	"helm.sh/helm/v3/pkg/chart/loader"
@@ -60,6 +62,38 @@ func getResourceSuffix(mlflowName string) string {
 		return ""
 	}
 	return "-" + mlflowName
+}
+
+// buildCORSAllowedOrigins returns a comma-separated list of allowed CORS origins
+// combining safe defaults with any user-specified extra origins from the CR spec.
+func buildCORSAllowedOrigins(mlflow *mlflowv1.MLflow, namespace string, cfg *config.OperatorConfig) string {
+	serviceName := ResourceName + getResourceSuffix(mlflow.Name)
+	const servicePort = 8443
+
+	corsOrigins := []string{
+		fmt.Sprintf("https://%s:%d", serviceName, servicePort),
+		fmt.Sprintf("https://%s.%s.svc:%d", serviceName, namespace, servicePort),
+		fmt.Sprintf("https://%s.%s.svc.cluster.local:%d", serviceName, namespace, servicePort),
+		"localhost:*",
+		"127.0.0.1:*",
+	}
+
+	if cfg.MLflowURL != "" {
+		if u, err := url.Parse(cfg.MLflowURL); err == nil && u.Scheme != "" && u.Host != "" {
+			origin := u.Scheme + "://" + u.Host
+			corsOrigins = append(corsOrigins, origin)
+		}
+	}
+
+	for _, o := range mlflow.Spec.ExtraAllowedOrigins {
+		o = strings.TrimSpace(o)
+		if o == "" || strings.Contains(o, ",") {
+			continue
+		}
+		corsOrigins = append(corsOrigins, o)
+	}
+
+	return strings.Join(corsOrigins, ",")
 }
 
 // HelmRenderer handles rendering of Helm charts
@@ -334,6 +368,8 @@ func (h *HelmRenderer) mlflowToHelmValues(mlflow *mlflowv1.MLflow, namespace str
 	if registryStoreURIFrom != nil {
 		mlflowConfig["registryStoreUriFrom"] = registryStoreURIFrom
 	}
+
+	mlflowConfig["corsAllowedOrigins"] = buildCORSAllowedOrigins(mlflow, namespace, cfg)
 
 	values["mlflow"] = mlflowConfig
 
