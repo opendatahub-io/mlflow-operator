@@ -157,6 +157,47 @@ The deployment always sets `MLFLOW_DISABLE_TELEMETRY=true` and `MLFLOW_SERVER_EN
 
 TLS is terminated inside the MLflow container using uvicorn options. Certificates come from the `mlflow-tls` secret, which is created automatically on OpenShift via the `service.beta.openshift.io/serving-cert-secret-name` annotation. If you need to provide your own certificates, place `tls.crt` and `tls.key` in a secret named `mlflow-tls` (or override `tls.secretName` in Helm values).
 
+### Operator RBAC Privileges
+
+The operator requires two levels of RBAC permissions: cluster-scoped and namespace-scoped.
+
+#### Cluster-Scoped Permissions (ClusterRole)
+
+The operator's ClusterRole (`config/rbac/role.yaml`) grants:
+
+| Resource | Verbs | Purpose |
+|----------|-------|---------|
+| `mlflows`, `mlflows/finalizers`, `mlflows/status` | full CRUD | Managing the MLflow custom resource lifecycle |
+| `namespaces` | get, list, watch | Enumerating namespaces for MLflow deployments |
+| `secrets` (name: `mlflow-artifact-connection`) | get | Reading namespace-specific artifact storage credentials |
+| `mlflowconfigs` | get, list, watch | Watching namespace-scoped configuration overrides |
+| `clusterroles`, `clusterrolebindings` | full CRUD | Managing RBAC for MLflow server pods (see below) |
+| `consolelinks` | full CRUD | OpenShift console integration |
+| `httproutes` | full CRUD | Gateway API routing for MLflow endpoints |
+
+#### Namespace-Scoped Permissions (Role)
+
+The operator's namespace Role (`config/rbac/namespace_role.yaml`) is scoped to the target deployment namespace and grants:
+
+| Resource | Verbs | Purpose |
+|----------|-------|---------|
+| `configmaps`, `secrets`, `serviceaccounts`, `services`, `persistentvolumeclaims` | full CRUD | Managing MLflow deployment resources |
+| `deployments` | full CRUD | Managing the MLflow Deployment |
+| `networkpolicies` | full CRUD | Managing network access to MLflow pods |
+| `servicemonitors` | full CRUD | Prometheus monitoring integration |
+
+#### Why the Operator Manages ClusterRoles and ClusterRoleBindings
+
+The operator creates and manages a shared `mlflow` ClusterRole and per-instance ClusterRoleBindings via Helm chart rendering. These grant the **MLflow server pod** (not the operator) the cross-namespace permissions it needs at runtime:
+
+1. **Namespace listing** (`namespaces: get, list, watch`). MLflow's workspaces feature needs to enumerate namespaces to present them as workspaces in the UI.
+2. **Secret reading** (`secrets: get`, restricted to `mlflow-artifact-connection`). When `MLflowConfig` overrides artifact storage for a namespace, the MLflow server reads the `mlflow-artifact-connection` secret from that namespace to obtain storage credentials.
+3. **MLflowConfig watching** (`mlflowconfigs: get, list, watch`). The MLflow server watches `MLflowConfig` resources across namespaces to apply namespace-specific artifact storage configuration.
+
+A single shared `mlflow` ClusterRole is used by all MLflow instances. Each MLflow instance gets its own ClusterRoleBinding that binds this shared role to the instance's ServiceAccount. The operator uses non-controller owner references on the shared ClusterRole so multiple MLflow instances can co-own it, and controller owner references on the per-instance ClusterRoleBindings for standard garbage collection.
+
+> **Security note**: The operator requires `clusterroles` and `clusterrolebindings` management privileges because the MLflow server itself needs cluster-wide read access (namespaces, secrets by name, and MLflowConfig CRs). These cannot be scoped to a single namespace since MLflow serves requests across namespaces. The ClusterRole the operator creates is tightly scoped, only granting read permissions with secrets restricted to a single well-known name (`mlflow-artifact-connection`).
+
 ### Storage Configuration
 
 #### Local Storage (Development/Testing)
