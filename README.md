@@ -251,10 +251,17 @@ kubectl create secret generic mlflow-db-credentials \
 ### Network Security
 
 The operator automatically creates a NetworkPolicy that:
-- **Ingress**: Allows traffic to the MLflow HTTPS port (8443)
-- **Egress**: Allows all outbound traffic (for database connections, S3 access, etc.)
+- **Ingress**: Allows traffic to the MLflow HTTPS port (8443) from any pod in the cluster
+- **Egress**: Allows DNS (port 53), HTTPS (port 443), Kubernetes API (port 6443), PostgreSQL (port 5432), MySQL (port 3306), and S3-compatible object storage (MinIO port 9000, SeaweedFS port 8333)
 
-The NetworkPolicy can be customized by modifying the Helm chart values or by creating your own NetworkPolicy.
+If your deployment uses non-standard ports (e.g., a database on a custom port), add additional egress rules:
+```yaml
+spec:
+  networkPolicyAdditionalEgressRules:
+    - ports:
+        - protocol: TCP
+          port: 15432
+```
 
 ### Namespace Overrides (MLflowConfig)
 

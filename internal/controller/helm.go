@@ -136,6 +136,11 @@ func (h *HelmRenderer) mlflowToHelmValues(mlflow *mlflowv1.MLflow, namespace str
 	tlsValues := map[string]interface{}{
 		"secretName": tlsSecretName,
 	}
+	if opts.IsOpenShift {
+		tlsValues["defaultMode"] = 416 // 0640 — group-readable; OpenShift SCC assigns fsGroup
+	} else {
+		tlsValues["defaultMode"] = 420 // 0644 — world-readable; no fsGroup on vanilla K8s
+	}
 
 	values["tls"] = tlsValues
 
@@ -426,7 +431,10 @@ func (h *HelmRenderer) mlflowToHelmValues(mlflow *mlflowv1.MLflow, namespace str
 	} else {
 		values["securityContext"] = map[string]interface{}{
 			"allowPrivilegeEscalation": false,
-			"readOnlyRootFilesystem":   false,
+			"readOnlyRootFilesystem":   true,
+			"capabilities": map[string]interface{}{
+				"drop": []string{"ALL"},
+			},
 		}
 	}
 
@@ -446,6 +454,18 @@ func (h *HelmRenderer) mlflowToHelmValues(mlflow *mlflowv1.MLflow, namespace str
 		values["affinity"] = mlflow.Spec.Affinity
 	} else {
 		values["affinity"] = map[string]interface{}{}
+	}
+
+	additionalEgressRules := make([]interface{}, 0, len(mlflow.Spec.NetworkPolicyAdditionalEgressRules))
+	for i, rule := range mlflow.Spec.NetworkPolicyAdditionalEgressRules {
+		ruleMap, err := runtime.DefaultUnstructuredConverter.ToUnstructured(&rule)
+		if err != nil {
+			return nil, fmt.Errorf("failed to convert networkPolicyAdditionalEgressRules[%d]: %w", i, err)
+		}
+		additionalEgressRules = append(additionalEgressRules, ruleMap)
+	}
+	values["networkPolicy"] = map[string]interface{}{
+		"additionalEgressRules": additionalEgressRules,
 	}
 
 	return values, nil
