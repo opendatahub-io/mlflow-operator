@@ -78,6 +78,7 @@ jobs:
             serve_artifacts: "true"
             registry_store: "sqlite"
             python_version: "3.13"
+            workspace_label_selector: '{"matchLabels":{"mlflow-enabled":"true"}}'
           - k8s_version: "v1.29.0"
             backend_store: "postgres"
             artifact_storage: "s3"
@@ -139,7 +140,7 @@ jobs:
           serve_artifacts: ${{ inputs.serve_artifacts || matrix.serve_artifacts }}
           s3_access_key: ${{ env.AWS_ACCESS_KEY_ID }}
           s3_secret_key: ${{ env.AWS_SECRET_ACCESS_KEY }}
-          workspace_label_selector: '{"matchLabels":{"mlflow-enabled":"true"}}'
+          workspace_label_selector: ${{ matrix.workspace_label_selector || '' }}
 
       - name: Verify deployment
         run: |
@@ -248,6 +249,7 @@ jobs:
           MLFLOW_S3_ENDPOINT_URL: ${{ steps.setup-minio.outputs.minio_localhost_endpoint }}
           artifact_storage: ${{ inputs.artifact_storage || matrix.artifact_storage }}
           serve_artifacts: ${{ inputs.serve_artifacts || matrix.serve_artifacts }}
+          WORKSPACE_LABEL_SELECTOR: ${{ matrix.workspace_label_selector || '' }}
         run: |
           echo "🧪 Running MLflow integration tests..."
           cd mlflow-tests
