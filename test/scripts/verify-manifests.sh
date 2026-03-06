@@ -53,8 +53,10 @@ for chart_dir in charts/*/; do
         chart_name=$(basename "$chart_dir")
         echo "Checking chart: $chart_name"
 
-        # Lint the chart
-        echo "  Linting..."
+        SECRETREF_SETS="mlflow.backendStoreUriFrom.secretKeyRef.name=db-creds,mlflow.backendStoreUriFrom.secretKeyRef.key=uri"
+
+        # Lint the chart (direct URI path)
+        echo "  Linting (backendStoreUri)..."
         if helm lint "$chart_dir" --set mlflow.backendStoreUri=sqlite:////mlflow/mlflow.db > /dev/null 2>&1; then
             echo -e "  ${GREEN}✓ Lint passed${NC}"
         else
@@ -63,14 +65,34 @@ for chart_dir in charts/*/; do
             HELM_EXIT_CODE=1
         fi
 
-        # Template render the chart
-        echo "  Rendering template..."
+        # Lint the chart (secretKeyRef path)
+        echo "  Linting (backendStoreUriFrom)..."
+        if helm lint "$chart_dir" --set "$SECRETREF_SETS" > /dev/null 2>&1; then
+            echo -e "  ${GREEN}✓ Lint passed${NC}"
+        else
+            echo -e "  ${RED}✗ Lint failed${NC}"
+            helm lint "$chart_dir" --set "$SECRETREF_SETS"
+            HELM_EXIT_CODE=1
+        fi
+
+        # Template render the chart (direct URI path)
+        echo "  Rendering template (backendStoreUri)..."
         if helm template test "$chart_dir" --set mlflow.backendStoreUri=sqlite:////mlflow/mlflow.db > /dev/null 2>&1; then
             echo -e "  ${GREEN}✓ Template renders successfully${NC}"
             VALIDATED_CHARTS+=("$chart_name")
         else
             echo -e "  ${RED}✗ Template failed to render${NC}"
             helm template test "$chart_dir" --set mlflow.backendStoreUri=sqlite:////mlflow/mlflow.db
+            HELM_EXIT_CODE=1
+        fi
+
+        # Template render the chart (secretKeyRef path)
+        echo "  Rendering template (backendStoreUriFrom)..."
+        if helm template test "$chart_dir" --set "$SECRETREF_SETS" > /dev/null 2>&1; then
+            echo -e "  ${GREEN}✓ Template renders successfully${NC}"
+        else
+            echo -e "  ${RED}✗ Template failed to render${NC}"
+            helm template test "$chart_dir" --set "$SECRETREF_SETS"
             HELM_EXIT_CODE=1
         fi
         echo ""
