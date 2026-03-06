@@ -2065,6 +2065,10 @@ spec:
               rule: '!(has(self.backendStoreUri) && has(self.backendStoreUriFrom))'
             - message: registryStoreUri and registryStoreUriFrom are mutually exclusive
               rule: '!(has(self.registryStoreUri) && has(self.registryStoreUriFrom))'
+            - message: registryStoreUriFrom.name and registryStoreUriFrom.key must
+                be non-empty when registryStoreUriFrom is set
+              rule: '!has(self.registryStoreUriFrom) || (size(self.registryStoreUriFrom.name)
+                > 0 && size(self.registryStoreUriFrom.key) > 0)'
             - message: storage must be configured when using file-based backend store
                 (sqlite:// or file:// prefix)
               rule: '!has(self.backendStoreUri) || (!self.backendStoreUri.startsWith(''sqlite://'')
