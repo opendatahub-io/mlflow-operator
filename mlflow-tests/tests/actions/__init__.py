@@ -30,9 +30,7 @@ from .artifact_actions import (
     action_wait_for_mlflowconfig_active,
 )
 from .workspace_actions import (
-    action_create_unlabeled_namespace,
     action_list_workspaces,
-    action_delete_unlabeled_namespace,
 )
 
 __all__ = [
@@ -55,7 +53,5 @@ __all__ = [
     "action_create_artifact_connection_secret",
     "action_create_mlflowconfig",
     "action_wait_for_mlflowconfig_active",
-    "action_create_unlabeled_namespace",
     "action_list_workspaces",
-    "action_delete_unlabeled_namespace",
 ]
