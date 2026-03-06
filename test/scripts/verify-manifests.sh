@@ -55,22 +55,22 @@ for chart_dir in charts/*/; do
 
         # Lint the chart
         echo "  Linting..."
-        if helm lint "$chart_dir" > /dev/null 2>&1; then
+        if helm lint "$chart_dir" --set mlflow.backendStoreUri=sqlite:////mlflow/mlflow.db > /dev/null 2>&1; then
             echo -e "  ${GREEN}✓ Lint passed${NC}"
         else
             echo -e "  ${RED}✗ Lint failed${NC}"
-            helm lint "$chart_dir"
+            helm lint "$chart_dir" --set mlflow.backendStoreUri=sqlite:////mlflow/mlflow.db
             HELM_EXIT_CODE=1
         fi
 
         # Template render the chart
         echo "  Rendering template..."
-        if helm template test "$chart_dir" > /dev/null 2>&1; then
+        if helm template test "$chart_dir" --set mlflow.backendStoreUri=sqlite:////mlflow/mlflow.db > /dev/null 2>&1; then
             echo -e "  ${GREEN}✓ Template renders successfully${NC}"
             VALIDATED_CHARTS+=("$chart_name")
         else
             echo -e "  ${RED}✗ Template failed to render${NC}"
-            helm template test "$chart_dir"
+            helm template test "$chart_dir" --set mlflow.backendStoreUri=sqlite:////mlflow/mlflow.db
             HELM_EXIT_CODE=1
         fi
         echo ""

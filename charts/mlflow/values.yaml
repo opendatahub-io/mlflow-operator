@@ -62,7 +62,7 @@ storage:
 # MLflow server configuration
 mlflow:
   # Backend store URI (where MLflow stores experiment and run metadata)
-  # Set this explicitly or use backendStoreUriFrom instead.
+  # REQUIRED: Either backendStoreUri or backendStoreUriFrom must be set.
   # Example (requires storage.enabled: true): sqlite:////mlflow/mlflow.db
   # Note: The /mlflow path is where the PVC is mounted in the container.
   # For production, use a remote DB: postgresql://db-host:5432/mlflow
