@@ -1,3 +1,20 @@
+{{- if and (not .Values.mlflow.backendStoreUri) (empty .Values.mlflow.backendStoreUriFrom) }}
+{{- fail "mlflow.backendStoreUri or mlflow.backendStoreUriFrom must be set" }}
+{{- end }}
+{{- with .Values.mlflow.backendStoreUriFrom }}
+{{- if not .secretKeyRef }}
+{{- fail "mlflow.backendStoreUriFrom.secretKeyRef must include non-empty 'name' and 'key'" }}
+{{- else if or (not .secretKeyRef.name) (not .secretKeyRef.key) }}
+{{- fail "mlflow.backendStoreUriFrom.secretKeyRef must include non-empty 'name' and 'key'" }}
+{{- end }}
+{{- end }}
+{{- with .Values.mlflow.registryStoreUriFrom }}
+{{- if not .secretKeyRef }}
+{{- fail "mlflow.registryStoreUriFrom.secretKeyRef must include non-empty 'name' and 'key'" }}
+{{- else if or (not .secretKeyRef.name) (not .secretKeyRef.key) }}
+{{- fail "mlflow.registryStoreUriFrom.secretKeyRef must include non-empty 'name' and 'key'" }}
+{{- end }}
+{{- end }}
 {{- $healthPrefix := .Values.mlflow.staticPrefix | trimSuffix "/" -}}
 apiVersion: apps/v1
 kind: Deployment
@@ -36,6 +53,10 @@ spec:
         {{- with .Values.podLabels }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
     spec:
       serviceAccountName: {{ .Values.serviceAccount.name }}
       {{- with .Values.podSecurityContext }}
@@ -172,7 +193,7 @@ spec:
               {{- else }}
               value: {{ .Values.mlflow.backendStoreUri | quote }}
               {{- end }}
-            {{- if .Values.mlflow.registryStoreUri }}
+            {{- if or .Values.mlflow.registryStoreUri .Values.mlflow.registryStoreUriFrom }}
             - name: MLFLOW_REGISTRY_STORE_URI
               {{- if .Values.mlflow.registryStoreUriFrom }}
               valueFrom:

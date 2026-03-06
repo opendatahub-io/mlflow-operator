@@ -30,7 +30,8 @@ import (
 )
 
 const (
-	deploymentKind = "Deployment"
+	deploymentKind      = "Deployment"
+	testBackendStoreURI = "sqlite:////mlflow/mlflow.db"
 
 	// CA bundle test constants - these match values from values.yaml and deployment.yaml
 	caCombinedVolume = "combined-ca-bundle"
@@ -52,7 +53,9 @@ func TestMlflowToHelmValues_Storage(t *testing.T) {
 			name: "storage not configured - should be disabled",
 			mlflow: &mlflowv1.MLflow{
 				ObjectMeta: metav1.ObjectMeta{Name: "test"},
-				Spec:       mlflowv1.MLflowSpec{},
+				Spec: mlflowv1.MLflowSpec{
+					BackendStoreURI: ptr(testBackendStoreURI),
+				},
 			},
 			wantEnabled:    false,
 			wantSize:       defaultStorageSize,
@@ -64,7 +67,8 @@ func TestMlflowToHelmValues_Storage(t *testing.T) {
 			mlflow: &mlflowv1.MLflow{
 				ObjectMeta: metav1.ObjectMeta{Name: "test"},
 				Spec: mlflowv1.MLflowSpec{
-					Storage: &corev1.PersistentVolumeClaimSpec{},
+					BackendStoreURI: ptr(testBackendStoreURI),
+					Storage:         &corev1.PersistentVolumeClaimSpec{},
 				},
 			},
 			wantEnabled:    true,
@@ -77,6 +81,7 @@ func TestMlflowToHelmValues_Storage(t *testing.T) {
 			mlflow: &mlflowv1.MLflow{
 				ObjectMeta: metav1.ObjectMeta{Name: "test"},
 				Spec: mlflowv1.MLflowSpec{
+					BackendStoreURI: ptr(testBackendStoreURI),
 					Storage: &corev1.PersistentVolumeClaimSpec{
 						AccessModes:      []corev1.PersistentVolumeAccessMode{corev1.ReadWriteMany},
 						StorageClassName: ptr("fast-ssd"),
@@ -139,7 +144,9 @@ func TestMlflowToHelmValues_Image(t *testing.T) {
 			name: "image not configured - should use config defaults",
 			mlflow: &mlflowv1.MLflow{
 				ObjectMeta: metav1.ObjectMeta{Name: "test"},
-				Spec:       mlflowv1.MLflowSpec{},
+				Spec: mlflowv1.MLflowSpec{
+					BackendStoreURI: ptr(testBackendStoreURI),
+				},
 			},
 			// pullPolicy should not be set when not explicitly provided
 			wantPullPolicy: "",
@@ -149,6 +156,7 @@ func TestMlflowToHelmValues_Image(t *testing.T) {
 			mlflow: &mlflowv1.MLflow{
 				ObjectMeta: metav1.ObjectMeta{Name: "test"},
 				Spec: mlflowv1.MLflowSpec{
+					BackendStoreURI: ptr(testBackendStoreURI),
 					Image: &mlflowv1.ImageConfig{
 						Image:           ptr("custom/mlflow:v2.0.0"),
 						ImagePullPolicy: ptr(corev1.PullIfNotPresent),
@@ -207,13 +215,15 @@ func TestMlflowToHelmValues_MLflowConfig(t *testing.T) {
 		wantRegistrySecretRef    bool
 	}{
 		{
-			name: "mlflow config not set - should use defaults",
+			name: "mlflow config with explicit backend store",
 			mlflow: &mlflowv1.MLflow{
 				ObjectMeta: metav1.ObjectMeta{Name: "test"},
-				Spec:       mlflowv1.MLflowSpec{},
+				Spec: mlflowv1.MLflowSpec{
+					BackendStoreURI: ptr(testBackendStoreURI),
+				},
 			},
-			wantBackendStoreURI:      defaultBackendStoreURI,
-			wantRegistryStoreURI:     defaultBackendStoreURI, // Registry defaults to backend
+			wantBackendStoreURI:      testBackendStoreURI,
+			wantRegistryStoreURI:     testBackendStoreURI, // Registry defaults to backend
 			wantArtifactsDestination: defaultArtifactsDest,
 			wantDefaultArtifactRoot:  "", // Empty - let MLflow use its intelligent defaults
 			wantServeArtifacts:       false,
@@ -264,12 +274,13 @@ func TestMlflowToHelmValues_MLflowConfig(t *testing.T) {
 			mlflow: &mlflowv1.MLflow{
 				ObjectMeta: metav1.ObjectMeta{Name: "test"},
 				Spec: mlflowv1.MLflowSpec{
-					ServeArtifacts: ptr(false),
-					Workers:        ptr(int32(4)),
+					BackendStoreURI: ptr(testBackendStoreURI),
+					ServeArtifacts:  ptr(false),
+					Workers:         ptr(int32(4)),
 				},
 			},
-			wantBackendStoreURI:      defaultBackendStoreURI,
-			wantRegistryStoreURI:     defaultBackendStoreURI, // Registry defaults to backend
+			wantBackendStoreURI:      testBackendStoreURI,
+			wantRegistryStoreURI:     testBackendStoreURI, // Registry defaults to backend
 			wantArtifactsDestination: defaultArtifactsDest,
 			wantDefaultArtifactRoot:  "", // Empty - let MLflow use its intelligent defaults
 			wantServeArtifacts:       false,
@@ -292,8 +303,8 @@ func TestMlflowToHelmValues_MLflowConfig(t *testing.T) {
 					},
 				},
 			},
-			wantBackendStoreURI:      defaultBackendStoreURI, // Falls back to default when using secret ref
-			wantRegistryStoreURI:     defaultBackendStoreURI, // Registry defaults to backend
+			wantBackendStoreURI:      "",
+			wantRegistryStoreURI:     "",
 			wantArtifactsDestination: defaultArtifactsDest,
 			wantDefaultArtifactRoot:  "", // Empty - let MLflow use its intelligent defaults
 			wantServeArtifacts:       false,
@@ -313,8 +324,8 @@ func TestMlflowToHelmValues_MLflowConfig(t *testing.T) {
 					},
 				},
 			},
-			wantBackendStoreURI:      defaultBackendStoreURI, // Direct value ignored when secret ref present
-			wantRegistryStoreURI:     defaultBackendStoreURI, // Registry defaults to backend
+			wantBackendStoreURI:      "",
+			wantRegistryStoreURI:     "",
 			wantArtifactsDestination: defaultArtifactsDest,
 			wantDefaultArtifactRoot:  "", // Empty - let MLflow use its intelligent defaults
 			wantServeArtifacts:       false,
@@ -327,12 +338,13 @@ func TestMlflowToHelmValues_MLflowConfig(t *testing.T) {
 			mlflow: &mlflowv1.MLflow{
 				ObjectMeta: metav1.ObjectMeta{Name: "test"},
 				Spec: mlflowv1.MLflowSpec{
+					BackendStoreURI:      ptr(testBackendStoreURI),
 					ArtifactsDestination: ptr("s3://bucket/artifacts"),
 					DefaultArtifactRoot:  ptr("s3://bucket/custom-root"),
 				},
 			},
-			wantBackendStoreURI:      defaultBackendStoreURI,
-			wantRegistryStoreURI:     defaultBackendStoreURI, // Registry defaults to backend
+			wantBackendStoreURI:      testBackendStoreURI,
+			wantRegistryStoreURI:     testBackendStoreURI, // Registry defaults to backend
 			wantArtifactsDestination: "s3://bucket/artifacts",
 			wantDefaultArtifactRoot:  "s3://bucket/custom-root", // Custom value overrides default
 			wantServeArtifacts:       false,                     // Default is now false
@@ -408,6 +420,176 @@ func TestMlflowToHelmValues_MLflowConfig(t *testing.T) {
 	}
 }
 
+func TestMlflowToHelmValues_PodAnnotations(t *testing.T) {
+	renderer := &HelmRenderer{}
+
+	tests := []struct {
+		name            string
+		podAnnotations  map[string]string
+		wantExists      bool
+		wantAnnotations map[string]string
+	}{
+		{
+			name:       "no annotations - key should not exist",
+			wantExists: false,
+		},
+		{
+			name:            "single annotation",
+			podAnnotations:  map[string]string{"prometheus.io/scrape": "true"},
+			wantExists:      true,
+			wantAnnotations: map[string]string{"prometheus.io/scrape": "true"},
+		},
+		{
+			name: "multiple annotations",
+			podAnnotations: map[string]string{
+				"prometheus.io/scrape":    "true",
+				"prometheus.io/port":      "8443",
+				"sidecar.istio.io/inject": "false",
+			},
+			wantExists: true,
+			wantAnnotations: map[string]string{
+				"prometheus.io/scrape":    "true",
+				"prometheus.io/port":      "8443",
+				"sidecar.istio.io/inject": "false",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			g := gomega.NewWithT(t)
+
+			mlflow := &mlflowv1.MLflow{
+				ObjectMeta: metav1.ObjectMeta{Name: "test"},
+				Spec: mlflowv1.MLflowSpec{
+					BackendStoreURI: ptr(testBackendStoreURI),
+					PodAnnotations:  tt.podAnnotations,
+				},
+			}
+
+			values, err := renderer.mlflowToHelmValues(mlflow, "test-namespace", RenderOptions{})
+			g.Expect(err).NotTo(HaveOccurred())
+
+			podAnnotations, exists := values["podAnnotations"]
+			if !tt.wantExists {
+				if exists {
+					t.Error("podAnnotations should not exist when no annotations are configured")
+				}
+				return
+			}
+
+			if !exists {
+				t.Fatal("podAnnotations not found in values")
+			}
+
+			annotationsMap, ok := podAnnotations.(map[string]interface{})
+			if !ok {
+				t.Fatal("podAnnotations is not a map[string]interface{}")
+			}
+
+			if len(annotationsMap) != len(tt.wantAnnotations) {
+				t.Errorf("podAnnotations length = %d, want %d", len(annotationsMap), len(tt.wantAnnotations))
+			}
+
+			for k, wantV := range tt.wantAnnotations {
+				gotV, ok := annotationsMap[k]
+				if !ok {
+					t.Errorf("podAnnotations missing key %q", k)
+					continue
+				}
+				if gotV != wantV {
+					t.Errorf("podAnnotations[%q] = %v, want %v", k, gotV, wantV)
+				}
+			}
+		})
+	}
+}
+
+func TestMlflowToHelmValues_PodLabels(t *testing.T) {
+	renderer := &HelmRenderer{}
+
+	tests := []struct {
+		name       string
+		podLabels  map[string]string
+		wantExists bool
+		wantLabels map[string]string
+	}{
+		{
+			name:       "no labels - key should not exist",
+			wantExists: false,
+		},
+		{
+			name:       "single label",
+			podLabels:  map[string]string{"team": "ml-platform"},
+			wantExists: true,
+			wantLabels: map[string]string{"team": "ml-platform"},
+		},
+		{
+			name: "multiple labels",
+			podLabels: map[string]string{
+				"team":        "ml-platform",
+				"environment": "production",
+				"cost-center": "ai-ops",
+			},
+			wantExists: true,
+			wantLabels: map[string]string{
+				"team":        "ml-platform",
+				"environment": "production",
+				"cost-center": "ai-ops",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			g := gomega.NewWithT(t)
+
+			mlflow := &mlflowv1.MLflow{
+				ObjectMeta: metav1.ObjectMeta{Name: "test"},
+				Spec: mlflowv1.MLflowSpec{
+					BackendStoreURI: ptr(testBackendStoreURI),
+					PodLabels:       tt.podLabels,
+				},
+			}
+
+			values, err := renderer.mlflowToHelmValues(mlflow, "test-namespace", RenderOptions{})
+			g.Expect(err).NotTo(HaveOccurred())
+
+			podLabels, exists := values["podLabels"]
+			if !tt.wantExists {
+				if exists {
+					t.Error("podLabels should not exist when no labels are configured")
+				}
+				return
+			}
+
+			if !exists {
+				t.Fatal("podLabels not found in values")
+			}
+
+			labelsMap, ok := podLabels.(map[string]interface{})
+			if !ok {
+				t.Fatal("podLabels is not a map[string]interface{}")
+			}
+
+			if len(labelsMap) != len(tt.wantLabels) {
+				t.Errorf("podLabels length = %d, want %d", len(labelsMap), len(tt.wantLabels))
+			}
+
+			for k, wantV := range tt.wantLabels {
+				gotV, ok := labelsMap[k]
+				if !ok {
+					t.Errorf("podLabels missing key %q", k)
+					continue
+				}
+				if gotV != wantV {
+					t.Errorf("podLabels[%q] = %v, want %v", k, gotV, wantV)
+				}
+			}
+		})
+	}
+}
+
 func TestMlflowToHelmValues_StaticPrefix(t *testing.T) {
 	g := gomega.NewWithT(t)
 
@@ -415,7 +597,9 @@ func TestMlflowToHelmValues_StaticPrefix(t *testing.T) {
 
 	mlflow := &mlflowv1.MLflow{
 		ObjectMeta: metav1.ObjectMeta{Name: "test"},
-		Spec:       mlflowv1.MLflowSpec{},
+		Spec: mlflowv1.MLflowSpec{
+			BackendStoreURI: ptr(testBackendStoreURI),
+		},
 	}
 
 	values, err := renderer.mlflowToHelmValues(mlflow, "test-namespace", RenderOptions{})
@@ -455,7 +639,9 @@ func TestMlflowToHelmValues_Env(t *testing.T) {
 			name: "no custom env vars",
 			mlflow: &mlflowv1.MLflow{
 				ObjectMeta: metav1.ObjectMeta{Name: "test"},
-				Spec:       mlflowv1.MLflowSpec{},
+				Spec: mlflowv1.MLflowSpec{
+					BackendStoreURI: ptr(testBackendStoreURI),
+				},
 			},
 			wantMinEnvs: 0, // No env vars when none are specified
 		},
@@ -464,6 +650,7 @@ func TestMlflowToHelmValues_Env(t *testing.T) {
 			mlflow: &mlflowv1.MLflow{
 				ObjectMeta: metav1.ObjectMeta{Name: "test"},
 				Spec: mlflowv1.MLflowSpec{
+					BackendStoreURI: ptr(testBackendStoreURI),
 					Env: []corev1.EnvVar{
 						{Name: "CUSTOM_VAR", Value: "custom-value"},
 						{Name: "AWS_REGION", Value: "us-east-1"},
@@ -479,6 +666,7 @@ func TestMlflowToHelmValues_Env(t *testing.T) {
 			mlflow: &mlflowv1.MLflow{
 				ObjectMeta: metav1.ObjectMeta{Name: "test"},
 				Spec: mlflowv1.MLflowSpec{
+					BackendStoreURI: ptr(testBackendStoreURI),
 					Env: []corev1.EnvVar{
 						{
 							Name: "DB_PASSWORD",
@@ -547,7 +735,9 @@ func TestMlflowToHelmValues_EnvFrom(t *testing.T) {
 			name: "no envFrom",
 			mlflow: &mlflowv1.MLflow{
 				ObjectMeta: metav1.ObjectMeta{Name: "test"},
-				Spec:       mlflowv1.MLflowSpec{},
+				Spec: mlflowv1.MLflowSpec{
+					BackendStoreURI: ptr(testBackendStoreURI),
+				},
 			},
 			wantEnvFromCount: 0,
 		},
@@ -556,6 +746,7 @@ func TestMlflowToHelmValues_EnvFrom(t *testing.T) {
 			mlflow: &mlflowv1.MLflow{
 				ObjectMeta: metav1.ObjectMeta{Name: "test"},
 				Spec: mlflowv1.MLflowSpec{
+					BackendStoreURI: ptr(testBackendStoreURI),
 					EnvFrom: []corev1.EnvFromSource{
 						{
 							SecretRef: &corev1.SecretEnvSource{
@@ -620,7 +811,9 @@ func TestMlflowToHelmValues_Resources(t *testing.T) {
 			name: "resources not configured - should not set in values (helm chart defaults apply)",
 			mlflow: &mlflowv1.MLflow{
 				ObjectMeta: metav1.ObjectMeta{Name: "test"},
-				Spec:       mlflowv1.MLflowSpec{},
+				Spec: mlflowv1.MLflowSpec{
+					BackendStoreURI: ptr(testBackendStoreURI),
+				},
 			},
 			wantResourcesSet: false,
 		},
@@ -629,6 +822,7 @@ func TestMlflowToHelmValues_Resources(t *testing.T) {
 			mlflow: &mlflowv1.MLflow{
 				ObjectMeta: metav1.ObjectMeta{Name: "test"},
 				Spec: mlflowv1.MLflowSpec{
+					BackendStoreURI: ptr(testBackendStoreURI),
 					Resources: &corev1.ResourceRequirements{
 						Requests: corev1.ResourceList{
 							corev1.ResourceCPU:    resource.MustParse("500m"),
@@ -699,7 +893,9 @@ func TestMlflowToHelmValues_Replicas(t *testing.T) {
 			name: "replicas not configured - should default to 1",
 			mlflow: &mlflowv1.MLflow{
 				ObjectMeta: metav1.ObjectMeta{Name: "test"},
-				Spec:       mlflowv1.MLflowSpec{},
+				Spec: mlflowv1.MLflowSpec{
+					BackendStoreURI: ptr(testBackendStoreURI),
+				},
 			},
 			wantReplicas: 1,
 		},
@@ -708,7 +904,8 @@ func TestMlflowToHelmValues_Replicas(t *testing.T) {
 			mlflow: &mlflowv1.MLflow{
 				ObjectMeta: metav1.ObjectMeta{Name: "test"},
 				Spec: mlflowv1.MLflowSpec{
-					Replicas: ptr(int32(3)),
+					BackendStoreURI: ptr(testBackendStoreURI),
+					Replicas:        ptr(int32(3)),
 				},
 			},
 			wantReplicas: 3,
@@ -735,7 +932,9 @@ func TestMlflowToHelmValues_Namespace(t *testing.T) {
 
 	mlflow := &mlflowv1.MLflow{
 		ObjectMeta: metav1.ObjectMeta{Name: "test"},
-		Spec:       mlflowv1.MLflowSpec{},
+		Spec: mlflowv1.MLflowSpec{
+			BackendStoreURI: ptr(testBackendStoreURI),
+		},
 	}
 
 	testNamespace := "custom-namespace"
@@ -777,7 +976,9 @@ func TestMlflowToHelmValues_ResourceSuffix(t *testing.T) {
 			g := gomega.NewWithT(t)
 			mlflow := &mlflowv1.MLflow{
 				ObjectMeta: metav1.ObjectMeta{Name: tt.crName},
-				Spec:       mlflowv1.MLflowSpec{},
+				Spec: mlflowv1.MLflowSpec{
+					BackendStoreURI: ptr(testBackendStoreURI),
+				},
 			}
 
 			values, err := renderer.mlflowToHelmValues(mlflow, "test-namespace", RenderOptions{})
@@ -797,6 +998,7 @@ func TestRenderChart_EnvVars(t *testing.T) {
 	mlflow := &mlflowv1.MLflow{
 		ObjectMeta: metav1.ObjectMeta{Name: "test-mlflow"},
 		Spec: mlflowv1.MLflowSpec{
+			BackendStoreURI: ptr(testBackendStoreURI),
 			Env: []corev1.EnvVar{
 				{
 					Name:  "SIMPLE_VAR",
@@ -1165,7 +1367,9 @@ func TestMlflowToHelmValues_CABundle(t *testing.T) {
 	// Test: no CA bundles configured
 	values, err := renderer.mlflowToHelmValues(&mlflowv1.MLflow{
 		ObjectMeta: metav1.ObjectMeta{Name: "mlflow"},
-		Spec:       mlflowv1.MLflowSpec{},
+		Spec: mlflowv1.MLflowSpec{
+			BackendStoreURI: ptr(testBackendStoreURI),
+		},
 	}, "test-ns", RenderOptions{PlatformTrustedCABundleExists: false})
 	if err != nil {
 		t.Fatalf("mlflowToHelmValues() error = %v", err)
@@ -1188,6 +1392,7 @@ func TestMlflowToHelmValues_CABundle(t *testing.T) {
 	values, err = renderer.mlflowToHelmValues(&mlflowv1.MLflow{
 		ObjectMeta: metav1.ObjectMeta{Name: "mlflow"},
 		Spec: mlflowv1.MLflowSpec{
+			BackendStoreURI:   ptr(testBackendStoreURI),
 			CABundleConfigMap: &mlflowv1.CABundleConfigMapSpec{Name: "my-ca"},
 		},
 	}, "test-ns", RenderOptions{PlatformTrustedCABundleExists: false})
@@ -1210,7 +1415,9 @@ func TestMlflowToHelmValues_CABundle(t *testing.T) {
 	// Test: ODH CA bundle only (no user-provided)
 	values, err = renderer.mlflowToHelmValues(&mlflowv1.MLflow{
 		ObjectMeta: metav1.ObjectMeta{Name: "mlflow"},
-		Spec:       mlflowv1.MLflowSpec{},
+		Spec: mlflowv1.MLflowSpec{
+			BackendStoreURI: ptr(testBackendStoreURI),
+		},
 	}, "test-ns", RenderOptions{PlatformTrustedCABundleExists: true})
 	if err != nil {
 		t.Fatalf("mlflowToHelmValues() error = %v", err)
@@ -1232,6 +1439,7 @@ func TestMlflowToHelmValues_CABundle(t *testing.T) {
 	values, err = renderer.mlflowToHelmValues(&mlflowv1.MLflow{
 		ObjectMeta: metav1.ObjectMeta{Name: "mlflow"},
 		Spec: mlflowv1.MLflowSpec{
+			BackendStoreURI:   ptr(testBackendStoreURI),
 			CABundleConfigMap: &mlflowv1.CABundleConfigMapSpec{Name: "my-ca"},
 		},
 	}, "test-ns", RenderOptions{PlatformTrustedCABundleExists: true})
@@ -1261,6 +1469,7 @@ func TestRenderChart_CABundle(t *testing.T) {
 	mlflow := &mlflowv1.MLflow{
 		ObjectMeta: metav1.ObjectMeta{Name: "mlflow"},
 		Spec: mlflowv1.MLflowSpec{
+			BackendStoreURI:   ptr(testBackendStoreURI),
 			CABundleConfigMap: &mlflowv1.CABundleConfigMapSpec{Name: "my-ca"},
 		},
 	}
@@ -1401,7 +1610,9 @@ func TestRenderChart_CABundle_ODHOnly(t *testing.T) {
 	// Test with only ODH CA bundle (no user-provided)
 	mlflow := &mlflowv1.MLflow{
 		ObjectMeta: metav1.ObjectMeta{Name: "mlflow"},
-		Spec:       mlflowv1.MLflowSpec{},
+		Spec: mlflowv1.MLflowSpec{
+			BackendStoreURI: ptr(testBackendStoreURI),
+		},
 	}
 
 	objs, err := renderer.RenderChart(mlflow, "test-ns", RenderOptions{PlatformTrustedCABundleExists: true})
@@ -1456,7 +1667,9 @@ func TestRenderChart_NoCABundle(t *testing.T) {
 	// Test with no CA bundles configured
 	mlflow := &mlflowv1.MLflow{
 		ObjectMeta: metav1.ObjectMeta{Name: "mlflow"},
-		Spec:       mlflowv1.MLflowSpec{},
+		Spec: mlflowv1.MLflowSpec{
+			BackendStoreURI: ptr(testBackendStoreURI),
+		},
 	}
 
 	objs, err := renderer.RenderChart(mlflow, "test-ns", RenderOptions{PlatformTrustedCABundleExists: false})
@@ -1524,7 +1737,9 @@ func TestMlflowToHelmValues_Metrics(t *testing.T) {
 			name: "OpenShift: metrics enabled with CA-based tlsConfig",
 			mlflow: &mlflowv1.MLflow{
 				ObjectMeta: metav1.ObjectMeta{Name: "mlflow"},
-				Spec:       mlflowv1.MLflowSpec{},
+				Spec: mlflowv1.MLflowSpec{
+					BackendStoreURI: ptr(testBackendStoreURI),
+				},
 			},
 			namespace:               "test-namespace",
 			isOpenShift:             true,
@@ -1536,7 +1751,9 @@ func TestMlflowToHelmValues_Metrics(t *testing.T) {
 			name: "OpenShift: custom CR name includes suffix in serverName",
 			mlflow: &mlflowv1.MLflow{
 				ObjectMeta: metav1.ObjectMeta{Name: "custom-mlflow"},
-				Spec:       mlflowv1.MLflowSpec{},
+				Spec: mlflowv1.MLflowSpec{
+					BackendStoreURI: ptr(testBackendStoreURI),
+				},
 			},
 			namespace:               "opendatahub",
 			isOpenShift:             true,
@@ -1548,7 +1765,9 @@ func TestMlflowToHelmValues_Metrics(t *testing.T) {
 			name: "non-OpenShift: metrics enabled with insecureSkipVerify",
 			mlflow: &mlflowv1.MLflow{
 				ObjectMeta: metav1.ObjectMeta{Name: "mlflow"},
-				Spec:       mlflowv1.MLflowSpec{},
+				Spec: mlflowv1.MLflowSpec{
+					BackendStoreURI: ptr(testBackendStoreURI),
+				},
 			},
 			namespace:               "default",
 			isOpenShift:             false,
@@ -1559,7 +1778,9 @@ func TestMlflowToHelmValues_Metrics(t *testing.T) {
 			name: "ServiceMonitor CRD absent: metrics disabled regardless of platform",
 			mlflow: &mlflowv1.MLflow{
 				ObjectMeta: metav1.ObjectMeta{Name: "mlflow"},
-				Spec:       mlflowv1.MLflowSpec{},
+				Spec: mlflowv1.MLflowSpec{
+					BackendStoreURI: ptr(testBackendStoreURI),
+				},
 			},
 			namespace:               "default",
 			isOpenShift:             false,
@@ -1622,7 +1843,9 @@ func TestRenderChart_ServiceMonitorWithTLSConfig(t *testing.T) {
 
 	mlflow := &mlflowv1.MLflow{
 		ObjectMeta: metav1.ObjectMeta{Name: "test-mlflow"},
-		Spec:       mlflowv1.MLflowSpec{},
+		Spec: mlflowv1.MLflowSpec{
+			BackendStoreURI: ptr(testBackendStoreURI),
+		},
 	}
 
 	// Render chart on OpenShift - CA-based tlsConfig should be set
@@ -1688,7 +1911,9 @@ func TestRenderChart_ServiceMonitorInsecureSkipVerify(t *testing.T) {
 
 	mlflow := &mlflowv1.MLflow{
 		ObjectMeta: metav1.ObjectMeta{Name: "mlflow"},
-		Spec:       mlflowv1.MLflowSpec{},
+		Spec: mlflowv1.MLflowSpec{
+			BackendStoreURI: ptr(testBackendStoreURI),
+		},
 	}
 
 	// Render on non-OpenShift - should fall back to insecureSkipVerify
