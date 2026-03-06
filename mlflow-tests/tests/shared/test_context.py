@@ -2,14 +2,11 @@ from mlflow_tests.enums import ResourceType
 from .user_info import UserInfo
 from .error_models import ErrorResponse
 from dataclasses import dataclass, field
-from typing import Optional, Any, TYPE_CHECKING
+from typing import Optional, Any
 import logging
 from mlflow import MlflowClient
 
 logger = logging.getLogger(__name__)
-
-if TYPE_CHECKING:
-    from mlflow_tests.manager.namespace import K8Manager
 
 
 @dataclass

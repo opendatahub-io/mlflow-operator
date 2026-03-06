@@ -78,7 +78,6 @@ class TestBase:
         """Initialize instance attributes from session-scoped clients."""
         self.admin_client, self.k8_manager, self.user_manager, self.workspaces = setup_clients
         self.test_context = TestContext(workspaces=self.workspaces)
-        self.test_context.k8_manager = self.k8_manager
 
     @pytest.fixture(autouse=True)
     def init_experiments_and_runs(self, create_experiments_and_runs):
@@ -261,13 +260,13 @@ class TestBase:
                         cleanup_errors.append(error_msg)
 
         # Cleanup namespaces
-        if self.test_context.namespaces_to_delete and self.test_context.k8_manager:
+        if self.test_context.namespaces_to_delete:
             namespaces = sorted(self.test_context.namespaces_to_delete)
             logger.info(f"Cleaning up {len(namespaces)} test namespace(s)")
             for namespace in namespaces:
                 try:
                     logger.info(f"Deleting test namespace: {namespace}")
-                    self.test_context.k8_manager.delete_namespace(namespace)
+                    self.k8_manager.delete_namespace(namespace)
                 except Exception as e:
                     error_msg = f"Failed to delete test namespace {namespace}: {e}"
                     logger.warning(error_msg)

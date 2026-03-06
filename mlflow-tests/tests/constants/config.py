@@ -18,6 +18,8 @@ class Config:
     S3_BUCKET = os.getenv("AWS_S3_BUCKET", "")
     BACKEND_STORE_URI: str = os.getenv("MLFLOW_BACKEND_STORE_URI", "postgresql://postgres:mysecretpassword@localhost:5432/mydatabase")
 
+    WORKSPACE_LABEL_SELECTOR: str = os.getenv("WORKSPACE_LABEL_SELECTOR", "")
+
     WORKSPACES: list[str] = [
         workspace.strip()
         for workspace in os.getenv("workspaces", "workspace1,workspace2").split(",")
