@@ -156,6 +156,7 @@ func TestMlflowToHelmValues_Image(t *testing.T) {
 			mlflow: &mlflowv1.MLflow{
 				ObjectMeta: metav1.ObjectMeta{Name: "test"},
 				Spec: mlflowv1.MLflowSpec{
+					BackendStoreURI: ptr(testBackendStoreURI),
 					Image: &mlflowv1.ImageConfig{
 						Image:           ptr("custom/mlflow:v2.0.0"),
 						ImagePullPolicy: ptr(corev1.PullIfNotPresent),
