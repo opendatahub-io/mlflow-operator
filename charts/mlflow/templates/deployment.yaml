@@ -1,6 +1,20 @@
 {{- if and (not .Values.mlflow.backendStoreUri) (empty .Values.mlflow.backendStoreUriFrom) }}
 {{- fail "mlflow.backendStoreUri or mlflow.backendStoreUriFrom must be set" }}
 {{- end }}
+{{- with .Values.mlflow.backendStoreUriFrom }}
+{{- if not .secretKeyRef }}
+{{- fail "mlflow.backendStoreUriFrom.secretKeyRef must include non-empty 'name' and 'key'" }}
+{{- else if or (not .secretKeyRef.name) (not .secretKeyRef.key) }}
+{{- fail "mlflow.backendStoreUriFrom.secretKeyRef must include non-empty 'name' and 'key'" }}
+{{- end }}
+{{- end }}
+{{- with .Values.mlflow.registryStoreUriFrom }}
+{{- if not .secretKeyRef }}
+{{- fail "mlflow.registryStoreUriFrom.secretKeyRef must include non-empty 'name' and 'key'" }}
+{{- else if or (not .secretKeyRef.name) (not .secretKeyRef.key) }}
+{{- fail "mlflow.registryStoreUriFrom.secretKeyRef must include non-empty 'name' and 'key'" }}
+{{- end }}
+{{- end }}
 {{- $healthPrefix := .Values.mlflow.staticPrefix | trimSuffix "/" -}}
 apiVersion: apps/v1
 kind: Deployment
