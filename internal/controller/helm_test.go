@@ -1367,7 +1367,9 @@ func TestMlflowToHelmValues_CABundle(t *testing.T) {
 	// Test: no CA bundles configured
 	values, err := renderer.mlflowToHelmValues(&mlflowv1.MLflow{
 		ObjectMeta: metav1.ObjectMeta{Name: "mlflow"},
-		Spec:       mlflowv1.MLflowSpec{},
+		Spec: mlflowv1.MLflowSpec{
+			BackendStoreURI: ptr(testBackendStoreURI),
+		},
 	}, "test-ns", RenderOptions{PlatformTrustedCABundleExists: false})
 	if err != nil {
 		t.Fatalf("mlflowToHelmValues() error = %v", err)
@@ -1390,6 +1392,7 @@ func TestMlflowToHelmValues_CABundle(t *testing.T) {
 	values, err = renderer.mlflowToHelmValues(&mlflowv1.MLflow{
 		ObjectMeta: metav1.ObjectMeta{Name: "mlflow"},
 		Spec: mlflowv1.MLflowSpec{
+			BackendStoreURI:   ptr(testBackendStoreURI),
 			CABundleConfigMap: &mlflowv1.CABundleConfigMapSpec{Name: "my-ca"},
 		},
 	}, "test-ns", RenderOptions{PlatformTrustedCABundleExists: false})
@@ -1412,7 +1415,9 @@ func TestMlflowToHelmValues_CABundle(t *testing.T) {
 	// Test: ODH CA bundle only (no user-provided)
 	values, err = renderer.mlflowToHelmValues(&mlflowv1.MLflow{
 		ObjectMeta: metav1.ObjectMeta{Name: "mlflow"},
-		Spec:       mlflowv1.MLflowSpec{},
+		Spec: mlflowv1.MLflowSpec{
+			BackendStoreURI: ptr(testBackendStoreURI),
+		},
 	}, "test-ns", RenderOptions{PlatformTrustedCABundleExists: true})
 	if err != nil {
 		t.Fatalf("mlflowToHelmValues() error = %v", err)
@@ -1434,6 +1439,7 @@ func TestMlflowToHelmValues_CABundle(t *testing.T) {
 	values, err = renderer.mlflowToHelmValues(&mlflowv1.MLflow{
 		ObjectMeta: metav1.ObjectMeta{Name: "mlflow"},
 		Spec: mlflowv1.MLflowSpec{
+			BackendStoreURI:   ptr(testBackendStoreURI),
 			CABundleConfigMap: &mlflowv1.CABundleConfigMapSpec{Name: "my-ca"},
 		},
 	}, "test-ns", RenderOptions{PlatformTrustedCABundleExists: true})
@@ -1463,6 +1469,7 @@ func TestRenderChart_CABundle(t *testing.T) {
 	mlflow := &mlflowv1.MLflow{
 		ObjectMeta: metav1.ObjectMeta{Name: "mlflow"},
 		Spec: mlflowv1.MLflowSpec{
+			BackendStoreURI:   ptr(testBackendStoreURI),
 			CABundleConfigMap: &mlflowv1.CABundleConfigMapSpec{Name: "my-ca"},
 		},
 	}
@@ -1603,7 +1610,9 @@ func TestRenderChart_CABundle_ODHOnly(t *testing.T) {
 	// Test with only ODH CA bundle (no user-provided)
 	mlflow := &mlflowv1.MLflow{
 		ObjectMeta: metav1.ObjectMeta{Name: "mlflow"},
-		Spec:       mlflowv1.MLflowSpec{},
+		Spec: mlflowv1.MLflowSpec{
+			BackendStoreURI: ptr(testBackendStoreURI),
+		},
 	}
 
 	objs, err := renderer.RenderChart(mlflow, "test-ns", RenderOptions{PlatformTrustedCABundleExists: true})
@@ -1658,7 +1667,9 @@ func TestRenderChart_NoCABundle(t *testing.T) {
 	// Test with no CA bundles configured
 	mlflow := &mlflowv1.MLflow{
 		ObjectMeta: metav1.ObjectMeta{Name: "mlflow"},
-		Spec:       mlflowv1.MLflowSpec{},
+		Spec: mlflowv1.MLflowSpec{
+			BackendStoreURI: ptr(testBackendStoreURI),
+		},
 	}
 
 	objs, err := renderer.RenderChart(mlflow, "test-ns", RenderOptions{PlatformTrustedCABundleExists: false})
@@ -1726,7 +1737,9 @@ func TestMlflowToHelmValues_Metrics(t *testing.T) {
 			name: "OpenShift: metrics enabled with CA-based tlsConfig",
 			mlflow: &mlflowv1.MLflow{
 				ObjectMeta: metav1.ObjectMeta{Name: "mlflow"},
-				Spec:       mlflowv1.MLflowSpec{},
+				Spec: mlflowv1.MLflowSpec{
+					BackendStoreURI: ptr(testBackendStoreURI),
+				},
 			},
 			namespace:               "test-namespace",
 			isOpenShift:             true,
@@ -1738,7 +1751,9 @@ func TestMlflowToHelmValues_Metrics(t *testing.T) {
 			name: "OpenShift: custom CR name includes suffix in serverName",
 			mlflow: &mlflowv1.MLflow{
 				ObjectMeta: metav1.ObjectMeta{Name: "custom-mlflow"},
-				Spec:       mlflowv1.MLflowSpec{},
+				Spec: mlflowv1.MLflowSpec{
+					BackendStoreURI: ptr(testBackendStoreURI),
+				},
 			},
 			namespace:               "opendatahub",
 			isOpenShift:             true,
@@ -1750,7 +1765,9 @@ func TestMlflowToHelmValues_Metrics(t *testing.T) {
 			name: "non-OpenShift: metrics enabled with insecureSkipVerify",
 			mlflow: &mlflowv1.MLflow{
 				ObjectMeta: metav1.ObjectMeta{Name: "mlflow"},
-				Spec:       mlflowv1.MLflowSpec{},
+				Spec: mlflowv1.MLflowSpec{
+					BackendStoreURI: ptr(testBackendStoreURI),
+				},
 			},
 			namespace:               "default",
 			isOpenShift:             false,
@@ -1761,7 +1778,9 @@ func TestMlflowToHelmValues_Metrics(t *testing.T) {
 			name: "ServiceMonitor CRD absent: metrics disabled regardless of platform",
 			mlflow: &mlflowv1.MLflow{
 				ObjectMeta: metav1.ObjectMeta{Name: "mlflow"},
-				Spec:       mlflowv1.MLflowSpec{},
+				Spec: mlflowv1.MLflowSpec{
+					BackendStoreURI: ptr(testBackendStoreURI),
+				},
 			},
 			namespace:               "default",
 			isOpenShift:             false,
@@ -1824,7 +1843,9 @@ func TestRenderChart_ServiceMonitorWithTLSConfig(t *testing.T) {
 
 	mlflow := &mlflowv1.MLflow{
 		ObjectMeta: metav1.ObjectMeta{Name: "test-mlflow"},
-		Spec:       mlflowv1.MLflowSpec{},
+		Spec: mlflowv1.MLflowSpec{
+			BackendStoreURI: ptr(testBackendStoreURI),
+		},
 	}
 
 	// Render chart on OpenShift - CA-based tlsConfig should be set
@@ -1890,7 +1911,9 @@ func TestRenderChart_ServiceMonitorInsecureSkipVerify(t *testing.T) {
 
 	mlflow := &mlflowv1.MLflow{
 		ObjectMeta: metav1.ObjectMeta{Name: "mlflow"},
-		Spec:       mlflowv1.MLflowSpec{},
+		Spec: mlflowv1.MLflowSpec{
+			BackendStoreURI: ptr(testBackendStoreURI),
+		},
 	}
 
 	// Render on non-OpenShift - should fall back to insecureSkipVerify
