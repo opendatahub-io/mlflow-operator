@@ -147,6 +147,11 @@ type MLflowSpec struct {
 	// +optional
 	Workers *int32 `json:"workers,omitempty"`
 
+	// WorkspaceLabelSelector is a label selector used to determine which namespaces are exposed
+	// as MLflow workspaces when using the Kubernetes workspace provider.
+	// +optional
+	WorkspaceLabelSelector *metav1.LabelSelector `json:"workspaceLabelSelector,omitempty"`
+
 	// Env is a list of environment variables to set in the MLflow container
 	// +optional
 	Env []corev1.EnvVar `json:"env,omitempty"`

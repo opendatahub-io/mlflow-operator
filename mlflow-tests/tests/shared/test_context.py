@@ -62,6 +62,9 @@ class TestContext:
     model: Optional[Any] = None
     model_uri: Optional[str] = None
     artifact_location: Optional[str] = None
+    discovered_workspaces: set[str] = field(default_factory=set)
+    unlabeled_namespace: Optional[str] = None
+    namespaces_to_delete: set[str] = field(default_factory=set)
 
     def add_experiment_for_cleanup(self, experiment_id: str, workspace: str) -> None:
         """Add an experiment to the cleanup list with workspace context.
@@ -143,4 +146,17 @@ class TestContext:
 
         self.users_to_delete.append(user_info)
         logger.info(f"Added user '{user_info.uname}' to cleanup list (total: {len(self.users_to_delete)})")
+
+    def add_namespace_for_cleanup(self, name: str) -> None:
+        """Add a Kubernetes namespace to the cleanup list.
+
+        Args:
+            name: Namespace name
+
+        Raises:
+            ValueError: If name is empty
+        """
+        if not name or not name.strip():
+            raise ValueError("namespace name cannot be empty")
+        self.namespaces_to_delete.add(name.strip())
 

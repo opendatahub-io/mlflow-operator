@@ -65,6 +65,7 @@ def setup_clients():
     for workspace in workspaces:
         logger.debug(f"Creating namespace: {workspace}")
         k8_manager.create_namespace(workspace)
+        k8_manager.label_namespace(workspace, {"mlflow-enabled": "true"})
     logger.info("Successfully created all test namespaces")
 
     admin_client = ClientManager.create_mlflow_client(

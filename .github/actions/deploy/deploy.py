@@ -7,11 +7,12 @@ storage backends (SQLite/PostgreSQL) and artifact storage (file/S3).
 """
 
 import argparse
-import subprocess
-import yaml
+import json
 import os
+import subprocess
 import sys
 import time
+import yaml
 from pathlib import Path
 from typing import List, Union
 from urllib.parse import quote_plus
@@ -596,6 +597,29 @@ class MLflowDeployer:
                 # For non-file storage, defaultArtifactRoot should be a subdirectory
                 mlflow_cr["spec"]["defaultArtifactRoot"] = f"{self.args.artifacts_destination}/runs"
 
+        selector = (self.args.workspace_label_selector or "").strip()
+        if selector:
+            try:
+                selector_obj = json.loads(selector)
+
+                if not isinstance(selector_obj, dict):
+                    raise ValueError("workspace label selector must deserialize to an object")
+
+                match_labels = selector_obj.get("matchLabels") or {}
+                match_expressions = selector_obj.get("matchExpressions") or []
+                if not isinstance(match_labels, dict):
+                    raise ValueError("matchLabels must be an object")
+                if not isinstance(match_expressions, list):
+                    raise ValueError("matchExpressions must be a list")
+                if not match_labels and not match_expressions:
+                    raise ValueError(
+                        "workspace label selector must include non-empty matchLabels or matchExpressions"
+                    )
+
+                mlflow_cr["spec"]["workspaceLabelSelector"] = selector_obj
+            except Exception as e:
+                raise ValueError(f"invalid --workspace-label-selector: {e}") from e
+
         # Add storage for local file/sqlite backends
         if not use_postgres_backend or not use_postgres_registry or not use_s3_artifacts:
             mlflow_cr["spec"]["storage"] = {
@@ -999,6 +1023,7 @@ def main():
     parser.add_argument("--s3-access-key", default="minio")
     parser.add_argument("--s3-secret-key", default="minio123")
     parser.add_argument("--s3-endpoint", default="")
+    parser.add_argument("--workspace-label-selector", default="")
 
     args = parser.parse_args()
 

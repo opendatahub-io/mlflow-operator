@@ -28,6 +28,9 @@ from .validation_utils import (
     validate_authentication_denied,
     validate_resource_retrieved_or_created,
 )
+from .workspace_validations import (
+    validate_workspaces_filtered,
+)
 
 __all__ = [
     "validate_experiment_retrieved",
@@ -45,4 +48,5 @@ __all__ = [
     "validate_run_ended",
     "validate_authentication_denied",
     "validate_resource_retrieved_or_created",
+    "validate_workspaces_filtered",
 ]
