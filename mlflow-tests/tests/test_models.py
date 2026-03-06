@@ -25,6 +25,7 @@ logger = logging.getLogger(__name__)
 
 
 @pytest.mark.Models
+@pytest.mark.smoke
 class TestRegisteredModels(TestBase):
     """Test Registered Models RBAC"""
 

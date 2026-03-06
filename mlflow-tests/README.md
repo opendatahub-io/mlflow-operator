@@ -133,6 +133,7 @@ uv run pytest tests/test_artifacts.py
 uv run pytest -m Experiments    # Experiment RBAC tests
 uv run pytest -m Models         # Registered model RBAC tests
 uv run pytest -m Artifacts      # Artifact operations and S3 storage tests
+uv run pytest -m smoke          # All smoke tests
 
 # Run in local mode (bypasses Kubernetes)
 LOCAL=true uv run pytest
@@ -146,11 +147,12 @@ uv run pytest tests/test_experiments.py -k "GET permission can get experiment"
 
 ### Test Markers
 
-The framework defines three custom pytest markers:
+The framework defines four custom pytest markers:
 
 - **`@pytest.mark.Experiments`**: Test experiment RBAC and management operations
 - **`@pytest.mark.Models`**: Test registered model RBAC and management operations
 - **`@pytest.mark.Artifacts`**: Test artifact operations, model logging, and S3 storage verification
+- **`@pytest.mark.smoke`**: Fast sanity-check tests suitable for pre-merge smoke runs
 
 ### Test Execution Workflow
 

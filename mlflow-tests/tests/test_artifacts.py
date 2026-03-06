@@ -38,6 +38,7 @@ logger = logging.getLogger(__name__)
 
 
 @pytest.mark.Artifacts
+@pytest.mark.smoke
 class TestMLflowArtifacts(TestBase):
     """Test Artifact operations with RBAC permissions.
 
