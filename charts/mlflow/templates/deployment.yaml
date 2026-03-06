@@ -38,6 +38,7 @@ spec:
         {{- end }}
     spec:
       serviceAccountName: {{ .Values.serviceAccount.name }}
+      automountServiceAccountToken: true
       {{- with .Values.podSecurityContext }}
       securityContext:
         {{- toYaml . | nindent 8 }}
@@ -55,6 +56,9 @@ spec:
         {{- toYaml . | nindent 8 }}
       {{- end }}
       volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 128Mi
         {{- if .Values.storage.enabled }}
         - name: mlflow-storage
           persistentVolumeClaim:
@@ -63,7 +67,7 @@ spec:
         - name: mlflow-tls
           secret:
             secretName: {{ .Values.tls.secretName }}
-            defaultMode: 420
+            defaultMode: {{ .Values.tls.defaultMode | default 420 }}
         {{- if .Values.caBundle.configMaps }}
         # CA bundle ConfigMap volumes
         {{- range $i, $cm := .Values.caBundle.configMaps }}
@@ -104,6 +108,8 @@ spec:
             - name: CA_BUNDLE_OUTPUT
               value: {{ .Values.caBundle.outputPath | quote }}
           volumeMounts:
+            - name: tmp
+              mountPath: /tmp
             - name: combined-ca-bundle
               mountPath: {{ dir .Values.caBundle.outputPath }}
             {{- range $i, $cm := .Values.caBundle.configMaps }}
@@ -165,6 +171,8 @@ spec:
               value: "true"
             - name: MLFLOW_SERVER_ENABLE_JOB_EXECUTION
               value: "false"
+            - name: MLFLOW_SERVER_DISABLE_SECURITY_MIDDLEWARE
+              value: "false"
             - name: MLFLOW_BACKEND_STORE_URI
               {{- if .Values.mlflow.backendStoreUriFrom }}
               valueFrom:
@@ -225,6 +233,8 @@ spec:
             - name: https
               containerPort: {{ .Values.mlflow.port }}
           volumeMounts:
+            - name: tmp
+              mountPath: /tmp
             {{- if .Values.storage.enabled }}
             - name: mlflow-storage
               mountPath: /mlflow
@@ -317,6 +327,8 @@ spec:
             - name: CA_BUNDLE_OUTPUT
               value: {{ .Values.caBundle.outputPath | quote }}
           volumeMounts:
+            - name: tmp
+              mountPath: /tmp
             - name: combined-ca-bundle
               mountPath: {{ dir .Values.caBundle.outputPath }}
             {{- range $i, $cm := .Values.caBundle.configMaps }}

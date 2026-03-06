@@ -18,6 +18,7 @@ package v1
 
 import (
 	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -30,6 +31,8 @@ import (
 // +kubebuilder:validation:XValidation:rule="!has(self.registryStoreUri) || (!self.registryStoreUri.startsWith('sqlite://') && !self.registryStoreUri.startsWith('file://')) || has(self.storage)",message="storage must be configured when using file-based registry store (sqlite:// or file:// prefix)"
 // +kubebuilder:validation:XValidation:rule="!has(self.artifactsDestination) || !self.artifactsDestination.startsWith('file://') || has(self.storage)",message="storage must be configured when artifactsDestination uses file-based storage (file:// prefix)"
 // +kubebuilder:validation:XValidation:rule="!has(self.artifactsDestination) || !self.artifactsDestination.startsWith('file://') || (has(self.serveArtifacts) && self.serveArtifacts)",message="serveArtifacts must be enabled when artifactsDestination uses file-based storage (file:// prefix)"
+// +kubebuilder:validation:XValidation:rule="!has(self.env) || self.env.all(e, e.name != 'MLFLOW_SERVER_DISABLE_SECURITY_MIDDLEWARE')",message="setting the MLFLOW_SERVER_DISABLE_SECURITY_MIDDLEWARE environment variable is not allowed"
+// +kubebuilder:validation:XValidation:rule="!has(self.networkPolicyAdditionalEgressRules) || self.networkPolicyAdditionalEgressRules.all(r, (has(r.ports) && size(r.ports) > 0) || (has(r.to) && size(r.to) > 0))",message="each networkPolicyAdditionalEgressRules entry must specify at least one port or one destination"
 type MLflowSpec struct {
 	// Image specifies the MLflow container image.
 	// If not specified, use the default image
@@ -186,6 +189,15 @@ type MLflowSpec struct {
 	// with TLS connections (e.g. PostgreSQL SSL, S3 with custom certificates).
 	// +optional
 	CABundleConfigMap *CABundleConfigMapSpec `json:"caBundleConfigMap,omitempty"`
+
+	// NetworkPolicyAdditionalEgressRules specifies additional egress rules to append to the
+	// default NetworkPolicy. The default policy permits DNS (53), HTTPS (443),
+	// Kubernetes API (6443), PostgreSQL (5432), MySQL (3306), and S3-compatible storage
+	// (MinIO 9000, SeaweedFS 8333). Use this field when connecting to services on
+	// non-standard ports or when destination restrictions are needed.
+	// +optional
+	// +kubebuilder:validation:MaxItems=32
+	NetworkPolicyAdditionalEgressRules []networkingv1.NetworkPolicyEgressRule `json:"networkPolicyAdditionalEgressRules,omitempty"`
 }
 
 // CABundleConfigMapSpec specifies a ConfigMap containing CA certificates.
