@@ -62,7 +62,7 @@ for chart_dir in charts/*/; do
             echo -e "  ${GREEN}✓ Lint passed${NC}"
         else
             echo -e "  ${RED}✗ Lint failed${NC}"
-            helm lint "$chart_dir" --set mlflow.backendStoreUri=sqlite:////mlflow/mlflow.db
+            helm lint "$chart_dir" --set mlflow.backendStoreUri=sqlite:////mlflow/mlflow.db || true
             chart_failed=1
         fi
 
@@ -72,7 +72,7 @@ for chart_dir in charts/*/; do
             echo -e "  ${GREEN}✓ Lint passed${NC}"
         else
             echo -e "  ${RED}✗ Lint failed${NC}"
-            helm lint "$chart_dir" --set "$SECRETREF_SETS"
+            helm lint "$chart_dir" --set "$SECRETREF_SETS" || true
             chart_failed=1
         fi
 
@@ -82,7 +82,7 @@ for chart_dir in charts/*/; do
             echo -e "  ${GREEN}✓ Template renders successfully${NC}"
         else
             echo -e "  ${RED}✗ Template failed to render${NC}"
-            helm template test "$chart_dir" --set mlflow.backendStoreUri=sqlite:////mlflow/mlflow.db
+            helm template test "$chart_dir" --set mlflow.backendStoreUri=sqlite:////mlflow/mlflow.db || true
             chart_failed=1
         fi
 
@@ -92,7 +92,7 @@ for chart_dir in charts/*/; do
             echo -e "  ${GREEN}✓ Template renders successfully${NC}"
         else
             echo -e "  ${RED}✗ Template failed to render${NC}"
-            helm template test "$chart_dir" --set "$SECRETREF_SETS"
+            helm template test "$chart_dir" --set "$SECRETREF_SETS" || true
             chart_failed=1
         fi
 
@@ -124,7 +124,7 @@ if bin/kustomize build config/base > /dev/null 2>&1; then
     echo -e "${GREEN}✓ config/base builds successfully${NC}"
 else
     echo -e "${RED}✗ config/base failed to build${NC}"
-    bin/kustomize build config/base
+    bin/kustomize build config/base || true
     OVERALL_EXIT_CODE=1
 fi
 echo ""
@@ -153,7 +153,7 @@ for overlay in config/overlays/*/; do
         VALIDATED_OVERLAYS+=("$overlay_name")
     else
         echo -e "${RED}✗ $overlay_name failed to build${NC}"
-        bin/kustomize build "$overlay"
+        bin/kustomize build "$overlay" || true
         OVERLAY_EXIT_CODE=1
     fi
 done
