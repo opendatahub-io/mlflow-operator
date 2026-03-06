@@ -271,6 +271,11 @@ func (in *MLflowSpec) DeepCopyInto(out *MLflowSpec) {
 		*out = new(int32)
 		**out = **in
 	}
+	if in.ExtraAllowedOrigins != nil {
+		in, out := &in.ExtraAllowedOrigins, &out.ExtraAllowedOrigins
+		*out = make([]string, len(*in))
+		copy(*out, *in)
+	}
 	if in.Env != nil {
 		in, out := &in.Env, &out.Env
 		*out = make([]corev1.EnvVar, len(*in))

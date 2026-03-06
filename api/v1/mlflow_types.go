@@ -147,6 +147,15 @@ type MLflowSpec struct {
 	// +optional
 	Workers *int32 `json:"workers,omitempty"`
 
+	// ExtraAllowedOrigins is a list of additional origins to allow for CORS requests.
+	// The operator preconfigures safe defaults including Kubernetes service names,
+	// the data science gateway domain, and localhost.
+	// Use this field to add additional origins beyond the defaults.
+	// Each entry should be a full origin (scheme://host[:port]), e.g. "https://my-app.example.com".
+	// +kubebuilder:validation:MaxItems=64
+	// +optional
+	ExtraAllowedOrigins []string `json:"extraAllowedOrigins,omitempty"`
+
 	// Env is a list of environment variables to set in the MLflow container
 	// +optional
 	Env []corev1.EnvVar `json:"env,omitempty"`
