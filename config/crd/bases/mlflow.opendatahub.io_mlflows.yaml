@@ -1229,6 +1229,9 @@ spec:
                 description: NodeSelector is a selector which must be true for the
                   pod to fit on a node
                 type: object
+                x-kubernetes-validations:
+                - message: label values must be 63 characters or less
+                  rule: self.all(key, size(self[key]) <= 63)
               podAnnotations:
                 additionalProperties:
                   type: string
@@ -1244,6 +1247,9 @@ spec:
                   Use this for pod-specific labels like version, component-specific metadata, etc.
                   For labels that should be applied to all resources (Service, Deployment, etc.), use commonLabels in values.yaml.
                 type: object
+                x-kubernetes-validations:
+                - message: label values must be 63 characters or less
+                  rule: self.all(key, size(self[key]) <= 63)
               podSecurityContext:
                 description: PodSecurityContext specifies the security context for
                   the MLflow pod

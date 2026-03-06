@@ -160,6 +160,7 @@ type MLflowSpec struct {
 	// Use this for pod-specific labels like version, component-specific metadata, etc.
 	// For labels that should be applied to all resources (Service, Deployment, etc.), use commonLabels in values.yaml.
 	// +optional
+	// +kubebuilder:validation:XValidation:rule="self.all(key, size(self[key]) <= 63)",message="label values must be 63 characters or less"
 	PodLabels map[string]string `json:"podLabels,omitempty"`
 
 	// PodAnnotations are annotations to add only to the MLflow pod, not to other resources.
@@ -177,6 +178,7 @@ type MLflowSpec struct {
 
 	// NodeSelector is a selector which must be true for the pod to fit on a node
 	// +optional
+	// +kubebuilder:validation:XValidation:rule="self.all(key, size(self[key]) <= 63)",message="label values must be 63 characters or less"
 	NodeSelector map[string]string `json:"nodeSelector,omitempty"`
 
 	// Tolerations are the pod's tolerations
