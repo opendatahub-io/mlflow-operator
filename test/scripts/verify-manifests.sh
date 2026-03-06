@@ -54,6 +54,7 @@ for chart_dir in charts/*/; do
         echo "Checking chart: $chart_name"
 
         SECRETREF_SETS="mlflow.backendStoreUriFrom.secretKeyRef.name=db-creds,mlflow.backendStoreUriFrom.secretKeyRef.key=uri"
+        chart_failed=0
 
         # Lint the chart (direct URI path)
         echo "  Linting (backendStoreUri)..."
@@ -62,7 +63,7 @@ for chart_dir in charts/*/; do
         else
             echo -e "  ${RED}✗ Lint failed${NC}"
             helm lint "$chart_dir" --set mlflow.backendStoreUri=sqlite:////mlflow/mlflow.db
-            HELM_EXIT_CODE=1
+            chart_failed=1
         fi
 
         # Lint the chart (secretKeyRef path)
@@ -72,18 +73,17 @@ for chart_dir in charts/*/; do
         else
             echo -e "  ${RED}✗ Lint failed${NC}"
             helm lint "$chart_dir" --set "$SECRETREF_SETS"
-            HELM_EXIT_CODE=1
+            chart_failed=1
         fi
 
         # Template render the chart (direct URI path)
         echo "  Rendering template (backendStoreUri)..."
         if helm template test "$chart_dir" --set mlflow.backendStoreUri=sqlite:////mlflow/mlflow.db > /dev/null 2>&1; then
             echo -e "  ${GREEN}✓ Template renders successfully${NC}"
-            VALIDATED_CHARTS+=("$chart_name")
         else
             echo -e "  ${RED}✗ Template failed to render${NC}"
             helm template test "$chart_dir" --set mlflow.backendStoreUri=sqlite:////mlflow/mlflow.db
-            HELM_EXIT_CODE=1
+            chart_failed=1
         fi
 
         # Template render the chart (secretKeyRef path)
@@ -93,7 +93,13 @@ for chart_dir in charts/*/; do
         else
             echo -e "  ${RED}✗ Template failed to render${NC}"
             helm template test "$chart_dir" --set "$SECRETREF_SETS"
+            chart_failed=1
+        fi
+
+        if [ $chart_failed -ne 0 ]; then
             HELM_EXIT_CODE=1
+        else
+            VALIDATED_CHARTS+=("$chart_name")
         fi
         echo ""
     fi
