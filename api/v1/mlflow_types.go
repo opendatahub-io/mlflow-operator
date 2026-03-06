@@ -24,7 +24,7 @@ import (
 // MLflowSpec defines the desired state of MLflow
 // +kubebuilder:validation:XValidation:rule="has(self.defaultArtifactRoot) || (has(self.serveArtifacts) && self.serveArtifacts)",message="defaultArtifactRoot must be set when serveArtifacts is not true"
 // +kubebuilder:validation:XValidation:rule="!has(self.defaultArtifactRoot) || !self.defaultArtifactRoot.startsWith('file://') || (has(self.serveArtifacts) && self.serveArtifacts)",message="serveArtifacts must be enabled when defaultArtifactRoot uses file-based storage (file:// prefix)"
-// +kubebuilder:validation:XValidation:rule="(has(self.backendStoreUri) && size(self.backendStoreUri) > 0) || has(self.backendStoreUriFrom)",message="backendStoreUri or backendStoreUriFrom must be set"
+// +kubebuilder:validation:XValidation:rule="(has(self.backendStoreUri) && size(self.backendStoreUri) > 0) || (has(self.backendStoreUriFrom) && size(self.backendStoreUriFrom.name) > 0 && size(self.backendStoreUriFrom.key) > 0)",message="backendStoreUri or backendStoreUriFrom must be set"
 // +kubebuilder:validation:XValidation:rule="!(has(self.backendStoreUri) && has(self.backendStoreUriFrom))",message="backendStoreUri and backendStoreUriFrom are mutually exclusive"
 // +kubebuilder:validation:XValidation:rule="!(has(self.registryStoreUri) && has(self.registryStoreUriFrom))",message="registryStoreUri and registryStoreUriFrom are mutually exclusive"
 // +kubebuilder:validation:XValidation:rule="!has(self.backendStoreUri) || (!self.backendStoreUri.startsWith('sqlite://') && !self.backendStoreUri.startsWith('file://')) || has(self.storage)",message="storage must be configured when using file-based backend store (sqlite:// or file:// prefix)"

@@ -2053,7 +2053,8 @@ spec:
                 || (has(self.serveArtifacts) && self.serveArtifacts)'
             - message: backendStoreUri or backendStoreUriFrom must be set
               rule: (has(self.backendStoreUri) && size(self.backendStoreUri) > 0)
-                || has(self.backendStoreUriFrom)
+                || (has(self.backendStoreUriFrom) && size(self.backendStoreUriFrom.name)
+                > 0 && size(self.backendStoreUriFrom.key) > 0)
             - message: backendStoreUri and backendStoreUriFrom are mutually exclusive
               rule: '!(has(self.backendStoreUri) && has(self.backendStoreUriFrom))'
             - message: registryStoreUri and registryStoreUriFrom are mutually exclusive
