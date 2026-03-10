@@ -26,6 +26,9 @@ from .artifact_actions import (
     action_load_model,
     action_get_run_info,
 )
+from .workspace_actions import (
+    action_list_workspaces,
+)
 
 __all__ = [
     "action_get_experiment",
@@ -44,4 +47,5 @@ __all__ = [
     "action_log_model",
     "action_load_model",
     "action_get_run_info",
+    "action_list_workspaces",
 ]
