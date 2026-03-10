@@ -94,19 +94,19 @@ Other:
                         Each backend deploys a fresh MLflow CR, runs the full test suite, then
                         removes the CR before the next backend runs.
                         The operator, workspace namespaces, and RBAC are shared across all backends.
-  TEST_LABELS           Pytest marker expression passed as -m (default: run all tests)
-                        e.g. TEST_LABELS=smoke or TEST_LABELS="smoke or integration"
+
+Positional arguments:
+  Any arguments after the script name are forwarded verbatim to pytest.
+  e.g. bash test-run.sh -m smoke
+       bash test-run.sh -m "smoke or integration"
 EOF
 }
 
 if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
     print_usage; exit 0
 fi
-if [ "$#" -gt 0 ]; then
-    echo "Error: $0 is configured via environment variables, not CLI flags." >&2
-    echo "Run '$0 --help' for the full list of variables." >&2
-    exit 1
-fi
+# Any positional arguments are forwarded verbatim to pytest (e.g. "-m smoke").
+PYTEST_ARGS=("$@")
 
 # ─── Defaults ─────────────────────────────────────────────────────────────────
 
@@ -146,7 +146,6 @@ ARTIFACT_BACKENDS="${ARTIFACT_BACKENDS:-${STORAGE_TYPE:-file,s3}}"
 # STORAGE_TYPE is set per-iteration by the main loop; this default is only used if
 # run_suite is somehow called outside the loop (e.g. during development/debugging).
 STORAGE_TYPE="${STORAGE_TYPE:-file}"
-TEST_LABELS="${TEST_LABELS:-}"
 
 # Platform for infrastructure overlays: base|openshift.
 # Defaults to openshift when the cluster has the OpenShift API (oc/routes available),
@@ -422,9 +421,7 @@ run_suite() {
     echo "  Running tests (output: $results_file)..."
     cd "$SCRIPT_DIR/.."
     local suite_exit=0
-    local label_args=()
-    [ -n "$TEST_LABELS" ] && label_args=(-m "$TEST_LABELS")
-    uv run pytest --junit-xml="$results_file" "${label_args[@]}" || suite_exit=$?
+    uv run pytest --junit-xml="$results_file" "${PYTEST_ARGS[@]}" || suite_exit=$?
     cd "$SCRIPT_DIR"
 
     # ── Between-suite teardown ───────────────────────────────────────────────────
