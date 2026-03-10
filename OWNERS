@@ -1,18 +1,7 @@
 approvers:
-  - alyssacgoins
   - gmfrasca
-  - hbelmiro
   - HumairAK
+  - kramaranya
   - mprahl
-  - nsingla
-  - VaniHaripriya
 
-reviewers:
-  - alyssacgoins
-  - gmfrasca
-  - hbelmiro
-  - HumairAK
-  - mprahl
-  - nsingla
-  - sduvvuri1603
-  - VaniHaripriya
+reviewers: []
