@@ -7,6 +7,7 @@ Each action accepts only test_context as an argument and modifies it appropriate
 import logging
 import random
 import mlflow
+from mlflow.exceptions import MlflowException
 from mlflow_tests.enums import ResourceType
 from ..shared import TestContext
 
@@ -38,27 +39,40 @@ def action_get_experiment(test_context: TestContext) -> None:
         logger.warning(f"Experiment retrieval returned None for ID: {experiment_id}")
 
 
-def action_create_experiment(test_context: TestContext) -> None:
+def action_create_experiment(test_context: TestContext, max_retries: int = 3) -> None:
     """Create a new experiment and store its ID in test context.
+
+    Retries with a new name on conflict (e.g. RESOURCE_ALREADY_EXISTS from a
+    soft-deleted experiment that still occupies the unique constraint).
 
     Args:
         test_context: Test context to update with created experiment ID.
                      Updates active_experiment_id with the new experiment ID.
                      Adds experiment ID to experiments_to_delete for cleanup.
+        max_retries: Number of retry attempts on name conflicts.
 
     Raises:
-        Exception: If experiment creation fails (propagated from mlflow).
+        Exception: If experiment creation fails for a non-conflict reason,
+                   or if all retries are exhausted.
     """
-    experiment_name = f"test-experiment-{random_gen.randint(0, 10_000)}"
-    logger.info(f"Starting experiment creation in workspace '{test_context.active_workspace}' with name '{experiment_name}'")
+    for attempt in range(1, max_retries + 1):
+        experiment_name = f"test-experiment-{random_gen.randint(0, 1_000_000)}"
+        logger.info(f"Starting experiment creation in workspace '{test_context.active_workspace}' with name '{experiment_name}' (attempt {attempt}/{max_retries})")
 
-    experiment_id = mlflow.create_experiment(experiment_name)
-    test_context.active_experiment_id = experiment_id
-    logger.info(f"Successfully created experiment '{experiment_name}' with ID: {experiment_id}")
+        try:
+            experiment_id = mlflow.create_experiment(experiment_name)
+        except MlflowException as e:
+            if e.error_code == "RESOURCE_ALREADY_EXISTS" and attempt < max_retries:
+                logger.warning(f"Experiment name '{experiment_name}' already exists, retrying with a new name")
+                continue
+            raise
 
-    # Add to cleanup tracker with workspace context
-    test_context.add_experiment_for_cleanup(experiment_id, test_context.active_workspace)
-    logger.debug(f"Added experiment {experiment_id} to cleanup list for workspace '{test_context.active_workspace}'")
+        test_context.active_experiment_id = experiment_id
+        logger.info(f"Successfully created experiment '{experiment_name}' with ID: {experiment_id}")
+
+        test_context.add_experiment_for_cleanup(experiment_id, test_context.active_workspace)
+        logger.debug(f"Added experiment {experiment_id} to cleanup list for workspace '{test_context.active_workspace}'")
+        return
 
 
 def action_delete_experiment(test_context: TestContext) -> None:
