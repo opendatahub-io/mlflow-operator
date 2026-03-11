@@ -24,8 +24,10 @@ import (
 // MLflowSpec defines the desired state of MLflow
 // +kubebuilder:validation:XValidation:rule="has(self.defaultArtifactRoot) || (has(self.serveArtifacts) && self.serveArtifacts)",message="defaultArtifactRoot must be set when serveArtifacts is not true"
 // +kubebuilder:validation:XValidation:rule="!has(self.defaultArtifactRoot) || !self.defaultArtifactRoot.startsWith('file://') || (has(self.serveArtifacts) && self.serveArtifacts)",message="serveArtifacts must be enabled when defaultArtifactRoot uses file-based storage (file:// prefix)"
+// +kubebuilder:validation:XValidation:rule="(has(self.backendStoreUri) && size(self.backendStoreUri) > 0) || (has(self.backendStoreUriFrom) && size(self.backendStoreUriFrom.name) > 0 && size(self.backendStoreUriFrom.key) > 0)",message="backendStoreUri or backendStoreUriFrom must be set"
 // +kubebuilder:validation:XValidation:rule="!(has(self.backendStoreUri) && has(self.backendStoreUriFrom))",message="backendStoreUri and backendStoreUriFrom are mutually exclusive"
 // +kubebuilder:validation:XValidation:rule="!(has(self.registryStoreUri) && has(self.registryStoreUriFrom))",message="registryStoreUri and registryStoreUriFrom are mutually exclusive"
+// +kubebuilder:validation:XValidation:rule="!has(self.registryStoreUriFrom) || (size(self.registryStoreUriFrom.name) > 0 && size(self.registryStoreUriFrom.key) > 0)",message="registryStoreUriFrom.name and registryStoreUriFrom.key must be non-empty when registryStoreUriFrom is set"
 // +kubebuilder:validation:XValidation:rule="!has(self.backendStoreUri) || (!self.backendStoreUri.startsWith('sqlite://') && !self.backendStoreUri.startsWith('file://')) || has(self.storage)",message="storage must be configured when using file-based backend store (sqlite:// or file:// prefix)"
 // +kubebuilder:validation:XValidation:rule="!has(self.registryStoreUri) || (!self.registryStoreUri.startsWith('sqlite://') && !self.registryStoreUri.startsWith('file://')) || has(self.storage)",message="storage must be configured when using file-based registry store (sqlite:// or file:// prefix)"
 // +kubebuilder:validation:XValidation:rule="!has(self.artifactsDestination) || !self.artifactsDestination.startsWith('file://') || has(self.storage)",message="storage must be configured when artifactsDestination uses file-based storage (file:// prefix)"
@@ -73,7 +75,7 @@ type MLflowSpec struct {
 	// Examples:
 	//   - "sqlite:////mlflow/mlflow.db" (requires Storage to be configured)
 	// Note: For URIs containing credentials, prefer using BackendStoreURIFrom for security.
-	// If not specified, defaults to "sqlite:////mlflow/mlflow.db"
+	// This must be set explicitly unless BackendStoreURIFrom is provided.
 	// +optional
 	BackendStoreURI *string `json:"backendStoreUri,omitempty"`
 
@@ -159,7 +161,13 @@ type MLflowSpec struct {
 	// Use this for pod-specific labels like version, component-specific metadata, etc.
 	// For labels that should be applied to all resources (Service, Deployment, etc.), use commonLabels in values.yaml.
 	// +optional
+	// +kubebuilder:validation:XValidation:rule="self.all(key, size(self[key]) <= 63)",message="label values must be 63 characters or less"
 	PodLabels map[string]string `json:"podLabels,omitempty"`
+
+	// PodAnnotations are annotations to add only to the MLflow pod, not to other resources.
+	// Use this for pod-specific annotations like Prometheus scraping or sidecar configuration.
+	// +optional
+	PodAnnotations map[string]string `json:"podAnnotations,omitempty"`
 
 	// PodSecurityContext specifies the security context for the MLflow pod
 	// +optional
@@ -171,6 +179,7 @@ type MLflowSpec struct {
 
 	// NodeSelector is a selector which must be true for the pod to fit on a node
 	// +optional
+	// +kubebuilder:validation:XValidation:rule="self.all(key, size(self[key]) <= 63)",message="label values must be 63 characters or less"
 	NodeSelector map[string]string `json:"nodeSelector,omitempty"`
 
 	// Tolerations are the pod's tolerations

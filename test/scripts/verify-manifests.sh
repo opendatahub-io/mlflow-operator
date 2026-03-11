@@ -53,25 +53,53 @@ for chart_dir in charts/*/; do
         chart_name=$(basename "$chart_dir")
         echo "Checking chart: $chart_name"
 
-        # Lint the chart
-        echo "  Linting..."
-        if helm lint "$chart_dir" > /dev/null 2>&1; then
+        SECRETREF_SETS="mlflow.backendStoreUriFrom.secretKeyRef.name=db-creds,mlflow.backendStoreUriFrom.secretKeyRef.key=uri"
+        chart_failed=0
+
+        # Lint the chart (direct URI path)
+        echo "  Linting (backendStoreUri)..."
+        if helm lint "$chart_dir" --set mlflow.backendStoreUri=sqlite:////mlflow/mlflow.db > /dev/null 2>&1; then
             echo -e "  ${GREEN}✓ Lint passed${NC}"
         else
             echo -e "  ${RED}✗ Lint failed${NC}"
-            helm lint "$chart_dir"
-            HELM_EXIT_CODE=1
+            helm lint "$chart_dir" --set mlflow.backendStoreUri=sqlite:////mlflow/mlflow.db || true
+            chart_failed=1
         fi
 
-        # Template render the chart
-        echo "  Rendering template..."
-        if helm template test "$chart_dir" > /dev/null 2>&1; then
+        # Lint the chart (secretKeyRef path)
+        echo "  Linting (backendStoreUriFrom)..."
+        if helm lint "$chart_dir" --set "$SECRETREF_SETS" > /dev/null 2>&1; then
+            echo -e "  ${GREEN}✓ Lint passed${NC}"
+        else
+            echo -e "  ${RED}✗ Lint failed${NC}"
+            helm lint "$chart_dir" --set "$SECRETREF_SETS" || true
+            chart_failed=1
+        fi
+
+        # Template render the chart (direct URI path)
+        echo "  Rendering template (backendStoreUri)..."
+        if helm template test "$chart_dir" --set mlflow.backendStoreUri=sqlite:////mlflow/mlflow.db > /dev/null 2>&1; then
             echo -e "  ${GREEN}✓ Template renders successfully${NC}"
-            VALIDATED_CHARTS+=("$chart_name")
         else
             echo -e "  ${RED}✗ Template failed to render${NC}"
-            helm template test "$chart_dir"
+            helm template test "$chart_dir" --set mlflow.backendStoreUri=sqlite:////mlflow/mlflow.db || true
+            chart_failed=1
+        fi
+
+        # Template render the chart (secretKeyRef path)
+        echo "  Rendering template (backendStoreUriFrom)..."
+        if helm template test "$chart_dir" --set "$SECRETREF_SETS" > /dev/null 2>&1; then
+            echo -e "  ${GREEN}✓ Template renders successfully${NC}"
+        else
+            echo -e "  ${RED}✗ Template failed to render${NC}"
+            helm template test "$chart_dir" --set "$SECRETREF_SETS" || true
+            chart_failed=1
+        fi
+
+        if [ $chart_failed -ne 0 ]; then
             HELM_EXIT_CODE=1
+        else
+            VALIDATED_CHARTS+=("$chart_name")
         fi
         echo ""
     fi
@@ -96,7 +124,7 @@ if bin/kustomize build config/base > /dev/null 2>&1; then
     echo -e "${GREEN}✓ config/base builds successfully${NC}"
 else
     echo -e "${RED}✗ config/base failed to build${NC}"
-    bin/kustomize build config/base
+    bin/kustomize build config/base || true
     OVERALL_EXIT_CODE=1
 fi
 echo ""
@@ -125,7 +153,7 @@ for overlay in config/overlays/*/; do
         VALIDATED_OVERLAYS+=("$overlay_name")
     else
         echo -e "${RED}✗ $overlay_name failed to build${NC}"
-        bin/kustomize build "$overlay"
+        bin/kustomize build "$overlay" || true
         OVERLAY_EXIT_CODE=1
     fi
 done
