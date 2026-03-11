@@ -21,7 +21,7 @@ env:
   QUAY_ID: ${{ secrets.QUAY_ROBOT_USERNAME }}
   QUAY_TOKEN: ${{ secrets.QUAY_ROBOT_TOKEN }}
   IMAGE_REPO: mlflow-tests
-  DOCKERFILE_PATH: mlflow-tests/image/test.Dockerfile
+  DOCKERFILE_PATH: mlflow-tests/images/test.Dockerfile
 
 jobs:
   build-test-image:
