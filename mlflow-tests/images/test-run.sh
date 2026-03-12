@@ -45,15 +45,16 @@ MLflow image:
   MLFLOW_OPERATOR_IMAGE MLflow operator image (standalone/Kind path only; ODH/RHOAI operator image is hardcoded in the platform binary)
 
 Storage:
-  STORAGE_TYPE          Legacy single-suite selector: file|s3. Prefer ARTIFACT_BACKENDS for
+  STORAGE_TYPE          Legacy single-suite selector: file|s3|externals3. Prefer ARTIFACT_BACKENDS for
                         multi-suite runs. When STORAGE_TYPE is set and ARTIFACT_BACKENDS is not,
                         ARTIFACT_BACKENDS is derived from STORAGE_TYPE (backward compatibility).
   DB_TYPE               Metadata store backend: sqlite|postgres (default: sqlite)
 
-  AWS_ACCESS_KEY_ID     S3 access key     (when STORAGE_TYPE=s3)
-  AWS_SECRET_ACCESS_KEY S3 secret key     (when STORAGE_TYPE=s3)
-  BUCKET                S3 bucket name    (when STORAGE_TYPE=s3)
-  S3_ENDPOINT_URL       S3 endpoint URL   (when STORAGE_TYPE=s3)
+  AWS_ACCESS_KEY_ID     S3 access key     (when STORAGE_TYPE=s3 or externals3)
+  AWS_SECRET_ACCESS_KEY S3 secret key     (when STORAGE_TYPE=s3 or externals3)
+  BUCKET                S3 bucket name    (when STORAGE_TYPE=s3 or externals3)
+  S3_ENDPOINT_URL       S3 endpoint URL   (when STORAGE_TYPE=s3; omit for real AWS with externals3)
+  AWS_DEFAULT_REGION    AWS region        (when STORAGE_TYPE=externals3; optional for s3)
 
   DB_HOST               PostgreSQL host   (when DB_TYPE=postgres; default: auto)
   DB_PORT               PostgreSQL port   (default: 5432)
@@ -91,6 +92,7 @@ Other:
   TEST_RESULTS_DIR      Directory for JUnit XML output (default: /mlflow/results)
   DEPLOY_PY             Path to deploy.py (default: <repo>/.github/actions/deploy/deploy.py)
   ARTIFACT_BACKENDS     Comma-separated artifact storage backends to test in sequence (default: file,s3)
+                        Supported values: file, s3 (SeaweedFS), externals3 (external S3 via AWS_* env vars)
                         Each backend deploys a fresh MLflow CR, runs the full test suite, then
                         removes the CR before the next backend runs.
                         The operator, workspace namespaces, and RBAC are shared across all backends.
@@ -217,12 +219,16 @@ cleanup() {
             echo "  Removing self-deployed infrastructure..."
             kustomize build "$REPO_ROOT/config/postgres/$infra_overlay" \
                 | kubectl delete --ignore-not-found -n "$NAMESPACE" -f - 2>/dev/null || true
-            export APPLICATION_CRD_ID=mlflow-pipelines \
-                   PROFILE_NAMESPACE_LABEL=mlflow-profile \
-                   S3_ADMIN_USER=kind-admin
-            kustomize build "$REPO_ROOT/config/seaweedfs/$infra_overlay" \
-                | envsubst '$NAMESPACE,$APPLICATION_CRD_ID,$PROFILE_NAMESPACE_LABEL,$S3_ADMIN_USER' \
-                | kubectl delete --ignore-not-found -f - 2>/dev/null || true
+            # Only tear down SeaweedFS if the in-cluster s3 backend was used.
+            # externals3 uses an external S3 service that this run did not deploy.
+            if echo "$ARTIFACT_BACKENDS" | tr ',' '\n' | grep -qxF 's3'; then
+                export APPLICATION_CRD_ID=mlflow-pipelines \
+                       PROFILE_NAMESPACE_LABEL=mlflow-profile \
+                       S3_ADMIN_USER=kind-admin
+                kustomize build "$REPO_ROOT/config/seaweedfs/$infra_overlay" \
+                    | envsubst '$NAMESPACE,$APPLICATION_CRD_ID,$PROFILE_NAMESPACE_LABEL,$S3_ADMIN_USER' \
+                    | kubectl delete --ignore-not-found -f - 2>/dev/null || true
+            fi
         fi
     fi
 }
@@ -357,11 +363,22 @@ run_suite() {
                 [ -n "${BUCKET:-}"                ] && deploy_args+=(--s3-bucket     "$BUCKET")
                 [ -n "${S3_ENDPOINT_URL:-}"       ] && deploy_args+=(--s3-endpoint   "$S3_ENDPOINT_URL")
                 ;;
+            externals3)
+                # Use externally-provided S3 credentials (AWS_* env vars); SeaweedFS is
+                # NOT deployed. Requires: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, BUCKET.
+                # Optional: S3_ENDPOINT_URL (omit for real AWS), AWS_DEFAULT_REGION.
+                deploy_args+=(--artifact-storage externals3)
+                deploy_args+=(--s3-access-key "$AWS_ACCESS_KEY_ID")
+                deploy_args+=(--s3-secret-key "$AWS_SECRET_ACCESS_KEY")
+                deploy_args+=(--s3-bucket     "$BUCKET")
+                [ -n "${S3_ENDPOINT_URL:-}"    ] && deploy_args+=(--s3-endpoint "$S3_ENDPOINT_URL")
+                [ -n "${AWS_DEFAULT_REGION:-}" ] && deploy_args+=(--s3-region   "$AWS_DEFAULT_REGION")
+                ;;
             file)
                 deploy_args+=(--artifact-storage file)
                 ;;
             *)
-                echo "ERROR: Unsupported ARTIFACT_BACKENDS value: '${STORAGE_TYPE}'. Supported: file, s3" >&2
+                echo "ERROR: Unsupported ARTIFACT_BACKENDS value: '${STORAGE_TYPE}'. Supported: file, s3, externals3" >&2
                 return 1
                 ;;
         esac
@@ -441,6 +458,17 @@ run_suite() {
     export kube_token
 
     # ── Tests ───────────────────────────────────────────────────────────────────
+    # Export artifact_storage and serve_artifacts so Config reads in the test suite
+    # match what was actually deployed. Both s3 and externals3 are S3-compatible
+    # from the test perspective, so normalise externals3 → s3.
+    case "$STORAGE_TYPE" in
+        s3|externals3) export artifact_storage="s3" ;;
+        *)             export artifact_storage="$STORAGE_TYPE" ;;
+    esac
+    # deploy.py defaults --serve-artifacts to "true"; export the same default so
+    # Config.SERVE_ARTIFACTS stays in sync if the default ever changes.
+    export serve_artifacts="${SERVE_ARTIFACTS:-true}"
+
     local results_file="${TEST_RESULTS_DIR}/xunit_report_${STORAGE_TYPE}.xml"
     echo "  Running tests (output: $results_file)..."
     cd "$SCRIPT_DIR/.."

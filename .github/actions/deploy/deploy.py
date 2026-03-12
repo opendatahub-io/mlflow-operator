@@ -22,8 +22,10 @@ class MLflowDeployer:
         self.args = args
         self.repo_root = Path(__file__).parent.parent.parent.parent
 
-        # Set default endpoints if not provided
-        if not self.args.s3_endpoint:
+        # Set default endpoints if not provided.
+        # For externals3 the endpoint is caller-supplied; don't override with the
+        # in-cluster SeaweedFS/minio address.
+        if not self.args.s3_endpoint and self.args.artifact_storage != "externals3":
             self.args.s3_endpoint = f"http://minio-service.{self.args.namespace}.svc.cluster.local:9000"
 
         if not self.args.postgres_host:
@@ -255,12 +257,15 @@ class MLflowDeployer:
             "kubectl", "delete", "secret", "aws-credentials", "-n", self.args.namespace
         ], check=False, capture_output=True)
 
-        self.run_command([
+        cmd = [
             "kubectl", "create", "secret", "generic", "aws-credentials",
             f"--from-literal=AWS_ACCESS_KEY_ID={self.args.s3_access_key}",
             f"--from-literal=AWS_SECRET_ACCESS_KEY={self.args.s3_secret_key}",
-            "-n", self.args.namespace
-        ], "Creating S3 credentials secret", capture_output=True)
+        ]
+        if self.args.s3_region:
+            cmd.append(f"--from-literal=AWS_DEFAULT_REGION={self.args.s3_region}")
+        cmd += ["-n", self.args.namespace]
+        self.run_command(cmd, "Creating S3 credentials secret", capture_output=True)
 
     def deploy_seaweedfs(self):
         """Deploy SeaweedFS for S3-compatible storage"""
@@ -518,7 +523,7 @@ class MLflowDeployer:
         # Determine storage configuration
         use_postgres_backend = self.args.backend_store == "postgres"
         use_postgres_registry = self.args.registry_store == "postgres"
-        use_s3_artifacts = self.args.artifact_storage == "s3"
+        use_s3_artifacts = self.args.artifact_storage in ("s3", "externals3")
 
         # Base CR structure
         mlflow_cr = {
@@ -570,9 +575,13 @@ class MLflowDeployer:
             mlflow_cr["spec"]["envFrom"] = [{
                 "secretRef": {"name": "aws-credentials"}
             }]
-            mlflow_cr["spec"]["env"] = [
-                {"name": "MLFLOW_S3_ENDPOINT_URL", "value": self.args.s3_endpoint}
-            ]
+            # For in-cluster s3 (SeaweedFS) the endpoint is always set.
+            # For externals3 only inject the endpoint override when explicitly provided;
+            # real AWS endpoints must not be overridden.
+            if self.args.s3_endpoint:
+                mlflow_cr["spec"].setdefault("env", []).append(
+                    {"name": "MLFLOW_S3_ENDPOINT_URL", "value": self.args.s3_endpoint}
+                )
         else:
             # File-based artifact storage
             # IMPORTANT: MLflow operator validation requires serveArtifacts=true when using file-based storage
@@ -910,9 +919,11 @@ class MLflowDeployer:
                     print("⏭️  Skipping PostgreSQL deployment (--skip-infrastructure set)")
                 self.create_postgres_secret()
 
-            if self.args.artifact_storage == "s3":
+            if self.args.artifact_storage in ("s3", "externals3"):
                 self.create_s3_secret()
-                if not self.args.skip_infrastructure:
+                if self.args.artifact_storage == "externals3":
+                    print("⏭️  Skipping SeaweedFS deployment (externals3 uses caller-supplied S3)")
+                elif not self.args.skip_infrastructure:
                     self.deploy_seaweedfs()
                 else:
                     print("⏭️  Skipping SeaweedFS deployment (--skip-infrastructure set)")
@@ -938,6 +949,18 @@ class MLflowDeployer:
             # Always clean up TLS files for security, regardless of success or failure
             self.cleanup_tls_certificates()
 
+def validate_args(args):
+    if args.artifact_storage == "externals3":
+        missing = []
+        if not args.s3_access_key:
+            missing.append("--s3-access-key")
+        if not args.s3_secret_key:
+            missing.append("--s3-secret-key")
+        if not args.s3_bucket:
+            missing.append("--s3-bucket")
+        if missing:
+            raise ValueError(f"externals3 requires {', '.join(missing)} to be set")
+
 
 def main():
     parser = argparse.ArgumentParser(description="Deploy MLflow on Kubernetes cluster")
@@ -960,8 +983,10 @@ def main():
                        default="sqlite", help="Backend store type")
     parser.add_argument("--registry-store", choices=["sqlite", "postgres"],
                        default="sqlite", help="Registry store type")
-    parser.add_argument("--artifact-storage", choices=["file", "s3"],
-                       default="file", help="Artifact storage type")
+    parser.add_argument("--artifact-storage", choices=["file", "s3", "externals3"],
+                       default="file",
+                       help="Artifact storage type: 'file' (local), 's3' (in-cluster SeaweedFS), "
+                            "'externals3' (external S3 via caller-supplied AWS_* credentials, no SeaweedFS deployed)")
     parser.add_argument("--serve-artifacts", choices=["true", "false"],
                        default="true", help="Whether to serve artifacts")
 
@@ -995,12 +1020,29 @@ def main():
     parser.add_argument("--postgres-registry-db", default="mydatabase")
 
     # S3 configuration
-    parser.add_argument("--s3-bucket", default="mlpipeline")
-    parser.add_argument("--s3-access-key", default="minio")
-    parser.add_argument("--s3-secret-key", default="minio123")
-    parser.add_argument("--s3-endpoint", default="")
+    parser.add_argument("--s3-bucket", default="")
+    parser.add_argument("--s3-access-key", default="")
+    parser.add_argument("--s3-secret-key", default="")
+    parser.add_argument("--s3-endpoint", default="",
+                       help="S3 endpoint URL override (e.g. for MinIO/SeaweedFS). "
+                            "Omit for real AWS when using --artifact-storage externals3.")
+    parser.add_argument("--s3-region", default="",
+                       help="AWS region (optional; used when --artifact-storage externals3)")
 
     args = parser.parse_args()
+
+    # Apply SeaweedFS defaults for self-deployed S3 storage
+    if args.artifact_storage == "s3":
+        args.s3_bucket = args.s3_bucket or "mlpipeline"
+        args.s3_access_key = args.s3_access_key or "minio"
+        args.s3_secret_key = args.s3_secret_key or "minio123"
+
+    try:
+        validate_args(args)
+    except ValueError as e:
+        print(f"❌ Input parameters validation failed: {e}")
+        print("Please check the input parameters and try again.")
+        sys.exit(1)
 
     deployer = MLflowDeployer(args)
     deployer.deploy()
