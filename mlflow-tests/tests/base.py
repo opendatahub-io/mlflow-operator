@@ -5,6 +5,7 @@ import string
 
 import mlflow
 import pytest
+from kubernetes import client as k8s_client
 from mlflow.client import MlflowClient
 
 from mlflow_tests.enums import ResourceType, KubeVerb
@@ -221,6 +222,42 @@ class TestBase:
                     error_msg = f"Failed to delete user {user_info.uname}: {e}"
                     logger.warning(error_msg)
                     cleanup_errors.append(error_msg)
+
+        # Cleanup MLflowConfigs
+        if self.test_context.mlflowconfigs_to_delete or self.test_context.secrets_to_delete:
+            ClientManager.load_k8s_config()
+
+            if self.test_context.mlflowconfigs_to_delete:
+                logger.info(f"Cleaning up {len(self.test_context.mlflowconfigs_to_delete)} MLflowConfigs")
+                custom_api = k8s_client.CustomObjectsApi()
+
+                for name, namespace in self.test_context.mlflowconfigs_to_delete.items():
+                    try:
+                        custom_api.delete_namespaced_custom_object(
+                            group="mlflow.kubeflow.org",
+                            version="v1",
+                            namespace=namespace,
+                            plural="mlflowconfigs",
+                            name=name
+                        )
+                        logger.info(f"Deleted MLflowConfig {name} in namespace {namespace}")
+                    except Exception as e:
+                        error_msg = f"Failed to delete MLflowConfig {name} in namespace {namespace}: {e}"
+                        logger.warning(error_msg)
+                        cleanup_errors.append(error_msg)
+
+            if self.test_context.secrets_to_delete:
+                logger.info(f"Cleaning up {len(self.test_context.secrets_to_delete)} Secrets")
+                core_v1_api = k8s_client.CoreV1Api()
+
+                for name, namespace in self.test_context.secrets_to_delete.items():
+                    try:
+                        core_v1_api.delete_namespaced_secret(name=name, namespace=namespace)
+                        logger.info(f"Deleted Secret {name} in namespace {namespace}")
+                    except Exception as e:
+                        error_msg = f"Failed to delete Secret {name} in namespace {namespace}: {e}"
+                        logger.warning(error_msg)
+                        cleanup_errors.append(error_msg)
 
         # Restore original workspace if it was set
         if original_workspace:

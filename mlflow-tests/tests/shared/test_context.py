@@ -39,6 +39,10 @@ class TestContext:
         model: Created or loaded model object
         model_uri: URI of logged model
         artifact_location: Artifact storage URI from run info
+        expected_artifact_bucket: Expected S3 bucket name for custom artifact location
+        expected_artifact_path: Expected relative path within bucket for custom artifacts
+        mlflowconfigs_to_delete: Map of mlflowconfig_name -> namespace for cleanup
+        secrets_to_delete: Map of secret_name -> namespace for cleanup
     """
 
     workspaces: list[str] = field(default_factory=list)
@@ -62,6 +66,10 @@ class TestContext:
     model: Optional[Any] = None
     model_uri: Optional[str] = None
     artifact_location: Optional[str] = None
+    expected_artifact_bucket: Optional[str] = None
+    expected_artifact_path: Optional[str] = None
+    mlflowconfigs_to_delete: dict[str, str] = field(default_factory=dict)
+    secrets_to_delete: dict[str, str] = field(default_factory=dict)
 
     def add_experiment_for_cleanup(self, experiment_id: str, workspace: str) -> None:
         """Add an experiment to the cleanup list with workspace context.
@@ -143,4 +151,44 @@ class TestContext:
 
         self.users_to_delete.append(user_info)
         logger.info(f"Added user '{user_info.uname}' to cleanup list (total: {len(self.users_to_delete)})")
+
+    def add_mlflowconfig_for_cleanup(self, name: str, namespace: str) -> None:
+        """Add an MLflowConfig to the cleanup list.
+
+        Args:
+            name: Name of the MLflowConfig resource
+            namespace: Namespace where the MLflowConfig exists
+
+        Raises:
+            ValueError: If name or namespace is empty
+        """
+        if not name or not name.strip():
+            logger.error("Attempted to add MLflowConfig for cleanup with empty name")
+            raise ValueError("name cannot be empty")
+        if not namespace or not namespace.strip():
+            logger.error(f"Attempted to add MLflowConfig {name} for cleanup with empty namespace")
+            raise ValueError("namespace cannot be empty")
+
+        self.mlflowconfigs_to_delete[name.strip()] = namespace.strip()
+        logger.info(f"Added MLflowConfig {name} in namespace '{namespace}' to cleanup list")
+
+    def add_secret_for_cleanup(self, name: str, namespace: str) -> None:
+        """Add a Secret to the cleanup list.
+
+        Args:
+            name: Name of the Secret
+            namespace: Namespace where the Secret exists
+
+        Raises:
+            ValueError: If name or namespace is empty
+        """
+        if not name or not name.strip():
+            logger.error("Attempted to add Secret for cleanup with empty name")
+            raise ValueError("name cannot be empty")
+        if not namespace or not namespace.strip():
+            logger.error(f"Attempted to add Secret {name} for cleanup with empty namespace")
+            raise ValueError("namespace cannot be empty")
+
+        self.secrets_to_delete[name.strip()] = namespace.strip()
+        logger.info(f"Added Secret {name} in namespace '{namespace}' to cleanup list")
 

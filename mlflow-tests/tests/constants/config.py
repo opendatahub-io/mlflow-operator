@@ -15,6 +15,7 @@ class Config:
     AWS_ACCESS_KEY = os.getenv("AWS_ACCESS_KEY_ID", "")
     AWS_SECRET_KEY = os.getenv("AWS_SECRET_ACCESS_KEY", "")
     S3_URL = os.getenv("MLFLOW_S3_ENDPOINT_URL", "")
+    S3_BUCKET = os.getenv("AWS_S3_BUCKET", "mlpipeline")
     BACKEND_STORE_URI: str = os.getenv("MLFLOW_BACKEND_STORE_URI", "postgresql://postgres:mysecretpassword@localhost:5432/mydatabase")
 
     WORKSPACES: list[str] = [

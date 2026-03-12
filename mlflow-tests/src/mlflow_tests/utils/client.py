@@ -17,23 +17,22 @@ _mlflow_client_lock = threading.Lock()
 
 class ClientManager:
 
-    @classmethod
-    def create_k8s_client(cls) -> tuple[client.CoreV1Api, client.RbacAuthorizationV1Api]:
-        """Create Kubernetes API clients.
-
-        Args:
-            token: Optional service account token. If not provided, uses default kubeconfig.
-
-        Returns:
-            Tuple of (CoreV1Api, RbacAuthorizationV1Api) clients
-
-        Raises:
-            ValueError: If token is required but not provided
-        """
+    @staticmethod
+    def load_k8s_config() -> None:
+        """Load Kubernetes config."""
         try:
             config.load_incluster_config()
         except config.ConfigException:
             config.load_kube_config()
+
+    @classmethod
+    def create_k8s_client(cls) -> tuple[client.CoreV1Api, client.RbacAuthorizationV1Api]:
+        """Create Kubernetes API clients.
+
+        Returns:
+            Tuple of (CoreV1Api, RbacAuthorizationV1Api) clients
+        """
+        cls.load_k8s_config()
 
         core_v1_api = client.CoreV1Api()
         rbac_v1_api = client.RbacAuthorizationV1Api()
