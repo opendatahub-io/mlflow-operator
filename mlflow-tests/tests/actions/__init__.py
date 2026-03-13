@@ -25,6 +25,9 @@ from .artifact_actions import (
     action_log_model,
     action_load_model,
     action_get_run_info,
+    action_create_artifact_connection_secret,
+    action_create_mlflowconfig,
+    action_wait_for_mlflowconfig_active,
 )
 
 __all__ = [
@@ -44,4 +47,7 @@ __all__ = [
     "action_log_model",
     "action_load_model",
     "action_get_run_info",
+    "action_create_artifact_connection_secret",
+    "action_create_mlflowconfig",
+    "action_wait_for_mlflowconfig_active",
 ]

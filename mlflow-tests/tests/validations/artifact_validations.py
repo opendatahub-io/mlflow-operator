@@ -190,6 +190,40 @@ def validate_storage(test_context: TestContext) -> None:
         logger.info(f"Successfully validated File storage: {test_context.artifact_location}")
 
 
+def validate_custom_artifact_location(test_context: TestContext) -> None:
+    """Validate that artifacts are stored at the custom MLflowConfig location.
+
+    Args:
+        test_context: Test context containing artifact_location,
+                     expected_artifact_bucket, and expected_artifact_path.
+
+    Raises:
+        AssertionError: If artifact_location doesn't match expected configuration.
+    """
+    logger.info("Validating custom artifact location from MLflowConfig")
+
+    assert test_context.artifact_location is not None, \
+        "Artifact location not set in test context"
+    assert test_context.expected_artifact_bucket is not None, \
+        "Expected artifact bucket not set in test context"
+    assert test_context.expected_artifact_path is not None, \
+        "Expected artifact path not set in test context"
+
+    artifact_location = test_context.artifact_location
+    expected_bucket = test_context.expected_artifact_bucket
+    expected_path = test_context.expected_artifact_path
+
+    logger.debug(f"Artifact location: {artifact_location}")
+    logger.debug(f"Expected bucket: {expected_bucket}, path: {expected_path}")
+
+    expected_prefix = f"s3://{expected_bucket}/{expected_path}/"
+    assert artifact_location.startswith(expected_prefix), \
+        f"Artifact location '{artifact_location}' does not start with expected prefix '{expected_prefix}'. " \
+        f"Expected bucket: '{expected_bucket}', path: '{expected_path}'"
+
+    logger.info(f"Successfully validated custom artifact location: {artifact_location}")
+
+
 def validate_run_created(test_context: TestContext) -> None:
     """Validate that an MLflow run was successfully created.
 

@@ -23,6 +23,7 @@ from .artifact_validations import (
     validate_storage,
     validate_run_created,
     validate_run_ended,
+    validate_custom_artifact_location,
 )
 from .validation_utils import (
     validate_authentication_denied,
@@ -45,4 +46,5 @@ __all__ = [
     "validate_run_ended",
     "validate_authentication_denied",
     "validate_resource_retrieved_or_created",
+    "validate_custom_artifact_location",
 ]

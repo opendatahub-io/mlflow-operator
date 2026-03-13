@@ -15,6 +15,10 @@ from .actions import (
     action_log_model,
     action_load_model,
     action_get_run_info,
+    action_create_artifact_connection_secret,
+    action_create_mlflowconfig,
+    action_wait_for_mlflowconfig_active,
+    action_create_experiment,
 )
 from .validations import (
     validate_artifact_logged,
@@ -27,7 +31,9 @@ from .validations import (
     validate_run_created,
     validate_run_ended,
     validate_authentication_denied,
+    validate_custom_artifact_location,
 )
+from .validations.experiment_validations import validate_experiment_created
 
 import pytest
 
@@ -141,6 +147,22 @@ class TestMLflowArtifacts(TestBase):
             test_steps = [
                 TestStep(action_func=action_start_run, validate_func=validate_authentication_denied),
                 TestStep(action_func=action_log_artifact, validate_func=validate_authentication_denied)
+            ]
+        ),
+
+        # MLflowConfig artifact location override test
+        TestData(
+            test_name="Artifacts stored at custom MLflowConfig location",
+            user_info=UserInfo(workspace=Config.WORKSPACES[0], verbs=[KubeVerb.CREATE, KubeVerb.UPDATE, KubeVerb.GET], resource_types=[ResourceType.EXPERIMENTS]),
+            workspace_to_use=Config.WORKSPACES[0],
+            test_steps=[
+                TestStep(action_func=action_create_artifact_connection_secret),
+                TestStep(action_func=action_create_mlflowconfig),
+                TestStep(action_func=action_wait_for_mlflowconfig_active),
+                TestStep(action_func=action_create_experiment, validate_func=validate_experiment_created),
+                TestStep(action_func=action_start_run, validate_func=validate_run_created),
+                TestStep(action_func=action_get_run_info),
+                TestStep(action_func=action_end_run, validate_func=validate_custom_artifact_location),
             ]
         ),
     ]
