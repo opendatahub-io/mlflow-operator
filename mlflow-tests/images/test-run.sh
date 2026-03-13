@@ -116,7 +116,7 @@ MLFLOW_NAME="mlflow"
 MLFLOW_SA_NAME="${MLFLOW_SA_NAME:-mlflow-sa}"
 
 MLFLOW_TAG="${MLFLOW_TAG:-master}"
-MLFLOW_IMAGE_REPO="${MLFLOW_IMAGE_REPO:-quay.io/opendatahub/mlflow}"
+MLFLOW_IMAGE_REPO="${MLFLOW_IMAGE_REPO:-}"
 MLFLOW_IMAGE="${MLFLOW_IMAGE:-}"
 MLFLOW_OPERATOR_IMAGE="${MLFLOW_OPERATOR_IMAGE:-quay.io/opendatahub/mlflow-operator:odh-stable}"
 
@@ -175,7 +175,13 @@ _CREATED_WORKSPACES=""  # tracks only namespaces created by this run (not pre-ex
 # Set to true after the first suite so subsequent suites skip re-deploying the operator.
 _OPERATOR_DEPLOYED=false
 
-MLFLOW_RESOLVED_IMAGE="${MLFLOW_IMAGE:-${MLFLOW_IMAGE_REPO}:${MLFLOW_TAG}}"
+MLFLOW_DEFAULT_IMAGE=""
+if [ -n "${MLFLOW_IMAGE_REPO:-}" ] && [ -n "${MLFLOW_TAG:-}" ]; then
+    MLFLOW_DEFAULT_IMAGE="${MLFLOW_IMAGE_REPO}:${MLFLOW_TAG}"
+fi
+MLFLOW_RESOLVED_IMAGE="${MLFLOW_IMAGE:-${MLFLOW_DEFAULT_IMAGE}}"
+
+
 
 API_BASE="https://${MLFLOW_NAME}.${NAMESPACE}.svc.cluster.local:8443"
 
@@ -322,10 +328,10 @@ run_suite() {
 
         local deploy_args=(
             --namespace             "$NAMESPACE"
-            --mlflow-image          "$MLFLOW_RESOLVED_IMAGE"
             --mlflow-operator-image "$MLFLOW_OPERATOR_IMAGE"
             --platform              "$INFRASTRUCTURE_PLATFORM"
         )
+        [ -n "${MLFLOW_RESOLVED_IMAGE}" ] && deploy_args+=(--mlflow-image "$MLFLOW_RESOLVED_IMAGE")
 
         [ -n "${POSTGRES_IMAGE:-}"  ] && deploy_args+=(--postgres-image  "$POSTGRES_IMAGE")
         [ -n "${SEAWEEDFS_IMAGE:-}" ] && deploy_args+=(--seaweedfs-image "$SEAWEEDFS_IMAGE")

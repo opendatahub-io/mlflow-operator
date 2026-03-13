@@ -945,7 +945,7 @@ def main():
     # Basic configuration
     parser.add_argument("--namespace", default="mlflow",
                        help="Kubernetes namespace")
-    parser.add_argument("--mlflow-image", default="quay.io/opendatahub/mlflow:odh-stable",
+    parser.add_argument("--mlflow-image", required=False,
                        help="Full MLflow image name and tag")
     parser.add_argument("--mlflow-operator-image", default="quay.io/opendatahub/mlflow-operator:odh-stable",
                        help="Full MLflow operator image name and tag")
