@@ -32,6 +32,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/yaml"
+	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	mlflowv1 "github.com/opendatahub-io/mlflow-operator/api/v1"
 	"github.com/opendatahub-io/mlflow-operator/internal/config"
@@ -42,7 +43,11 @@ const (
 	defaultStorageSize     = "2Gi"
 	defaultBackendStoreURI = "sqlite:////mlflow/mlflow.db"
 	defaultArtifactsDest   = "file:///mlflow/artifacts"
+	uvicornSSLCiphersEnv   = "UVICORN_SSL_CIPHERS"
+	uvicornSystemCiphers   = "PROFILE=SYSTEM"
 )
+
+var helmLog = logf.Log.WithName("helm")
 
 // CA bundle mount paths - used for mounting platform and custom CA ConfigMaps
 const (
@@ -378,15 +383,35 @@ func (h *HelmRenderer) mlflowToHelmValues(mlflow *mlflowv1.MLflow, namespace str
 
 	values["mlflow"] = mlflowConfig
 
-	env := make([]interface{}, 0, len(mlflow.Spec.Env))
+	envCapacity := len(mlflow.Spec.Env)
+	if opts.IsOpenShift {
+		envCapacity++
+	}
+	env := make([]interface{}, 0, envCapacity)
+	hasCustomUvicornSSLCiphers := false
 
 	// Add custom env vars from spec
 	for i, e := range mlflow.Spec.Env {
+		if opts.IsOpenShift && e.Name == uvicornSSLCiphersEnv {
+			hasCustomUvicornSSLCiphers = true
+			helmLog.Info("MLflow CR overrides the default OpenShift uvicorn SSL ciphers",
+				"name", mlflow.Name,
+				"namespace", namespace,
+				"envVar", uvicornSSLCiphersEnv,
+			)
+		}
 		envMap, err := runtime.DefaultUnstructuredConverter.ToUnstructured(&e)
 		if err != nil {
 			return nil, fmt.Errorf("failed to convert env[%d]: %w", i, err)
 		}
 		env = append(env, envMap)
+	}
+
+	if opts.IsOpenShift && !hasCustomUvicornSSLCiphers {
+		env = append(env, map[string]interface{}{
+			"name":  uvicornSSLCiphersEnv,
+			"value": uvicornSystemCiphers,
+		})
 	}
 
 	values["env"] = env

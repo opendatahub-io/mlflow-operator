@@ -155,7 +155,7 @@ MLflow is deployed with the `kubernetes-auth` app enabled. The operator sets `ML
 
 The deployment always sets `MLFLOW_DISABLE_TELEMETRY=true` and `MLFLOW_SERVER_ENABLE_JOB_EXECUTION=false` to disable telemetry and job execution by default.
 
-TLS is terminated inside the MLflow container using uvicorn options. Certificates come from the `mlflow-tls` secret, which is created automatically on OpenShift via the `service.beta.openshift.io/serving-cert-secret-name` annotation. If you need to provide your own certificates, place `tls.crt` and `tls.key` in a secret named `mlflow-tls` (or override `tls.secretName` in Helm values).
+TLS is terminated inside the MLflow container using uvicorn options. Certificates come from the `mlflow-tls` secret, which is created automatically on OpenShift via the `service.beta.openshift.io/serving-cert-secret-name` annotation. If you need to provide your own certificates, place `tls.crt` and `tls.key` in a secret named `mlflow-tls` (or override `tls.secretName` in Helm values). On OpenShift, the operator sets `UVICORN_SSL_CIPHERS=PROFILE=SYSTEM` by default unless `spec.env` already defines that variable, so uvicorn follows the platform crypto policy, including FIPS-compatible TLS 1.2 and 1.3 cipher selection.
 
 ### Operator RBAC Privileges
 

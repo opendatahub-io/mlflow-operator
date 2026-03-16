@@ -539,6 +539,113 @@ func TestMlflowToHelmValues_Env(t *testing.T) {
 	}
 }
 
+func TestMlflowToHelmValues_OpenShiftInjectsUvicornSSLCiphersEnv(t *testing.T) {
+	renderer := &HelmRenderer{}
+
+	tests := []struct {
+		name         string
+		mlflow       *mlflowv1.MLflow
+		wantMinCount int
+		wantValue    string
+	}{
+		{
+			name: "injects env when absent",
+			mlflow: &mlflowv1.MLflow{
+				ObjectMeta: metav1.ObjectMeta{Name: "test"},
+				Spec:       mlflowv1.MLflowSpec{},
+			},
+			wantMinCount: 1,
+			wantValue:    uvicornSystemCiphers,
+		},
+		{
+			name: "preserves user supplied value without duplicates",
+			mlflow: &mlflowv1.MLflow{
+				ObjectMeta: metav1.ObjectMeta{Name: "test"},
+				Spec: mlflowv1.MLflowSpec{
+					Env: []corev1.EnvVar{
+						{Name: "CUSTOM_VAR", Value: "custom-value"},
+						{Name: uvicornSSLCiphersEnv, Value: "DEFAULT"},
+					},
+				},
+			},
+			wantMinCount: 2,
+			wantValue:    "DEFAULT",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			g := gomega.NewWithT(t)
+
+			values, err := renderer.mlflowToHelmValues(tt.mlflow, "test-namespace", RenderOptions{IsOpenShift: true})
+			g.Expect(err).NotTo(HaveOccurred())
+
+			env, ok := values["env"].([]any)
+			if !ok {
+				t.Fatal("env not found in values or wrong type")
+			}
+
+			if len(env) < tt.wantMinCount {
+				t.Fatalf("env length = %v, want at least %v", len(env), tt.wantMinCount)
+			}
+
+			foundCount := 0
+			for _, e := range env {
+				envMap := e.(map[string]any)
+				if envMap["name"] == uvicornSSLCiphersEnv {
+					foundCount++
+					if envMap["value"] != tt.wantValue {
+						t.Errorf("%s = %v, want %v", uvicornSSLCiphersEnv, envMap["value"], tt.wantValue)
+					}
+				}
+			}
+
+			if foundCount != 1 {
+				t.Errorf("found %d %s env vars, want 1", foundCount, uvicornSSLCiphersEnv)
+			}
+		})
+	}
+}
+
+func TestMlflowToHelmValues_NonOpenShiftDoesNotInjectUvicornSSLCiphersEnv(t *testing.T) {
+	renderer := &HelmRenderer{}
+	g := gomega.NewWithT(t)
+
+	values, err := renderer.mlflowToHelmValues(&mlflowv1.MLflow{
+		ObjectMeta: metav1.ObjectMeta{Name: "test"},
+		Spec: mlflowv1.MLflowSpec{
+			Env: []corev1.EnvVar{
+				{Name: "CUSTOM_VAR", Value: "custom-value"},
+			},
+		},
+	}, "test-namespace", RenderOptions{IsOpenShift: false})
+	g.Expect(err).NotTo(HaveOccurred())
+
+	env, ok := values["env"].([]any)
+	if !ok {
+		t.Fatal("env not found in values or wrong type")
+	}
+
+	foundUvicornSSLCiphers := false
+	foundCustomVar := false
+	for _, e := range env {
+		envMap := e.(map[string]any)
+		switch envMap["name"] {
+		case uvicornSSLCiphersEnv:
+			foundUvicornSSLCiphers = true
+		case "CUSTOM_VAR":
+			foundCustomVar = true
+		}
+	}
+
+	if foundUvicornSSLCiphers {
+		t.Fatalf("did not expect %s to be injected on non-OpenShift renders", uvicornSSLCiphersEnv)
+	}
+	if !foundCustomVar {
+		t.Fatal("expected CUSTOM_VAR to be preserved in env")
+	}
+}
+
 func TestMlflowToHelmValues_EnvFrom(t *testing.T) {
 	renderer := &HelmRenderer{}
 

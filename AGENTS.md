@@ -141,6 +141,7 @@ When deploying on OpenShift (`openShift.enabled: true`), the deployment includes
 
 - **In-pod TLS**: Uvicorn terminates TLS using the service-ca-generated secret
 - **Service CA**: Automatically provisions TLS certificates
+- **FIPS compatibility**: On OpenShift, the operator sets `UVICORN_SSL_CIPHERS=PROFILE=SYSTEM` by default so uvicorn follows the platform crypto policy and continues to accept both TLS 1.2 and TLS 1.3; if the MLflow CR sets `UVICORN_SSL_CIPHERS` in `spec.env`, the operator preserves that value
 
 The Helm chart does not create an OpenShift Route. Create your own Route if you need external exposure on OpenShift.
 
