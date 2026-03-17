@@ -129,7 +129,16 @@ The operator will automatically:
 - Create ServiceAccount, RBAC resources (ClusterRole, ClusterRoleBinding)
 - Configure TLS certificates (OpenShift service-ca or manual)
 - Run MLflow with Kubernetes auth enabled and TLS termination in-process
-- Update the CR status with deployment readiness
+- Update the CR status with deployment readiness and access URLs
+
+You can inspect the published MLflow endpoints directly from the custom resource status:
+
+```sh
+kubectl get mlflow mlflow -o jsonpath='{.status.url}{"\n"}{.status.address.url}{"\n"}'
+```
+
+- `status.url` is the external MLflow URL exposed through the data science gateway when Gateway API support is available
+- `status.address.url` is the in-cluster HTTPS URL for the managed MLflow `Service`
 
 ### Standalone Helm Deployment
 

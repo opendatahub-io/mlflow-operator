@@ -43,6 +43,7 @@ import (
 	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	mlflowv1 "github.com/opendatahub-io/mlflow-operator/api/v1"
+	"github.com/opendatahub-io/mlflow-operator/internal/config"
 )
 
 const (
@@ -94,6 +95,8 @@ func (r *MLflowReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 
 	// Use configured target namespace
 	targetNamespace := r.Namespace
+	cfg := config.GetConfig()
+	mlflow.Status.Address = buildStatusAddress(mlflow.Name, targetNamespace)
 
 	// Handle deletion - all resources are cleaned up via owner references
 	if mlflow.GetDeletionTimestamp() != nil {
@@ -253,6 +256,7 @@ func (r *MLflowReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 
 	// Reconcile HttpRoute
 	if err := r.reconcileHttpRoute(ctx, mlflow, targetNamespace); err != nil {
+		setObservedURLs(mlflow, targetNamespace, false, cfg)
 		log.Error(err, "Failed to reconcile HttpRoute")
 		meta.SetStatusCondition(&mlflow.Status.Conditions, metav1.Condition{
 			Type:    "Available",
@@ -265,6 +269,8 @@ func (r *MLflowReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		}
 		return ctrl.Result{}, err
 	}
+
+	setObservedURLs(mlflow, targetNamespace, r.HTTPRouteAvailable, cfg)
 
 	// Get deployment name using the resource suffix
 	deploymentName := ResourceName + getResourceSuffix(mlflow.Name)

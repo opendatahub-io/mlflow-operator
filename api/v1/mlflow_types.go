@@ -231,6 +231,14 @@ type ImageConfig struct {
 	ImagePullPolicy *corev1.PullPolicy `json:"imagePullPolicy,omitempty"`
 }
 
+// MLflowAddressStatus holds an addressable endpoint for the managed MLflow deployment.
+type MLflowAddressStatus struct {
+	// url is the in-cluster HTTPS URL for the managed MLflow Service.
+	// +optional
+	// +kubebuilder:validation:MaxLength=2048
+	URL string `json:"url,omitempty"`
+}
+
 // MLflowStatus defines the observed state of MLflow.
 type MLflowStatus struct {
 	// conditions represent the current state of the MLflow resource.
@@ -246,6 +254,15 @@ type MLflowStatus struct {
 	// +listMapKey=type
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
+
+	// url is the externally reachable MLflow URL exposed through the data science gateway.
+	// +optional
+	// +kubebuilder:validation:MaxLength=2048
+	URL string `json:"url,omitempty"`
+
+	// address holds the internal addressable endpoint for the managed MLflow Service.
+	// +optional
+	Address *MLflowAddressStatus `json:"address,omitempty"`
 }
 
 // MLflowConfigSpec defines the desired configuration for MLflow workspaces within a namespace.

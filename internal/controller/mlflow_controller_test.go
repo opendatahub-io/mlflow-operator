@@ -111,6 +111,11 @@ var _ = Describe("MLflow Controller", func() {
 				NamespacedName: typeNamespacedName,
 			})
 			Expect(reconcileErr).NotTo(HaveOccurred())
+
+			Expect(k8sClient.Get(ctx, typeNamespacedName, mlflow)).To(Succeed())
+			Expect(mlflow.Status.URL).To(BeEmpty())
+			Expect(mlflow.Status.Address).NotTo(BeNil())
+			Expect(mlflow.Status.Address.URL).To(Equal("https://mlflow.opendatahub.svc:8443"))
 		})
 
 		It("should create an HTTPRoute with API rewrite when available", func() {

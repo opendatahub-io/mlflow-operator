@@ -17,10 +17,13 @@ limitations under the License.
 package config
 
 import (
+	"os"
 	"sync"
 
 	"github.com/spf13/viper"
 )
+
+const DefaultMLflowURL = "https://mlflow.example.com"
 
 // OperatorConfig holds the configuration for the MLflow operator
 type OperatorConfig struct {
@@ -30,6 +33,8 @@ type OperatorConfig struct {
 	GatewayName string
 	// MLflowURL is the external URL for accessing MLflow
 	MLflowURL string
+	// MLflowURLConfigured reports whether MLFLOW_URL was explicitly configured.
+	MLflowURLConfigured bool
 	// SectionTitle is the title for the ConsoleLink section in OpenShift console
 	SectionTitle string
 }
@@ -45,18 +50,20 @@ func GetConfig() *OperatorConfig {
 	once.Do(func() {
 		v := viper.New()
 		v.AutomaticEnv()
+		_, mlflowURLConfigured := os.LookupEnv("MLFLOW_URL")
 
 		// Set defaults (these can be overridden by env vars)
 		v.SetDefault("MLFLOW_IMAGE", "quay.io/opendatahub/mlflow:odh-stable")
 		v.SetDefault("GATEWAY_NAME", "data-science-gateway")
-		v.SetDefault("MLFLOW_URL", "https://mlflow.example.com")
+		v.SetDefault("MLFLOW_URL", DefaultMLflowURL)
 		v.SetDefault("SECTION_TITLE", "MLflow")
 
 		instance = &OperatorConfig{
-			MLflowImage:  v.GetString("MLFLOW_IMAGE"),
-			GatewayName:  v.GetString("GATEWAY_NAME"),
-			MLflowURL:    v.GetString("MLFLOW_URL"),
-			SectionTitle: v.GetString("SECTION_TITLE"),
+			MLflowImage:         v.GetString("MLFLOW_IMAGE"),
+			GatewayName:         v.GetString("GATEWAY_NAME"),
+			MLflowURL:           v.GetString("MLFLOW_URL"),
+			MLflowURLConfigured: mlflowURLConfigured,
+			SectionTitle:        v.GetString("SECTION_TITLE"),
 		}
 	})
 	return instance

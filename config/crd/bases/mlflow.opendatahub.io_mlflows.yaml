@@ -2311,6 +2311,16 @@ spec:
           status:
             description: status defines the observed state of MLflow
             properties:
+              address:
+                description: address holds the internal addressable endpoint for the
+                  managed MLflow Service.
+                properties:
+                  url:
+                    description: url is the in-cluster HTTPS URL for the managed MLflow
+                      Service.
+                    maxLength: 2048
+                    type: string
+                type: object
               conditions:
                 description: |-
                   conditions represent the current state of the MLflow resource.
@@ -2380,6 +2390,11 @@ spec:
                 x-kubernetes-list-map-keys:
                 - type
                 x-kubernetes-list-type: map
+              url:
+                description: url is the externally reachable MLflow URL exposed through
+                  the data science gateway.
+                maxLength: 2048
+                type: string
             type: object
         required:
         - spec
