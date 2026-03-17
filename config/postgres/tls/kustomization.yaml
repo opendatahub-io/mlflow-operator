@@ -4,8 +4,5 @@ kind: Kustomization
 resources:
   - ../base
 
-patches:
-  - path: tls-patch.yaml
-    target:
-      kind: Deployment
-      name: postgres-deployment
+components:
+  - ../components/tls
