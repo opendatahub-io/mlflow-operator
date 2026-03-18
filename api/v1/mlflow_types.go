@@ -25,8 +25,10 @@ import (
 // MLflowSpec defines the desired state of MLflow
 // +kubebuilder:validation:XValidation:rule="has(self.defaultArtifactRoot) || (has(self.serveArtifacts) && self.serveArtifacts)",message="defaultArtifactRoot must be set when serveArtifacts is not true"
 // +kubebuilder:validation:XValidation:rule="!has(self.defaultArtifactRoot) || !self.defaultArtifactRoot.startsWith('file://') || (has(self.serveArtifacts) && self.serveArtifacts)",message="serveArtifacts must be enabled when defaultArtifactRoot uses file-based storage (file:// prefix)"
+// +kubebuilder:validation:XValidation:rule="(has(self.backendStoreUri) && size(self.backendStoreUri) > 0) || (has(self.backendStoreUriFrom) && size(self.backendStoreUriFrom.name) > 0 && size(self.backendStoreUriFrom.key) > 0)",message="backendStoreUri or backendStoreUriFrom must be set"
 // +kubebuilder:validation:XValidation:rule="!(has(self.backendStoreUri) && has(self.backendStoreUriFrom))",message="backendStoreUri and backendStoreUriFrom are mutually exclusive"
 // +kubebuilder:validation:XValidation:rule="!(has(self.registryStoreUri) && has(self.registryStoreUriFrom))",message="registryStoreUri and registryStoreUriFrom are mutually exclusive"
+// +kubebuilder:validation:XValidation:rule="!has(self.registryStoreUriFrom) || (size(self.registryStoreUriFrom.name) > 0 && size(self.registryStoreUriFrom.key) > 0)",message="registryStoreUriFrom.name and registryStoreUriFrom.key must be non-empty when registryStoreUriFrom is set"
 // +kubebuilder:validation:XValidation:rule="!has(self.backendStoreUri) || (!self.backendStoreUri.startsWith('sqlite://') && !self.backendStoreUri.startsWith('file://')) || has(self.storage)",message="storage must be configured when using file-based backend store (sqlite:// or file:// prefix)"
 // +kubebuilder:validation:XValidation:rule="!has(self.registryStoreUri) || (!self.registryStoreUri.startsWith('sqlite://') && !self.registryStoreUri.startsWith('file://')) || has(self.storage)",message="storage must be configured when using file-based registry store (sqlite:// or file:// prefix)"
 // +kubebuilder:validation:XValidation:rule="!has(self.artifactsDestination) || !self.artifactsDestination.startsWith('file://') || has(self.storage)",message="storage must be configured when artifactsDestination uses file-based storage (file:// prefix)"
@@ -76,13 +78,13 @@ type MLflowSpec struct {
 	// Examples:
 	//   - "sqlite:////mlflow/mlflow.db" (requires Storage to be configured)
 	// Note: For URIs containing credentials, prefer using BackendStoreURIFrom for security.
-	// If not specified, defaults to "sqlite:////mlflow/mlflow.db"
+	// This must be set explicitly unless BackendStoreURIFrom is provided.
 	// +optional
 	BackendStoreURI *string `json:"backendStoreUri,omitempty"`
 
 	// BackendStoreURIFrom is a reference to a secret containing the backend store URI.
 	// Use this instead of BackendStoreURI when the URI contains credentials.
-	// Takes precedence over BackendStoreURI if both are specified.
+	// Mutually exclusive with BackendStoreURI - the API rejects specs that set both.
 	// +optional
 	BackendStoreURIFrom *corev1.SecretKeySelector `json:"backendStoreUriFrom,omitempty"`
 
@@ -97,7 +99,7 @@ type MLflowSpec struct {
 
 	// RegistryStoreURIFrom is a reference to a secret containing the registry store URI.
 	// Use this instead of RegistryStoreURI when the URI contains credentials.
-	// Takes precedence over RegistryStoreURI if both are specified.
+	// Mutually exclusive with RegistryStoreURI - the API rejects specs that set both.
 	// +optional
 	RegistryStoreURIFrom *corev1.SecretKeySelector `json:"registryStoreUriFrom,omitempty"`
 
@@ -171,7 +173,13 @@ type MLflowSpec struct {
 	// Use this for pod-specific labels like version, component-specific metadata, etc.
 	// For labels that should be applied to all resources (Service, Deployment, etc.), use commonLabels in values.yaml.
 	// +optional
+	// +kubebuilder:validation:XValidation:rule="self.all(key, size(self[key]) <= 63)",message="label values must be 63 characters or less"
 	PodLabels map[string]string `json:"podLabels,omitempty"`
+
+	// PodAnnotations are annotations to add only to the MLflow pod, not to other resources.
+	// Use this for pod-specific annotations like Prometheus scraping or sidecar configuration.
+	// +optional
+	PodAnnotations map[string]string `json:"podAnnotations,omitempty"`
 
 	// PodSecurityContext specifies the security context for the MLflow pod
 	// +optional
@@ -183,6 +191,7 @@ type MLflowSpec struct {
 
 	// NodeSelector is a selector which must be true for the pod to fit on a node
 	// +optional
+	// +kubebuilder:validation:XValidation:rule="self.all(key, size(self[key]) <= 63)",message="label values must be 63 characters or less"
 	NodeSelector map[string]string `json:"nodeSelector,omitempty"`
 
 	// Tolerations are the pod's tolerations
@@ -263,66 +272,6 @@ type MLflowStatus struct {
 	// address holds the internal addressable endpoint for the managed MLflow Service.
 	// +optional
 	Address *MLflowAddressStatus `json:"address,omitempty"`
-}
-
-// MLflowConfigSpec defines the desired configuration for MLflow workspaces within a namespace.
-type MLflowConfigSpec struct {
-	// ArtifactRootPath is an optional relative path from the bucket root specified in
-	// the ArtifactRootSecret. When provided, this path is appended to the bucket URI
-	// from the secret to form the resolved artifact root.
-	//
-	// Example:
-	//   artifactRootSecret: "ds-team-s3-connection-secret"  # Contains bucket: ds-team-bucket
-	//   artifactRootPath: "experiments"
-	//   resolved artifact root: s3://ds-team-bucket/experiments
-	//
-	// +optional
-	ArtifactRootPath *string `json:"artifactRootPath,omitempty"`
-
-	// ArtifactRootSecret is the name of a Secret in this namespace that contains
-	// credentials and bucket information for accessing the artifact storage.
-	//
-	// The Secret must have the required keys for s3 compatible storage:
-	// Example Secret:
-	//   apiVersion: v1
-	//   kind: Secret
-	//   metadata:
-	//     name: ds-team-s3-connection-secret
-	//     namespace: ds-team-namespace
-	//   data:
-	//     AWS_ACCESS_KEY_ID: <base64-encoded>
-	//     AWS_SECRET_ACCESS_KEY: <base64-encoded>
-	//     AWS_S3_BUCKET: <base64-encoded>
-	//     AWS_S3_ENDPOINT: <base64-encoded>
-	//     AWS_DEFAULT_REGION: <base64-encoded>  # Optional (default region is not always required, e.g. minio)
-	//
-	// +kubebuilder:validation:MinLength=1
-	ArtifactRootSecret string `json:"artifactRootSecret"`
-}
-
-// +kubebuilder:object:root=true
-// +kubebuilder:resource:scope=Namespaced
-// +kubebuilder:validation:XValidation:rule="self.metadata.name == 'mlflow'",message="MLflowConfig resource name must be 'mlflow'"
-
-// MLflowConfig is a namespace-scoped configuration resource that allows
-// Kubernetes namespace owners to override the default artifact storage
-// for their namespace.
-type MLflowConfig struct {
-	metav1.TypeMeta   `json:",inline"`
-	metav1.ObjectMeta `json:"metadata,omitempty"`
-
-	// spec defines the desired MLflow configuration for this namespace.
-	// +required
-	Spec MLflowConfigSpec `json:"spec"`
-}
-
-// +kubebuilder:object:root=true
-
-// MLflowConfigList contains a list of MLflowConfig resources.
-type MLflowConfigList struct {
-	metav1.TypeMeta `json:",inline"`
-	metav1.ListMeta `json:"metadata,omitempty"`
-	Items           []MLflowConfig `json:"items"`
 }
 
 // +kubebuilder:object:root=true

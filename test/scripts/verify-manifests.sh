@@ -4,7 +4,7 @@
 #   - kustomize must be installed (run 'make kustomize' first)
 #   - helm must be installed
 
-set -e
+set -euo pipefail
 
 # Colors for output
 RED='\033[0;31m'
@@ -53,31 +53,60 @@ for chart_dir in charts/*/; do
         chart_name=$(basename "$chart_dir")
         echo "Checking chart: $chart_name"
 
-        # Lint the chart
-        echo "  Linting..."
-        if helm lint "$chart_dir" > /dev/null 2>&1; then
+        DIRECT_URI_SETS="mlflow.backendStoreUri=sqlite:////mlflow/mlflow.db,mlflow.registryStoreUri=postgresql://registry-db/mlflow"
+        SECRETREF_SETS="mlflow.backendStoreUriFrom.secretKeyRef.name=db-creds,mlflow.backendStoreUriFrom.secretKeyRef.key=backend-uri,mlflow.registryStoreUriFrom.secretKeyRef.name=db-creds,mlflow.registryStoreUriFrom.secretKeyRef.key=registry-uri"
+        chart_failed=0
+
+        # Lint the chart (direct URI path)
+        echo "  Linting (direct backend/registry URIs)..."
+        if helm lint "$chart_dir" --set "$DIRECT_URI_SETS" > /dev/null 2>&1; then
             echo -e "  ${GREEN}✓ Lint passed${NC}"
         else
             echo -e "  ${RED}✗ Lint failed${NC}"
-            helm lint "$chart_dir"
-            HELM_EXIT_CODE=1
+            helm lint "$chart_dir" --set "$DIRECT_URI_SETS" || true
+            chart_failed=1
         fi
 
-        # Template render the chart
-        echo "  Rendering template..."
-        if helm template test "$chart_dir" > /dev/null 2>&1; then
+        # Lint the chart (secretKeyRef path)
+        echo "  Linting (backend/registry secret refs)..."
+        if helm lint "$chart_dir" --set "$SECRETREF_SETS" > /dev/null 2>&1; then
+            echo -e "  ${GREEN}✓ Lint passed${NC}"
+        else
+            echo -e "  ${RED}✗ Lint failed${NC}"
+            helm lint "$chart_dir" --set "$SECRETREF_SETS" || true
+            chart_failed=1
+        fi
+
+        # Template render the chart (direct URI path)
+        echo "  Rendering template (direct backend/registry URIs)..."
+        if helm template test "$chart_dir" --set "$DIRECT_URI_SETS" > /dev/null 2>&1; then
             echo -e "  ${GREEN}✓ Template renders successfully${NC}"
-            VALIDATED_CHARTS+=("$chart_name")
         else
             echo -e "  ${RED}✗ Template failed to render${NC}"
-            helm template test "$chart_dir"
+            helm template test "$chart_dir" --set "$DIRECT_URI_SETS" || true
+            chart_failed=1
+        fi
+
+        # Template render the chart (secretKeyRef path)
+        echo "  Rendering template (backend/registry secret refs)..."
+        if helm template test "$chart_dir" --set "$SECRETREF_SETS" > /dev/null 2>&1; then
+            echo -e "  ${GREEN}✓ Template renders successfully${NC}"
+        else
+            echo -e "  ${RED}✗ Template failed to render${NC}"
+            helm template test "$chart_dir" --set "$SECRETREF_SETS" || true
+            chart_failed=1
+        fi
+
+        if [ "$chart_failed" -ne 0 ]; then
             HELM_EXIT_CODE=1
+        else
+            VALIDATED_CHARTS+=("$chart_name")
         fi
         echo ""
     fi
 done
 
-if [ $HELM_EXIT_CODE -ne 0 ]; then
+if [ "$HELM_EXIT_CODE" -ne 0 ]; then
     echo -e "${RED}ERROR: One or more Helm charts failed validation${NC}"
     OVERALL_EXIT_CODE=1
 else
@@ -96,7 +125,7 @@ if bin/kustomize build config/base > /dev/null 2>&1; then
     echo -e "${GREEN}✓ config/base builds successfully${NC}"
 else
     echo -e "${RED}✗ config/base failed to build${NC}"
-    bin/kustomize build config/base
+    bin/kustomize build config/base || true
     OVERALL_EXIT_CODE=1
 fi
 echo ""
@@ -125,12 +154,12 @@ for overlay in config/overlays/*/; do
         VALIDATED_OVERLAYS+=("$overlay_name")
     else
         echo -e "${RED}✗ $overlay_name failed to build${NC}"
-        bin/kustomize build "$overlay"
+        bin/kustomize build "$overlay" || true
         OVERLAY_EXIT_CODE=1
     fi
 done
 
-if [ $OVERLAY_EXIT_CODE -ne 0 ]; then
+if [ "$OVERLAY_EXIT_CODE" -ne 0 ]; then
     echo ""
     echo -e "${RED}ERROR: One or more kustomize overlays failed to build${NC}"
     echo "Please fix the kustomization.yaml files and try again."
@@ -149,12 +178,12 @@ echo "Build Verification Summary"
 echo "========================================"
 echo ""
 
-if [ ${#VALIDATED_CHARTS[@]} -gt 0 ]; then
+if [ "${#VALIDATED_CHARTS[@]}" -gt 0 ]; then
     echo -e "${BLUE}Helm Charts:${NC}"
     for chart_dir in charts/*/; do
         if [ -f "${chart_dir}Chart.yaml" ]; then
             chart_name=$(basename "$chart_dir")
-            version=$(grep '^version:' "${chart_dir}Chart.yaml" | awk '{print $2}')
+            version=$(awk '/^version:/ {print $2; exit}' "${chart_dir}Chart.yaml")
             if printf '%s\n' "${VALIDATED_CHARTS[@]}" | grep -qx -- "$chart_name"; then
                 echo -e "  ${GREEN}✓${NC} $chart_name (v$version)"
             else
@@ -165,7 +194,7 @@ if [ ${#VALIDATED_CHARTS[@]} -gt 0 ]; then
     echo ""
 fi
 
-if [ ${#VALIDATED_OVERLAYS[@]} -gt 0 ]; then
+if [ "${#VALIDATED_OVERLAYS[@]}" -gt 0 ]; then
     echo -e "${BLUE}Kustomize Overlays:${NC}"
     for overlay in config/overlays/*/; do
         overlay_name=$(basename "$overlay")
@@ -178,7 +207,7 @@ if [ ${#VALIDATED_OVERLAYS[@]} -gt 0 ]; then
     echo ""
 fi
 
-if [ $OVERALL_EXIT_CODE -eq 0 ]; then
+if [ "$OVERALL_EXIT_CODE" -eq 0 ]; then
     echo "========================================"
     echo -e "${GREEN}✅ All manifests validated successfully!${NC}"
     echo "========================================"

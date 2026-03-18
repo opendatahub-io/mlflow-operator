@@ -980,13 +980,13 @@ spec:
                   Examples:
                     - "sqlite:////mlflow/mlflow.db" (requires Storage to be configured)
                   Note: For URIs containing credentials, prefer using BackendStoreURIFrom for security.
-                  If not specified, defaults to "sqlite:////mlflow/mlflow.db"
+                  This must be set explicitly unless BackendStoreURIFrom is provided.
                 type: string
               backendStoreUriFrom:
                 description: |-
                   BackendStoreURIFrom is a reference to a secret containing the backend store URI.
                   Use this instead of BackendStoreURI when the URI contains credentials.
-                  Takes precedence over BackendStoreURI if both are specified.
+                  Mutually exclusive with BackendStoreURI - the API rejects specs that set both.
                 properties:
                   key:
                     description: The key of the secret to select from.  Must be a
@@ -1467,6 +1467,16 @@ spec:
                 description: NodeSelector is a selector which must be true for the
                   pod to fit on a node
                 type: object
+                x-kubernetes-validations:
+                - message: label values must be 63 characters or less
+                  rule: self.all(key, size(self[key]) <= 63)
+              podAnnotations:
+                additionalProperties:
+                  type: string
+                description: |-
+                  PodAnnotations are annotations to add only to the MLflow pod, not to other resources.
+                  Use this for pod-specific annotations like Prometheus scraping or sidecar configuration.
+                type: object
               podLabels:
                 additionalProperties:
                   type: string
@@ -1475,6 +1485,9 @@ spec:
                   Use this for pod-specific labels like version, component-specific metadata, etc.
                   For labels that should be applied to all resources (Service, Deployment, etc.), use commonLabels in values.yaml.
                 type: object
+                x-kubernetes-validations:
+                - message: label values must be 63 characters or less
+                  rule: self.all(key, size(self[key]) <= 63)
               podSecurityContext:
                 description: PodSecurityContext specifies the security context for
                   the MLflow pod
@@ -1721,7 +1734,7 @@ spec:
                 description: |-
                   RegistryStoreURIFrom is a reference to a secret containing the registry store URI.
                   Use this instead of RegistryStoreURI when the URI contains credentials.
-                  Takes precedence over RegistryStoreURI if both are specified.
+                  Mutually exclusive with RegistryStoreURI - the API rejects specs that set both.
                 properties:
                   key:
                     description: The key of the secret to select from.  Must be a
@@ -2280,10 +2293,18 @@ spec:
                 file-based storage (file:// prefix)
               rule: '!has(self.defaultArtifactRoot) || !self.defaultArtifactRoot.startsWith(''file://'')
                 || (has(self.serveArtifacts) && self.serveArtifacts)'
+            - message: backendStoreUri or backendStoreUriFrom must be set
+              rule: (has(self.backendStoreUri) && size(self.backendStoreUri) > 0)
+                || (has(self.backendStoreUriFrom) && size(self.backendStoreUriFrom.name)
+                > 0 && size(self.backendStoreUriFrom.key) > 0)
             - message: backendStoreUri and backendStoreUriFrom are mutually exclusive
               rule: '!(has(self.backendStoreUri) && has(self.backendStoreUriFrom))'
             - message: registryStoreUri and registryStoreUriFrom are mutually exclusive
               rule: '!(has(self.registryStoreUri) && has(self.registryStoreUriFrom))'
+            - message: registryStoreUriFrom.name and registryStoreUriFrom.key must
+                be non-empty when registryStoreUriFrom is set
+              rule: '!has(self.registryStoreUriFrom) || (size(self.registryStoreUriFrom.name)
+                > 0 && size(self.registryStoreUriFrom.key) > 0)'
             - message: storage must be configured when using file-based backend store
                 (sqlite:// or file:// prefix)
               rule: '!has(self.backendStoreUri) || (!self.backendStoreUri.startsWith(''sqlite://'')

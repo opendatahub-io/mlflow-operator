@@ -169,6 +169,14 @@ func (h *HelmRenderer) mlflowToHelmValues(mlflow *mlflowv1.MLflow, namespace str
 		values["podLabels"] = podLabels
 	}
 
+	if len(mlflow.Spec.PodAnnotations) > 0 {
+		podAnnotations := make(map[string]interface{})
+		for k, v := range mlflow.Spec.PodAnnotations {
+			podAnnotations[k] = v
+		}
+		values["podAnnotations"] = podAnnotations
+	}
+
 	cfg := config.GetConfig()
 	tlsSecretName := TLSSecretName
 
@@ -290,7 +298,7 @@ func (h *HelmRenderer) mlflowToHelmValues(mlflow *mlflowv1.MLflow, namespace str
 		"accessMode":       accessMode,
 	}
 
-	backendStoreURI := defaultBackendStoreURI
+	backendStoreURI := ""
 	artifactsDest := defaultArtifactsDest
 
 	// BackendStoreURI: prefer secret ref over direct value
@@ -307,12 +315,17 @@ func (h *HelmRenderer) mlflowToHelmValues(mlflow *mlflowv1.MLflow, namespace str
 		}
 	} else if mlflow.Spec.BackendStoreURI != nil {
 		backendStoreURI = *mlflow.Spec.BackendStoreURI
+	} else {
+		// Preserve the legacy implicit SQLite default for already-stored CRs that
+		// predate the explicit backendStoreUri validation. New creates and updates
+		// are still required to set backendStoreUri or backendStoreUriFrom by admission.
+		backendStoreURI = defaultBackendStoreURI
 	}
 
 	// RegistryStoreURI: defaults to backendStoreUri when omitted (per API contract)
 	// Prefer secret ref over direct value
 	var registryStoreURIFrom map[string]interface{}
-	registryStoreURI := backendStoreURI // Default to backend URI
+	registryStoreURI := backendStoreURI // Default to backend URI when provided
 	if mlflow.Spec.RegistryStoreURIFrom != nil {
 		registryStoreURIFrom = map[string]interface{}{
 			"secretKeyRef": map[string]interface{}{
@@ -562,7 +575,7 @@ func (h *HelmRenderer) renderTemplates(c *chart.Chart, values map[string]interfa
 		}
 
 		// Parse YAML documents (may contain multiple documents separated by ---)
-		decoder := yaml.NewYAMLOrJSONDecoder(bytes.NewBufferString(content), 4096)
+		decoder := yaml.NewYAMLToJSONDecoder(bytes.NewBufferString(content))
 		for {
 			obj := &unstructured.Unstructured{}
 			err := decoder.Decode(obj)

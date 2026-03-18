@@ -179,6 +179,8 @@ See the manifest files for detailed per-resource documentation.
 
 ### Storage Configuration
 
+`backendStoreUri` (or `backendStoreUriFrom`) is required on new creates and updates. To avoid breaking already-stored CRs created before this validation was introduced, the operator still falls back to the legacy implicit SQLite backend during reconciliation when both fields are unset.
+
 #### Local Storage (Development/Testing)
 ```yaml
 spec:

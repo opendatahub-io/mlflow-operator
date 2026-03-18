@@ -21,6 +21,10 @@ commonLabels:
 # For labels that should be on all resources, use commonLabels
 podLabels: {}
 
+# Pod-specific annotations applied only to the MLflow pod
+# Use this for pod-specific metadata like Prometheus scraping, sidecars, etc.
+podAnnotations: {}
+
 # TLS configuration for the MLflow server (handled directly by uvicorn)
 tls:
   # Secret containing TLS certificate and key (tls.crt, tls.key)
@@ -63,13 +67,16 @@ storage:
 # MLflow server configuration
 mlflow:
   # Backend store URI (where MLflow stores experiment and run metadata)
-  # Default uses SQLite which requires storage.enabled: true
-  # For production, use remote DB: postgresql://user:pass@host:5432/mlflow
-  # Note: For URIs containing credentials, use backendStoreUriFrom instead
-  backendStoreUri: "sqlite:////mlflow/mlflow.db"
+  # REQUIRED: Either backendStoreUri or backendStoreUriFrom must be set.
+  # Example (requires storage.enabled: true): sqlite:////mlflow/mlflow.db
+  # Note: The /mlflow path is where the PVC is mounted in the container.
+  # For production, use a remote DB: postgresql://db-host:5432/mlflow
+  # Important: For URIs containing credentials, use backendStoreUriFrom to
+  # supply the URI via a Kubernetes Secret instead of writing credentials inline.
+  backendStoreUri: ""
 
   # Backend store URI from secret (preferred for URIs with credentials)
-  # Takes precedence over backendStoreUri if both are set
+  # When used via the operator, this is mutually exclusive with backendStoreUri.
   # Example:
   #   backendStoreUriFrom:
   #     secretKeyRef:
@@ -84,7 +91,7 @@ mlflow:
   # registryStoreUri: "sqlite:////mlflow/mlflow.db"
 
   # Registry store URI from secret (preferred for URIs with credentials)
-  # Takes precedence over registryStoreUri if both are set
+  # When used via the operator, this is mutually exclusive with registryStoreUri.
   # Example:
   #   registryStoreUriFrom:
   #     secretKeyRef:
