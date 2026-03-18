@@ -40,10 +40,11 @@ class MLflowDeployer:
         if not self.args.postgres_host:
             self.args.postgres_host = f"postgres-service.{self.args.namespace}.svc.cluster.local"
 
-        # Apply sslmode default: 'require' when TLS is enabled, 'disable' otherwise.
+        # Apply sslmode default: 'verify-full' when TLS is enabled (validates the
+        # server cert against the CA bundle), 'disable' otherwise.
         # None means the caller didn't pass --postgres-sslmode explicitly.
         if self.args.postgres_sslmode is None:
-            self.args.postgres_sslmode = "require" if self.args.postgres_tls else "disable"
+            self.args.postgres_sslmode = "verify-full" if self.args.postgres_tls else "disable"
             print(f"  PostgreSQL sslmode defaulted to '{self.args.postgres_sslmode}'")
 
         print(f"Repository root: {self.repo_root}")
@@ -160,13 +161,11 @@ class MLflowDeployer:
         kind_overlay = self.repo_root / "config" / "overlays" / "kind"
         generate_tls_script = kind_overlay / "generate-tls.sh"
 
-        # Ensure the script is executable
-        self.run_command(f"chmod +x {generate_tls_script}", "Making TLS generation script executable")
-
-        # Generate certificate and key files using the updated script
-        self.run_command(
-            f"{generate_tls_script} generate",
-            "Generating TLS certificate and private key"
+        # Generate certificate and key files
+        env = {**os.environ, "NAMESPACE": self.args.namespace}
+        subprocess.run(
+            [str(generate_tls_script), "generate"],
+            check=True, env=env,
         )
 
         # Verify the files were created
@@ -185,27 +184,17 @@ class MLflowDeployer:
         """Clean up TLS resources created for this deployment."""
         print("🧹 Cleaning up TLS resources...")
 
-        # deploy_mlflow_operator() always calls generate_tls_certificates() which
-        # writes tls.crt and tls.key into config/overlays/kind/.  Remove them so
-        # they don't appear as untracked working-tree files.
-        kind_overlay = self.repo_root / "config" / "overlays" / "kind"
-        for fname in ("tls.crt", "tls.key"):
-            fpath = kind_overlay / fname
-            if fpath.exists():
-                fpath.unlink()
-                print(f"🗑️  Removed {fpath}")
-
         if self.args.seaweedfs_tls:
             self.run_command([
                 "kubectl", "delete", "secret", "seaweedfs-tls-certs",
-                "-n", self.args.namespace,
-            ], check=False, capture_output=True)
+                "--ignore-not-found", "-n", self.args.namespace,
+            ], capture_output=True)
 
         if self.args.postgres_tls:
             self.run_command([
                 "kubectl", "delete", "secret", "postgres-tls-certs",
-                "-n", self.args.namespace,
-            ], check=False, capture_output=True)
+                "--ignore-not-found", "-n", self.args.namespace,
+            ], capture_output=True)
 
         # Restore DSCI (ODH path) or delete the ConfigMap we created (vanilla K8s path).
         self._restore_dsci_ca_bundle()
@@ -213,8 +202,8 @@ class MLflowDeployer:
             # No DSCI — attempt to delete the direct ConfigMap (harmless if absent).
             self.run_command([
                 "kubectl", "delete", "configmap", "mlflow-ca-bundle",
-                "-n", self.args.namespace,
-            ], check=False, capture_output=True)
+                "--ignore-not-found", "-n", self.args.namespace,
+            ], capture_output=True)
 
     def deploy_mlflow_operator(self):
         """Deploy MLflow operator using kustomize"""
@@ -268,8 +257,9 @@ class MLflowDeployer:
 
         # Delete existing secret if it exists
         self.run_command([
-            "kubectl", "delete", "secret", "mlflow-db-credentials", "-n", self.args.namespace
-        ], check=False, capture_output=True)
+            "kubectl", "delete", "secret", "mlflow-db-credentials",
+            "--ignore-not-found", "-n", self.args.namespace
+        ], capture_output=True)
 
         self.run_command([
             "kubectl", "create", "secret", "generic", "mlflow-db-credentials",
@@ -284,8 +274,9 @@ class MLflowDeployer:
 
         # Delete existing secret if it exists
         self.run_command([
-            "kubectl", "delete", "secret", "aws-credentials", "-n", self.args.namespace
-        ], check=False, capture_output=True)
+            "kubectl", "delete", "secret", "aws-credentials",
+            "--ignore-not-found", "-n", self.args.namespace
+        ], capture_output=True)
 
         cmd = [
             "kubectl", "create", "secret", "generic", "aws-credentials",
@@ -328,8 +319,8 @@ class MLflowDeployer:
 
             self.run_command([
                 "kubectl", "delete", "secret", secret_name,
-                "-n", self.args.namespace,
-            ], check=False, capture_output=True)
+                "--ignore-not-found", "-n", self.args.namespace,
+            ], capture_output=True)
 
             self.run_command([
                 "kubectl", "create", "secret", "generic", secret_name,
@@ -385,8 +376,8 @@ class MLflowDeployer:
             # restore it even when called from a separate process invocation.
             self.run_command([
                 "kubectl", "delete", "secret", "mlflow-tls-cleanup-state",
-                "-n", self.args.namespace,
-            ], check=False, capture_output=True)
+                "--ignore-not-found", "-n", self.args.namespace,
+            ], capture_output=True)
             self.run_command([
                 "kubectl", "create", "secret", "generic", "mlflow-tls-cleanup-state",
                 f"--from-literal=dsci-name={dsci_name}",
@@ -442,8 +433,8 @@ class MLflowDeployer:
         cm_name = "mlflow-ca-bundle"
         self.run_command([
             "kubectl", "delete", "configmap", cm_name,
-            "-n", self.args.namespace,
-        ], check=False, capture_output=True)
+            "--ignore-not-found", "-n", self.args.namespace,
+        ], capture_output=True)
         self.run_command([
             "kubectl", "create", "configmap", cm_name,
             f"--from-literal=ca-bundle.crt={combined_pem}",
@@ -494,8 +485,8 @@ class MLflowDeployer:
         if result and result.returncode == 0:
             self.run_command([
                 "kubectl", "delete", "secret", "mlflow-tls-cleanup-state",
-                "-n", self.args.namespace,
-            ], check=False, capture_output=True)
+                "--ignore-not-found", "-n", self.args.namespace,
+            ], capture_output=True)
         else:
             print("⚠️  DSCI patch failed — keeping mlflow-tls-cleanup-state for retry")
 
@@ -533,35 +524,27 @@ class MLflowDeployer:
         # pvc-protection finalizer, then start fresh with a clean filer database.
         self.run_command([
             "kubectl", "delete", "deployment", "seaweedfs",
-            "-n", self.args.namespace,
+            "--ignore-not-found", "-n", self.args.namespace,
+        ], capture_output=True)
+        self.run_command([
+            "kubectl", "wait", "--for=delete", "pod", "-l", "app=seaweedfs",
+            "--timeout=60s", "-n", self.args.namespace,
         ], check=False, capture_output=True)
-        self.run_command(
-            f"kubectl wait --for=delete pod -l app=seaweedfs "
-            f"--timeout=60s -n {self.args.namespace}",
-            check=False, capture_output=True,
-        )
         self.run_command([
             "kubectl", "delete", "pvc", "seaweedfs-pvc",
-            "-n", self.args.namespace,
-        ], check=False, capture_output=True)
+            "--ignore-not-found", "-n", self.args.namespace,
+        ], capture_output=True)
 
         # Delete existing job if it exists (jobs are immutable)
         print("🧹 Cleaning up existing SeaweedFS job...")
-        self.run_command(
-            f"kubectl delete job init-seaweedfs -n {self.args.namespace}",
-            check=False, capture_output=True
-        )
+        self.run_command([
+            "kubectl", "delete", "job", "init-seaweedfs",
+            "--ignore-not-found", "-n", self.args.namespace,
+        ], capture_output=True)
 
-        # Export all environment variables needed for SeaweedFS
-        cmd = (f"export NAMESPACE={self.args.namespace} "
-               f"APPLICATION_CRD_ID=mlflow-pipelines "
-               f"PROFILE_NAMESPACE_LABEL=mlflow-profile "
-               f"S3_BUCKET={self.args.s3_bucket} && "
-               f"kustomize build {seaweedfs_path} | envsubst '$NAMESPACE,$APPLICATION_CRD_ID,$PROFILE_NAMESPACE_LABEL,$S3_BUCKET' | kubectl apply -f -")
-        self.run_command(cmd, "Deploying SeaweedFS")
-
-        # Overwrite the seaweedfs-s3config Secret with the actual credentials.
-        print("📋 Overwriting seaweedfs-s3config Secret with actual credentials")
+        # Create the s3config Secret with actual credentials before the
+        # Deployment so the volume is ready when SeaweedFS starts.
+        print("📋 Creating seaweedfs-s3config Secret with runtime credentials")
         s3_config = json.dumps({
             "identities": [{
                 "name": self.args.s3_access_key,
@@ -572,8 +555,6 @@ class MLflowDeployer:
                 "actions": ["Admin"],
             }]
         })
-        # Use list-form subprocess calls for this specific command in order
-        # to avoid shell injection via credentials in JSON string
         dry_run = subprocess.run(
             ["kubectl", "create", "secret", "generic", "seaweedfs-s3config",
              f"--from-literal=s3.json={s3_config}",
@@ -585,6 +566,41 @@ class MLflowDeployer:
             ["kubectl", "apply", "-f", "-"],
             input=dry_run.stdout,
             capture_output=True, text=True, check=True,
+        )
+
+        # Build and apply manifests, filtering out Secrets that deploy.py manages
+        # directly (seaweedfs-s3config and aws-credentials). Without this filter
+        # the kustomize base defaults would overwrite caller-supplied credentials.
+        print("📋 Deploying SeaweedFS")
+        kustomize_out = subprocess.run(
+            ["kustomize", "build", str(seaweedfs_path)],
+            capture_output=True, text=True, check=True,
+        )
+        substitutions = {
+            "$NAMESPACE": self.args.namespace,
+            "$APPLICATION_CRD_ID": "mlflow-pipelines",
+            "$PROFILE_NAMESPACE_LABEL": "mlflow-profile",
+            "$S3_BUCKET": self.args.s3_bucket,
+        }
+        manifests = kustomize_out.stdout
+        for var, val in substitutions.items():
+            manifests = manifests.replace(var, val)
+
+        managed_secrets = {"seaweedfs-s3config", "aws-credentials"}
+        manifest_docs = list(yaml.safe_load_all(manifests))
+        manifests = "\n---\n".join(
+            yaml.safe_dump(doc, default_flow_style=False, sort_keys=False).rstrip()
+            for doc in manifest_docs if doc and not (
+                isinstance(doc, dict)
+                and doc.get("kind") == "Secret"
+                and doc.get("metadata", {}).get("name") in managed_secrets
+            )
+        ) + "\n"
+
+        subprocess.run(
+            ["kubectl", "apply", "-f", "-"],
+            input=manifests, text=True, check=True,
+            capture_output=True,
         )
 
         # Wait for SeaweedFS to be ready
@@ -1215,6 +1231,18 @@ class MLflowDeployer:
             if missing:
                 raise ValueError(f"externals3 requires {', '.join(missing)} to be set")
 
+        if self.args.skip_infrastructure:
+            tls_flags = []
+            if self.args.postgres_tls:
+                tls_flags.append("--postgres-tls")
+            if self.args.seaweedfs_tls:
+                tls_flags.append("--seaweedfs-tls")
+            if tls_flags:
+                raise ValueError(
+                    f"--skip-infrastructure cannot be combined with {', '.join(tls_flags)}: "
+                    "TLS certs are generated during infrastructure deployment"
+                )
+
     def deploy(self):
         """Main deployment orchestration"""
         self._validate_args()
@@ -1273,6 +1301,14 @@ class MLflowDeployer:
         except Exception as e:
             print(f"❌ Deployment failed: {e}")
             sys.exit(1)
+        finally:
+            # Remove generated private key from working tree regardless of outcome.
+            kind_overlay = self.repo_root / "config" / "overlays" / "kind"
+            for fname in ("tls.crt", "tls.key"):
+                fpath = kind_overlay / fname
+                if fpath.exists():
+                    fpath.unlink()
+                    print(f"🗑️  Removed {fpath}")
 
 
 def main():
@@ -1336,7 +1372,7 @@ def main():
     parser.add_argument("--postgres-sslmode", default=None,
                        help="PostgreSQL sslmode appended to the connection URI "
                             "(e.g. disable, require, verify-full). "
-                            "Default: 'require' when --postgres-tls is set, 'disable' otherwise.")
+                            "Default: 'verify-full' when --postgres-tls is set, 'disable' otherwise.")
     parser.add_argument("--postgres-host", default="")
     parser.add_argument("--postgres-port", default="5432")
     parser.add_argument("--postgres-user", default="postgres")

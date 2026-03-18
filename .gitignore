@@ -31,3 +31,7 @@ go.work
 
 # python build files
 **/__pycache__/
+
+# Generated TLS certs
+*.crt
+*.key

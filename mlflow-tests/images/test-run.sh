@@ -61,7 +61,7 @@ Storage:
   DB_USER               PostgreSQL user   (default: postgres)
   DB_PASSWORD           PostgreSQL password
   DB_NAME               PostgreSQL database name (default: mydatabase)
-  DB_SSLMODE            sslmode for the connection URI (default: 'require' with TLS, 'disable' without)
+  DB_SSLMODE            sslmode for the connection URI (default: 'verify-full' with TLS, 'disable' without)
 
 Infrastructure image overrides:
   POSTGRES_IMAGE        PostgreSQL container image override
@@ -69,7 +69,7 @@ Infrastructure image overrides:
 
 TLS (self-deployed infrastructure):
   POSTGRES_TLS          true|false — enable TLS on the self-deployed PostgreSQL server (default: false)
-                        When true, sslmode defaults to "require" unless DB_SSLMODE is explicitly set.
+                        When true, sslmode defaults to "verify-full" unless DB_SSLMODE is explicitly set.
   SEAWEEDFS_TLS         true|false — enable TLS on the self-deployed SeaweedFS S3 endpoint (default: false)
                         When true, the S3 endpoint scheme is automatically switched to https://.
                         A self-signed cert is generated on the host via openssl and stored as a K8s Secret.
