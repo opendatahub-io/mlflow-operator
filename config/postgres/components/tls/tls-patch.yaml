@@ -13,24 +13,27 @@ spec:
           command: ["/bin/sh", "-c"]
           args:
             - |
-              openssl req -new -x509 -days 3650 -nodes \
-                -subj "/CN=postgres-service" \
-                -out /ssl/server.crt \
-                -keyout /ssl/server.key
-              chmod 600 /ssl/server.key
-
-              SSL_ARGS=(-c ssl=on -c ssl_cert_file=/ssl/server.crt -c ssl_key_file=/ssl/server.key)
+              set -- -c ssl=on -c ssl_cert_file=/ssl/server.crt -c ssl_key_file=/ssl/server.key
 
               if command -v docker-entrypoint.sh >/dev/null 2>&1; then
-                exec docker-entrypoint.sh postgres "${SSL_ARGS[@]}"
+                exec docker-entrypoint.sh postgres "$@"
               elif [ -x /usr/bin/run-postgresql ]; then
-                exec /usr/bin/run-postgresql "${SSL_ARGS[@]}"
+                exec /usr/bin/run-postgresql "$@"
               else
-                exec postgres "${SSL_ARGS[@]}"
+                exec postgres "$@"
               fi
           volumeMounts:
-            - name: ssl-certs
+            - name: tls-certs
               mountPath: /ssl
+              readOnly: true
       volumes:
-        - name: ssl-certs
-          emptyDir: {}
+        - name: tls-certs
+          secret:
+            secretName: postgres-tls-certs
+            items:
+              - key: server.crt
+                path: server.crt
+                mode: 0644
+              - key: server.key
+                path: server.key
+                mode: 0600

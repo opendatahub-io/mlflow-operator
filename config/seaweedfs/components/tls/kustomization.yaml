@@ -10,3 +10,11 @@ patches:
     target:
       kind: Job
       name: init-seaweedfs
+  - path: service-tls-patch.yaml
+    target:
+      kind: Service
+      name: minio-service
+  - path: networkpolicy-tls-patch.yaml
+    target:
+      kind: NetworkPolicy
+      name: seaweedfs

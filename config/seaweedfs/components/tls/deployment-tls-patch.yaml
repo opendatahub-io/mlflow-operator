@@ -1,12 +1,18 @@
 # JSON 6902 patch: append TLS flags to the SeaweedFS server args and mount
 # the seaweedfs-tls-certs Secret (created by deploy.py before kustomize apply).
 # SeaweedFS does not enforce strict key-file permissions, so defaultMode 0644 works.
+#
+# HTTPS is started on port 8334 (separate from the plain HTTP port 8333).
+# The minio-service is patched by service-tls-patch.yaml to retarget 9000→8334.
 - op: add
   path: /spec/template/spec/containers/0/args/-
-  value: '-s3.certFile=/tls/tls.crt'
+  value: '-s3.cert.file=/tls/tls.crt'
 - op: add
   path: /spec/template/spec/containers/0/args/-
-  value: '-s3.keyFile=/tls/tls.key'
+  value: '-s3.key.file=/tls/tls.key'
+- op: add
+  path: /spec/template/spec/containers/0/args/-
+  value: '-s3.port.https=8334'
 - op: add
   path: /spec/template/spec/containers/0/volumeMounts/-
   value:
