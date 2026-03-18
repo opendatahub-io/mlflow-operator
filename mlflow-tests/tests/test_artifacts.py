@@ -23,7 +23,6 @@ from .actions import (
 from .validations import (
     validate_artifact_logged,
     validate_artifact_downloaded,
-    validate_model_created,
     validate_local_model_created,
     validate_model_logged,
     validate_model_loaded,
@@ -41,6 +40,10 @@ from mlflow_tests.enums import ResourceType, KubeVerb
 from .base import TestBase
 
 logger = logging.getLogger(__name__)
+
+RUNS_CUSTOM_ARTIFACT_OVERRIDE_TEST = (
+    Config.ARTIFACT_STORAGE == "s3" and not Config.SERVE_ARTIFACTS
+)
 
 
 @pytest.mark.Artifacts
@@ -150,22 +153,26 @@ class TestMLflowArtifacts(TestBase):
             ]
         ),
 
-        # MLflowConfig artifact location override test
-        TestData(
-            test_name="Artifacts stored at custom MLflowConfig location",
-            user_info=UserInfo(workspace=Config.WORKSPACES[0], verbs=[KubeVerb.CREATE, KubeVerb.UPDATE, KubeVerb.GET], resource_types=[ResourceType.EXPERIMENTS]),
-            workspace_to_use=Config.WORKSPACES[0],
-            test_steps=[
-                TestStep(action_func=action_create_artifact_connection_secret),
-                TestStep(action_func=action_create_mlflowconfig),
-                TestStep(action_func=action_wait_for_mlflowconfig_active),
-                TestStep(action_func=action_create_experiment, validate_func=validate_experiment_created),
-                TestStep(action_func=action_start_run, validate_func=validate_run_created),
-                TestStep(action_func=action_get_run_info),
-                TestStep(action_func=action_end_run, validate_func=validate_custom_artifact_location),
-            ]
-        ),
-    ]
+    ] + (
+        [
+            TestData(
+                test_name="Artifacts stored at custom MLflowConfig location",
+                user_info=UserInfo(workspace=Config.WORKSPACES[0], verbs=[KubeVerb.CREATE, KubeVerb.UPDATE, KubeVerb.GET], resource_types=[ResourceType.EXPERIMENTS]),
+                workspace_to_use=Config.WORKSPACES[0],
+                test_steps=[
+                    TestStep(action_func=action_create_artifact_connection_secret),
+                    TestStep(action_func=action_create_mlflowconfig),
+                    TestStep(action_func=action_wait_for_mlflowconfig_active),
+                    TestStep(action_func=action_create_experiment, validate_func=validate_experiment_created),
+                    TestStep(action_func=action_start_run, validate_func=validate_run_created),
+                    TestStep(action_func=action_get_run_info),
+                    TestStep(action_func=action_end_run, validate_func=validate_custom_artifact_location),
+                ]
+            ),
+        ]
+        if RUNS_CUSTOM_ARTIFACT_OVERRIDE_TEST
+        else []
+    )
 
     @pytest.mark.parametrize(
         'test_data', test_scenarios, ids=lambda x: x.test_name)
@@ -206,7 +213,7 @@ class TestMLflowArtifacts(TestBase):
             logger.info(f"Created user: {user_info.uname}")
 
             # Step 3: Set test context and workspace
-            logger.debug(f"Step 3: Setting active user and workspace context")
+            logger.debug("Step 3: Setting active user and workspace context")
             self.test_context.active_user = user_info
             self.test_context.user_client = user_info.client
             logger.debug(f"Using authenticated MLflow client for user: {user_info.uname}")

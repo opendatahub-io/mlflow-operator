@@ -111,10 +111,12 @@ The framework supports configuration via environment variables:
 | `MLFLOW_S3_ENDPOINT_URL` | S3 endpoint URL | Optional | Both |
 | `AWS_ACCESS_KEY_ID` | AWS access key for S3 | Optional | Both |
 | `AWS_SECRET_ACCESS_KEY` | AWS secret key for S3 | Optional | Both |
+| `AWS_S3_BUCKET` | S3 bucket for artifact override tests | `""` | Both |
 
 **Required Setup:**
 - **Kubernetes Mode**: Requires `MLFLOW_TRACKING_URI`, `workspaces`, and `kube_token`
 - **Local Mode**: Requires `MLFLOW_TRACKING_URI`, `workspaces`, `admin_uname`, and `admin_pass`
+- **MLflowConfig artifact override test**: Requires `MLFLOW_S3_ENDPOINT_URL`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, and `AWS_S3_BUCKET`
 
 ## Usage
 
@@ -666,6 +668,7 @@ uv run pytest tests/test_your_new_feature.py -k "GET permission"
 **Solution**:
 - Verify `artifact_storage` configuration is correct
 - Ensure MLflow server has proper S3 backend configuration
+- Ensure `MLFLOW_S3_ENDPOINT_URL`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, and `AWS_S3_BUCKET` are set when running the MLflowConfig artifact override scenario
 - Check network connectivity to S3-compatible storage
 
 #### Misleading Validation Errors
