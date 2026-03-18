@@ -225,11 +225,14 @@ cleanup() {
         kubectl delete clusterrolebinding "mlflow-config-view-${MLFLOW_NAME}" --ignore-not-found 2>/dev/null || true
         kubectl delete clusterrole "mlflow-config-reader-${MLFLOW_NAME}" --ignore-not-found 2>/dev/null || true
 
-        # Delete the SeaweedFS TLS Secret that deploy.py created (if applicable).
-        # The postgres cert lives in an ephemeral emptyDir and disappears with the pod.
-        if [ "${SEAWEEDFS_TLS:-false}" = "true" ]; then
-            kubectl delete secret seaweedfs-tls-certs \
-                -n "$NAMESPACE" --ignore-not-found 2>/dev/null || true
+        # Clean up TLS resources (cert Secrets, CA bundle ConfigMap, DSCI restore).
+        # deploy.py defers this to allow the MLflow pod to trust TLS certs during tests.
+        if [ "${POSTGRES_TLS:-false}" = "true" ] || [ "${SEAWEEDFS_TLS:-false}" = "true" ]; then
+            _tls_args="--namespace $NAMESPACE"
+            [ "${POSTGRES_TLS:-false}"  = "true" ] && _tls_args="$_tls_args --postgres-tls"
+            [ "${SEAWEEDFS_TLS:-false}" = "true" ] && _tls_args="$_tls_args --seaweedfs-tls"
+            # shellcheck disable=SC2086
+            uv run python3 "$DEPLOY_PY" --cleanup-tls $_tls_args 2>/dev/null || true
         fi
 
         if [ "$SKIP_INFRASTRUCTURE" != "true" ]; then
