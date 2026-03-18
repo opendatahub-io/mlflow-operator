@@ -29,12 +29,12 @@ spec:
         - 'server'
         - '-dir=/data'
         - '-s3'
-        - '-iam'
         - '-filer'
         - '-master.volumePreallocate=false'
+        # Static credential file replaces -iam; the IAM endpoint is not needed.
+        - '-s3.config=/etc/seaweedfs-config/s3.json'
         ports:
         - containerPort: 8333
-        - containerPort: 8111
         - containerPort: 9333
         - containerPort: 19333
         - containerPort: 8888
@@ -75,6 +75,9 @@ spec:
         volumeMounts:
         - mountPath: /data
           name: data
+        - mountPath: /etc/seaweedfs-config
+          name: s3config
+          readOnly: true
         resources:
           requests:
             cpu: 32m
@@ -83,4 +86,8 @@ spec:
       - name: data
         persistentVolumeClaim:
           claimName: seaweedfs-pvc
+      - name: s3config
+        secret:
+          secretName: seaweedfs-s3config
+          defaultMode: 0400
       serviceAccountName: seaweedfs

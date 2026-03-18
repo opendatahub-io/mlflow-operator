@@ -11,6 +11,7 @@ resources:
 - seaweedfs-service-account.yaml
 - minio-service.yaml
 - mlflow-aws-secret.yaml
+- seaweedfs-s3config.yaml
 
 configMapGenerator:
 - name: seaweedfs-params

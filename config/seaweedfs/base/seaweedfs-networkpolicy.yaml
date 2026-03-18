@@ -4,7 +4,7 @@ metadata:
   name: seaweedfs
 spec:
   ingress:
-  # Allow traffic from namespaces with the profile label
+  # Allow S3 and master traffic from namespaces with the profile label
   - from:
     - namespaceSelector:
         matchExpressions:
@@ -14,9 +14,8 @@ spec:
           - $PROFILE_NAMESPACE_LABEL
     ports:
     - port: 8333
-    - port: 8888
     - port: 9333
-  # Allow traffic from istio-system
+  # Allow S3 and master traffic from istio-system
   - from:
     - namespaceSelector:
         matchExpressions:
@@ -26,15 +25,21 @@ spec:
           - istio-system
     ports:
     - port: 8333
-    - port: 8888
     - port: 9333
-  # Allow traffic from the same namespace (for init job)
+  # Allow S3 and master traffic from any pod in the same namespace
   - from:
     - podSelector: {}
     ports:
     - port: 8333
-    - port: 8888
     - port: 9333
+  # The init job uses weed shell (master + filer gRPC) to create buckets.
+  - from:
+    - podSelector:
+        matchLabels:
+          app: init-seaweedfs
+    ports:
+    - port: 18888
+    - port: 19333
   podSelector:
     matchExpressions:
     - key: app

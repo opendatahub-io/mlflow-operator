@@ -8,10 +8,6 @@ metadata:
   name: seaweedfs
 spec:
   ports:
-  - name: http-iam
-    port: 8111
-    protocol: TCP
-    targetPort: 8111
   - name: http-s3
     port: 8333
     protocol: TCP

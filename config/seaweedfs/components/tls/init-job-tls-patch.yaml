@@ -10,3 +10,15 @@ spec:
           env:
             - name: S3_SCHEME
               value: "https"
+          volumeMounts:
+            - name: tls-certs
+              mountPath: /tls
+              readOnly: true
+      volumes:
+        - name: tls-certs
+          secret:
+            secretName: seaweedfs-tls-certs
+            items:
+              - key: tls.crt
+                path: tls.crt
+                mode: 0444

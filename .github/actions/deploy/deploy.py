@@ -40,10 +40,11 @@ class MLflowDeployer:
         if not self.args.postgres_host:
             self.args.postgres_host = f"postgres-service.{self.args.namespace}.svc.cluster.local"
 
-        # Auto-upgrade sslmode when postgres TLS is enabled and the caller left
-        # the default "disable" in place (they haven't made an explicit choice).
-        if self.args.postgres_tls and self.args.postgres_sslmode == "disable":
-            self.args.postgres_sslmode = "require"
+        # Apply sslmode default: 'require' when TLS is enabled, 'disable' otherwise.
+        # None means the caller didn't pass --postgres-sslmode explicitly.
+        if self.args.postgres_sslmode is None:
+            self.args.postgres_sslmode = "require" if self.args.postgres_tls else "disable"
+            print(f"  PostgreSQL sslmode defaulted to '{self.args.postgres_sslmode}'")
 
         print(f"Repository root: {self.repo_root}")
         print(f"Target namespace: {self.args.namespace}")
@@ -320,7 +321,7 @@ class MLflowDeployer:
                 "-addext", f"subjectAltName={san_str}",
                 "-out", cert_path,
                 "-keyout", key_path,
-            ], f"Generating self-signed TLS cert for {cn}")
+            ], f"Generating self-signed TLS cert for {cn}", capture_output=True)
 
             with open(cert_path) as f:
                 cert_pem = f.read()
@@ -335,7 +336,7 @@ class MLflowDeployer:
                 f"--from-file={cert_filename}={cert_path}",
                 f"--from-file={key_filename}={key_path}",
                 "-n", self.args.namespace,
-            ], f"Creating TLS Secret {secret_name}")
+            ], f"Creating TLS Secret {secret_name}", capture_output=True)
 
             return cert_pem
 
@@ -391,7 +392,8 @@ class MLflowDeployer:
                 f"--from-literal=dsci-name={dsci_name}",
                 f"--from-literal=original-ca-bundle={self._original_dsci_ca_bundle}",
                 "-n", self.args.namespace,
-            ], "Saving original DSCI CA bundle for later restoration")
+            ], "Saving original DSCI CA bundle for later restoration",
+                capture_output=True)
 
             new_bundle = "\n".join(
                 filter(None, [self._original_dsci_ca_bundle.strip(), combined_pem])
@@ -401,10 +403,12 @@ class MLflowDeployer:
                 ["kubectl", "patch", "dscinitialization", dsci_name,
                  "--type=merge", "-p", patch],
                 f"Injecting TLS CA certs into DSCInitialization/{dsci_name}",
+                capture_output=True,
             )
 
             print("⏳ Waiting for odh-trusted-ca-bundle ConfigMap to propagate...")
             deadline = time.time() + 120
+            propagated = False
             while time.time() < deadline:
                 result = subprocess.run(
                     ["kubectl", "get", "configmap", "odh-trusted-ca-bundle",
@@ -415,30 +419,38 @@ class MLflowDeployer:
                     cm_data = json.loads(result.stdout).get("data", {})
                     if combined_pem in cm_data.get("odh-ca-bundle.crt", ""):
                         print("✅ odh-trusted-ca-bundle ConfigMap contains updated bundle")
+                        propagated = True
                         break
                 time.sleep(5)
-            else:
-                print("⚠️  Timed out waiting for odh-trusted-ca-bundle — proceeding anyway")
 
-            self._tls_ca_bundle_cm = "odh-trusted-ca-bundle"
+            if propagated:
+                self._tls_ca_bundle_cm = "odh-trusted-ca-bundle"
+            else:
+                # DSCI propagation failed — fall back to a direct ConfigMap so
+                # MLflow doesn't start without a CA trust anchor.
+                print("⚠️  Timed out waiting for odh-trusted-ca-bundle — creating mlflow-ca-bundle fallback")
+                self._dsci_name = None
+                self._create_direct_ca_bundle(combined_pem)
 
         else:
             # ── Fallback path (Kind / vanilla Kubernetes) ─────────────────────
             print("ℹ️  No DSCInitialization found — creating mlflow-ca-bundle ConfigMap directly")
-            cm_name = "mlflow-ca-bundle"
+            self._create_direct_ca_bundle(combined_pem)
 
-            self.run_command([
-                "kubectl", "delete", "configmap", cm_name,
-                "-n", self.args.namespace,
-            ], check=False, capture_output=True)
-
-            self.run_command([
-                "kubectl", "create", "configmap", cm_name,
-                f"--from-literal=ca-bundle.crt={combined_pem}",
-                "-n", self.args.namespace,
-            ], f"Creating {cm_name} ConfigMap with combined TLS CA certs")
-
-            self._tls_ca_bundle_cm = cm_name
+    def _create_direct_ca_bundle(self, combined_pem: str):
+        """Create an mlflow-ca-bundle ConfigMap directly in the target namespace."""
+        cm_name = "mlflow-ca-bundle"
+        self.run_command([
+            "kubectl", "delete", "configmap", cm_name,
+            "-n", self.args.namespace,
+        ], check=False, capture_output=True)
+        self.run_command([
+            "kubectl", "create", "configmap", cm_name,
+            f"--from-literal=ca-bundle.crt={combined_pem}",
+            "-n", self.args.namespace,
+        ], f"Creating {cm_name} ConfigMap with combined TLS CA certs",
+            capture_output=True)
+        self._tls_ca_bundle_cm = cm_name
 
     def _restore_dsci_ca_bundle(self):
         """Restore DSCInitialization.spec.trustedCABundle.customCABundle to its original value.
@@ -449,8 +461,8 @@ class MLflowDeployer:
         # Try to load from Secret if not already in memory (cross-process invocation).
         if not self._dsci_name:
             for field, jsonpath in [
-                ("dsci-name", "{.data.dsci-name}"),
-                ("original-ca-bundle", "{.data.original-ca-bundle}"),
+                ("dsci-name", "{.data['dsci-name']}"),
+                ("original-ca-bundle", "{.data['original-ca-bundle']}"),
             ]:
                 result = subprocess.run(
                     ["kubectl", "get", "secret", "mlflow-tls-cleanup-state",
@@ -461,7 +473,7 @@ class MLflowDeployer:
                 if result.returncode != 0:
                     print("ℹ️  No mlflow-tls-cleanup-state Secret found — skipping DSCI restore")
                     return
-                value = base64.b64decode(result.stdout).decode() if result.stdout else ""
+                value = base64.b64decode(result.stdout.strip()).decode() if result.stdout.strip() else ""
                 if field == "dsci-name":
                     self._dsci_name = value
                 else:
@@ -473,27 +485,33 @@ class MLflowDeployer:
         patch = json.dumps(
             {"spec": {"trustedCABundle": {"customCABundle": self._original_dsci_ca_bundle}}}
         )
-        self.run_command(
+        result = self.run_command(
             ["kubectl", "patch", "dscinitialization", self._dsci_name,
              "--type=merge", "-p", patch],
             f"Restoring DSCInitialization/{self._dsci_name} CA bundle",
-            check=False,
+            check=False, capture_output=True,
         )
-        self.run_command([
-            "kubectl", "delete", "secret", "mlflow-tls-cleanup-state",
-            "-n", self.args.namespace,
-        ], check=False, capture_output=True)
+        if result and result.returncode == 0:
+            self.run_command([
+                "kubectl", "delete", "secret", "mlflow-tls-cleanup-state",
+                "-n", self.args.namespace,
+            ], check=False, capture_output=True)
+        else:
+            print("⚠️  DSCI patch failed — keeping mlflow-tls-cleanup-state for retry")
 
     def deploy_seaweedfs(self):
         """Deploy SeaweedFS for S3-compatible storage"""
         print("🌊 Deploying SeaweedFS...")
 
         if self.args.seaweedfs_tls:
-            fqdn = f"minio-service.{self.args.namespace}.svc.cluster.local"
             self._seaweedfs_cert_pem = self._create_tls_secret(
                 "seaweedfs-tls-certs", cn="minio-service",
                 cert_filename="tls.crt", key_filename="tls.key",
-                extra_sans=[f"DNS:{fqdn}"],
+                extra_sans=[
+                    f"DNS:minio-service.{self.args.namespace}",
+                    f"DNS:minio-service.{self.args.namespace}.svc",
+                    f"DNS:minio-service.{self.args.namespace}.svc.cluster.local",
+                ],
             )
             platform_overlay = "openshift-tls" if self.args.platform == "openshift" else "tls"
         else:
@@ -507,14 +525,21 @@ class MLflowDeployer:
             str(seaweedfs_params_env),
         ], f"Setting seaweedfs image to {self.args.seaweedfs_image}")
 
+
         # Note: base params.env namespace already updated by deploy_mlflow_operator()
         print(f"📝 SeaweedFS will deploy to namespace '{self.args.namespace}' (from base params.env)")
 
-        # Delete the PVC so SeaweedFS starts with no filer data.
-        # If a stale s3.json exists in the filer (from a previous run where weed shell
-        # s3.configure was run), SeaweedFS loads it at startup and enforces those
-        # credentials even without -iam.  A fresh PVC guarantees an empty IAM store,
-        # which disables credential enforcement entirely.
+        # Idempotency: delete Deployment before PVC so the pod releases the
+        # pvc-protection finalizer, then start fresh with a clean filer database.
+        self.run_command([
+            "kubectl", "delete", "deployment", "seaweedfs",
+            "-n", self.args.namespace,
+        ], check=False, capture_output=True)
+        self.run_command(
+            f"kubectl wait --for=delete pod -l app=seaweedfs "
+            f"--timeout=60s -n {self.args.namespace}",
+            check=False, capture_output=True,
+        )
         self.run_command([
             "kubectl", "delete", "pvc", "seaweedfs-pvc",
             "-n", self.args.namespace,
@@ -531,9 +556,36 @@ class MLflowDeployer:
         cmd = (f"export NAMESPACE={self.args.namespace} "
                f"APPLICATION_CRD_ID=mlflow-pipelines "
                f"PROFILE_NAMESPACE_LABEL=mlflow-profile "
-               f"S3_ADMIN_USER=kind-admin && "
-               f"kustomize build {seaweedfs_path} | envsubst '$NAMESPACE,$APPLICATION_CRD_ID,$PROFILE_NAMESPACE_LABEL,$S3_ADMIN_USER' | kubectl apply -f -")
+               f"S3_BUCKET={self.args.s3_bucket} && "
+               f"kustomize build {seaweedfs_path} | envsubst '$NAMESPACE,$APPLICATION_CRD_ID,$PROFILE_NAMESPACE_LABEL,$S3_BUCKET' | kubectl apply -f -")
         self.run_command(cmd, "Deploying SeaweedFS")
+
+        # Overwrite the seaweedfs-s3config Secret with the actual credentials.
+        print("📋 Overwriting seaweedfs-s3config Secret with actual credentials")
+        s3_config = json.dumps({
+            "identities": [{
+                "name": self.args.s3_access_key,
+                "credentials": [{
+                    "accessKey": self.args.s3_access_key,
+                    "secretKey": self.args.s3_secret_key,
+                }],
+                "actions": ["Admin"],
+            }]
+        })
+        # Use list-form subprocess calls for this specific command in order
+        # to avoid shell injection via credentials in JSON string
+        dry_run = subprocess.run(
+            ["kubectl", "create", "secret", "generic", "seaweedfs-s3config",
+             f"--from-literal=s3.json={s3_config}",
+             "-n", self.args.namespace,
+             "--dry-run=client", "-o", "yaml"],
+            capture_output=True, text=True, check=True,
+        )
+        subprocess.run(
+            ["kubectl", "apply", "-f", "-"],
+            input=dry_run.stdout,
+            capture_output=True, text=True, check=True,
+        )
 
         # Wait for SeaweedFS to be ready
         try:
@@ -724,11 +776,14 @@ class MLflowDeployer:
         print("🐘 Deploying PostgreSQL...")
 
         if self.args.postgres_tls:
-            fqdn = f"postgres-service.{self.args.namespace}.svc.cluster.local"
             self._postgres_cert_pem = self._create_tls_secret(
                 "postgres-tls-certs", cn="postgres-service",
                 cert_filename="server.crt", key_filename="server.key",
-                extra_sans=[f"DNS:{fqdn}"],
+                extra_sans=[
+                    f"DNS:postgres-service.{self.args.namespace}",
+                    f"DNS:postgres-service.{self.args.namespace}.svc",
+                    f"DNS:postgres-service.{self.args.namespace}.svc.cluster.local",
+                ],
             )
             platform_overlay = "openshift-tls" if self.args.platform == "openshift" else "tls"
         else:
@@ -866,13 +921,15 @@ class MLflowDeployer:
             }
 
         # Combine all self-signed CA certs (postgres and/or seaweedfs) into a
-        # single bundle and make it available to the MLflow pod.  This sets
-        # PGSSLROOTCERT, REQUESTS_CA_BUNDLE, and AWS_CA_BUNDLE so every TLS
-        # endpoint (DB + S3) is trusted without any per-library special-casing.
+        # single CA bundle ConfigMap. The operator mounts and injects the
+        # necessary env vars (PGSSLROOTCERT, REQUESTS_CA_BUNDLE, AWS_CA_BUNDLE).
         tls_cert_pems = [p for p in [self._postgres_cert_pem, self._seaweedfs_cert_pem] if p]
         if tls_cert_pems:
             self._setup_tls_ca_bundle(tls_cert_pems)
-            mlflow_cr["spec"]["caBundleConfigMap"] = {"name": self._tls_ca_bundle_cm}
+            # On ODH/RHOAI, the MLflow instance picks the certs from odh-trusted-ca-bundle ConfigMap
+            # (which we provided via DSCI), if not available, provide the certs via CR.
+            if not self._dsci_name:
+                mlflow_cr["spec"]["caBundleConfigMap"] = {"name": self._tls_ca_bundle_cm}
 
         # Write CR to file
         cr_file = Path("/tmp/mlflow-cr.yaml")
@@ -1276,9 +1333,10 @@ def main():
                        help="SeaweedFS container image (default: chrislusf/seaweedfs:4.07)")
 
     # PostgreSQL configuration
-    parser.add_argument("--postgres-sslmode", default="disable",
+    parser.add_argument("--postgres-sslmode", default=None,
                        help="PostgreSQL sslmode appended to the connection URI "
-                            "(e.g. disable, require, verify-full). Use empty string to omit.")
+                            "(e.g. disable, require, verify-full). "
+                            "Default: 'require' when --postgres-tls is set, 'disable' otherwise.")
     parser.add_argument("--postgres-host", default="")
     parser.add_argument("--postgres-port", default="5432")
     parser.add_argument("--postgres-user", default="postgres")

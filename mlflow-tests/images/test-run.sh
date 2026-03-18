@@ -61,7 +61,7 @@ Storage:
   DB_USER               PostgreSQL user   (default: postgres)
   DB_PASSWORD           PostgreSQL password
   DB_NAME               PostgreSQL database name (default: mydatabase)
-  DB_SSLMODE            sslmode for the connection URI (default: disable)
+  DB_SSLMODE            sslmode for the connection URI (default: 'require' with TLS, 'disable' without)
 
 Infrastructure image overrides:
   POSTGRES_IMAGE        PostgreSQL container image override
@@ -69,7 +69,7 @@ Infrastructure image overrides:
 
 TLS (self-deployed infrastructure):
   POSTGRES_TLS          true|false — enable TLS on the self-deployed PostgreSQL server (default: false)
-                        When true, sslmode is automatically upgraded to "require" unless DB_SSLMODE is set.
+                        When true, sslmode defaults to "require" unless DB_SSLMODE is explicitly set.
   SEAWEEDFS_TLS         true|false — enable TLS on the self-deployed SeaweedFS S3 endpoint (default: false)
                         When true, the S3 endpoint scheme is automatically switched to https://.
                         A self-signed cert is generated on the host via openssl and stored as a K8s Secret.
@@ -225,16 +225,6 @@ cleanup() {
         kubectl delete clusterrolebinding "mlflow-config-view-${MLFLOW_NAME}" --ignore-not-found 2>/dev/null || true
         kubectl delete clusterrole "mlflow-config-reader-${MLFLOW_NAME}" --ignore-not-found 2>/dev/null || true
 
-        # Clean up TLS resources (cert Secrets, CA bundle ConfigMap, DSCI restore).
-        # deploy.py defers this to allow the MLflow pod to trust TLS certs during tests.
-        if [ "${POSTGRES_TLS:-false}" = "true" ] || [ "${SEAWEEDFS_TLS:-false}" = "true" ]; then
-            _tls_args="--namespace $NAMESPACE"
-            [ "${POSTGRES_TLS:-false}"  = "true" ] && _tls_args="$_tls_args --postgres-tls"
-            [ "${SEAWEEDFS_TLS:-false}" = "true" ] && _tls_args="$_tls_args --seaweedfs-tls"
-            # shellcheck disable=SC2086
-            uv run python3 "$DEPLOY_PY" --cleanup-tls $_tls_args 2>/dev/null || true
-        fi
-
         if [ "$SKIP_INFRASTRUCTURE" != "true" ]; then
             # Compute per-component overlay directories, accounting for TLS overlays.
             local postgres_overlay seaweedfs_overlay
@@ -257,10 +247,19 @@ cleanup() {
             if echo "$ARTIFACT_BACKENDS" | tr ',' '\n' | grep -qxF 's3'; then
                 export APPLICATION_CRD_ID=mlflow-pipelines \
                        PROFILE_NAMESPACE_LABEL=mlflow-profile \
-                       S3_ADMIN_USER=kind-admin
+                       S3_BUCKET="${BUCKET:-mlpipeline}"
                 kustomize build "$REPO_ROOT/config/seaweedfs/$seaweedfs_overlay" \
-                    | envsubst '$NAMESPACE,$APPLICATION_CRD_ID,$PROFILE_NAMESPACE_LABEL,$S3_ADMIN_USER' \
+                    | envsubst '$NAMESPACE,$APPLICATION_CRD_ID,$PROFILE_NAMESPACE_LABEL,$S3_BUCKET' \
                     | kubectl delete --ignore-not-found -f - 2>/dev/null || true
+            fi
+
+            # Clean up TLS resources (cert Secrets, CA bundle ConfigMap, DSCI restore)
+            # after infrastructure is torn down to avoid noisy pod errors from missing secrets.
+            if [ "${POSTGRES_TLS:-false}" = "true" ] || [ "${SEAWEEDFS_TLS:-false}" = "true" ]; then
+                local _tls_args=(--namespace "$NAMESPACE")
+                [ "${POSTGRES_TLS:-false}"  = "true" ] && _tls_args+=(--postgres-tls)
+                [ "${SEAWEEDFS_TLS:-false}" = "true" ] && _tls_args+=(--seaweedfs-tls)
+                uv run python3 "$DEPLOY_PY" --cleanup-tls "${_tls_args[@]}" 2>/dev/null || true
             fi
         fi
     fi
