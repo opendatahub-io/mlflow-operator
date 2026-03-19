@@ -223,7 +223,7 @@ class TestBase:
                     logger.warning(error_msg)
                     cleanup_errors.append(error_msg)
 
-        # Cleanup MLflowConfigs
+        # Cleanup Kubernetes resources created during the test
         if self.test_context.mlflowconfigs_to_delete or self.test_context.secrets_to_delete:
             ClientManager.load_k8s_config()
 

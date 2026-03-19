@@ -8,6 +8,7 @@ env:
   PYTEST_ARGS: '-v --tb=short --strict-markers --disable-warnings'
   AWS_ACCESS_KEY_ID: 'minio'
   AWS_SECRET_ACCESS_KEY: 'minio123'
+  AWS_S3_BUCKET: 'mlpipeline'
   MLFLOW_TRACKING_URI: "https://localhost:8080"
   MLFLOW_TRACKING_INSECURE_TLS: "true"
   TESTS_LOG_LEVEL: "DEBUG"
