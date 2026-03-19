@@ -223,8 +223,13 @@ class TestBase:
                     logger.warning(error_msg)
                     cleanup_errors.append(error_msg)
 
-        # Cleanup MLflowConfigs
-        if self.test_context.mlflowconfigs_to_delete or self.test_context.secrets_to_delete:
+        # Cleanup and restore Kubernetes resources created or patched during the test
+        if (
+            self.test_context.mlflowconfigs_to_delete
+            or self.test_context.secrets_to_delete
+            or self.test_context.mlflowconfigs_to_restore
+            or self.test_context.secrets_to_restore
+        ):
             ClientManager.load_k8s_config()
 
             if self.test_context.mlflowconfigs_to_delete:
@@ -246,6 +251,27 @@ class TestBase:
                         logger.warning(error_msg)
                         cleanup_errors.append(error_msg)
 
+            if self.test_context.mlflowconfigs_to_restore:
+                logger.info(f"Restoring {len(self.test_context.mlflowconfigs_to_restore)} MLflowConfigs")
+                custom_api = k8s_client.CustomObjectsApi()
+
+                for name, restore_info in self.test_context.mlflowconfigs_to_restore.items():
+                    namespace = restore_info["namespace"]
+                    try:
+                        custom_api.patch_namespaced_custom_object(
+                            group="mlflow.kubeflow.org",
+                            version="v1",
+                            namespace=namespace,
+                            plural="mlflowconfigs",
+                            name=name,
+                            body={"spec": restore_info["spec"]},
+                        )
+                        logger.info(f"Restored MLflowConfig {name} in namespace {namespace}")
+                    except Exception as e:
+                        error_msg = f"Failed to restore MLflowConfig {name} in namespace {namespace}: {e}"
+                        logger.warning(error_msg)
+                        cleanup_errors.append(error_msg)
+
             if self.test_context.secrets_to_delete:
                 logger.info(f"Cleaning up {len(self.test_context.secrets_to_delete)} Secrets")
                 core_v1_api = k8s_client.CoreV1Api()
@@ -256,6 +282,24 @@ class TestBase:
                         logger.info(f"Deleted Secret {name} in namespace {namespace}")
                     except Exception as e:
                         error_msg = f"Failed to delete Secret {name} in namespace {namespace}: {e}"
+                        logger.warning(error_msg)
+                        cleanup_errors.append(error_msg)
+
+            if self.test_context.secrets_to_restore:
+                logger.info(f"Restoring {len(self.test_context.secrets_to_restore)} Secrets")
+                core_v1_api = k8s_client.CoreV1Api()
+
+                for name, restore_info in self.test_context.secrets_to_restore.items():
+                    namespace = restore_info["namespace"]
+                    try:
+                        core_v1_api.patch_namespaced_secret(
+                            name=name,
+                            namespace=namespace,
+                            body={"data": restore_info["data"]},
+                        )
+                        logger.info(f"Restored Secret {name} in namespace {namespace}")
+                    except Exception as e:
+                        error_msg = f"Failed to restore Secret {name} in namespace {namespace}: {e}"
                         logger.warning(error_msg)
                         cleanup_errors.append(error_msg)
 

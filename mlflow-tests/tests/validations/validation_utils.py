@@ -5,7 +5,6 @@ different resource types (experiments, registered models, etc.).
 """
 
 import logging
-from typing import Optional
 from ..shared import TestContext, ErrorResponse, ErrorCode
 
 logger = logging.getLogger(__name__)
@@ -101,3 +100,12 @@ def validate_resource_retrieved_or_created(
         )
 
     logger.info(f"Successfully validated {resource_type} {operation} ({resource_field}: {resource_value})")
+
+
+def validate_no_error(test_context: TestContext) -> None:
+    """Validate that the preceding action completed without storing an error."""
+    if test_context.last_error is not None:
+        error_response: ErrorResponse = test_context.last_error
+        raise AssertionError(
+            f"Action failed: {error_response.error.code} - {error_response.error.message}"
+        )

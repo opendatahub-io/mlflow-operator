@@ -31,6 +31,7 @@ from .validations import (
     validate_run_ended,
     validate_authentication_denied,
     validate_custom_artifact_location,
+    validate_no_error,
 )
 from .validations.experiment_validations import validate_experiment_created
 
@@ -162,7 +163,7 @@ class TestMLflowArtifacts(TestBase):
                 test_steps=[
                     TestStep(action_func=action_create_artifact_connection_secret),
                     TestStep(action_func=action_create_mlflowconfig),
-                    TestStep(action_func=action_wait_for_mlflowconfig_active),
+                    TestStep(action_func=action_wait_for_mlflowconfig_active, validate_func=validate_no_error),
                     TestStep(action_func=action_create_experiment, validate_func=validate_experiment_created),
                     TestStep(action_func=action_start_run, validate_func=validate_run_created),
                     TestStep(action_func=action_get_run_info),

@@ -28,6 +28,7 @@ from .artifact_validations import (
 from .validation_utils import (
     validate_authentication_denied,
     validate_resource_retrieved_or_created,
+    validate_no_error,
 )
 
 __all__ = [
@@ -36,6 +37,7 @@ __all__ = [
     "validate_experiment_deleted",
     "validate_model_retrieved",
     "validate_model_created",
+    "validate_local_model_created",
     "validate_model_deleted",
     "validate_artifact_logged",
     "validate_artifact_downloaded",
@@ -46,5 +48,6 @@ __all__ = [
     "validate_run_ended",
     "validate_authentication_denied",
     "validate_resource_retrieved_or_created",
+    "validate_no_error",
     "validate_custom_artifact_location",
 ]
