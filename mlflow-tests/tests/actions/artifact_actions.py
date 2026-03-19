@@ -4,7 +4,6 @@ This module contains all action functions for artifact and model logging operati
 Each action accepts only test_context as an argument and modifies it appropriately.
 """
 
-import base64
 import logging
 import os
 import tempfile
@@ -85,17 +84,6 @@ def _is_retryable_probe_error(exc: Exception) -> bool:
         }
 
     return False
-
-
-def _encode_secret_data(secret_data: dict[str, str | None]) -> dict[str, str | None]:
-    """Base64 encode Secret data for patch operations."""
-    encoded_data = {}
-    for key, value in secret_data.items():
-        if value is None:
-            encoded_data[key] = None
-        else:
-            encoded_data[key] = base64.b64encode(value.encode("utf-8")).decode("utf-8")
-    return encoded_data
 
 
 def action_start_run(test_context: TestContext) -> None:
@@ -324,24 +312,10 @@ def action_create_artifact_connection_secret(test_context: TestContext) -> None:
         logger.info(f"Successfully created secret '{secret_name}' in namespace '{namespace}'")
     except client.ApiException as e:
         if e.status == 409:
-            try:
-                existing_secret = core_v1_api.read_namespaced_secret(
-                    name=secret_name, namespace=namespace
-                )
-            except client.ApiException as read_error:
-                raise RuntimeError(
-                    f"Secret '{secret_name}' already exists in namespace '{namespace}', "
-                    "but it could not be read back for replacement"
-                ) from read_error
-            original_secret_data = {
-                key: (existing_secret.data or {}).get(key)
-                for key in _encode_secret_data(expected_secret_data)
-            }
-            test_context.add_secret_for_restore(secret_name, namespace, original_secret_data)
             core_v1_api.patch_namespaced_secret(
                 name=secret_name,
                 namespace=namespace,
-                body={"data": _encode_secret_data(expected_secret_data)},
+                body={"stringData": expected_secret_data},
             )
             logger.info(f"Patched secret '{secret_name}' in namespace '{namespace}'")
         else:
@@ -444,27 +418,6 @@ def action_create_mlflowconfig(test_context: TestContext) -> None:
         logger.info(f"Successfully created MLflowConfig '{config_name}' in namespace '{namespace}'")
     except client.ApiException as e:
         if e.status == 409:
-            try:
-                existing_mlflowconfig = custom_api.get_namespaced_custom_object(
-                    group="mlflow.kubeflow.org",
-                    version="v1",
-                    namespace=namespace,
-                    plural="mlflowconfigs",
-                    name=config_name,
-                )
-            except client.ApiException as read_error:
-                raise RuntimeError(
-                    f"MLflowConfig '{config_name}' already exists in namespace '{namespace}', "
-                    "but it could not be read back for replacement"
-                ) from read_error
-            test_context.add_mlflowconfig_for_restore(
-                config_name,
-                namespace,
-                {
-                    "artifactRootSecret": existing_mlflowconfig.get("spec", {}).get("artifactRootSecret"),
-                    "artifactRootPath": existing_mlflowconfig.get("spec", {}).get("artifactRootPath"),
-                },
-            )
             custom_api.patch_namespaced_custom_object(
                 group="mlflow.kubeflow.org",
                 version="v1",

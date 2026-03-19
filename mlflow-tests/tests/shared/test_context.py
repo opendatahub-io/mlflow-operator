@@ -43,8 +43,6 @@ class TestContext:
         expected_artifact_path: Expected relative path within bucket for custom artifacts
         mlflowconfigs_to_delete: Map of mlflowconfig_name -> namespace for cleanup
         secrets_to_delete: Map of secret_name -> namespace for cleanup
-        mlflowconfigs_to_restore: Map of mlflowconfig_name -> original spec and namespace
-        secrets_to_restore: Map of secret_name -> original secret data and namespace
     """
 
     workspaces: list[str] = field(default_factory=list)
@@ -72,8 +70,6 @@ class TestContext:
     expected_artifact_path: Optional[str] = None
     mlflowconfigs_to_delete: dict[str, str] = field(default_factory=dict)
     secrets_to_delete: dict[str, str] = field(default_factory=dict)
-    mlflowconfigs_to_restore: dict[str, dict[str, Any]] = field(default_factory=dict)
-    secrets_to_restore: dict[str, dict[str, Any]] = field(default_factory=dict)
 
     def add_experiment_for_cleanup(self, experiment_id: str, workspace: str) -> None:
         """Add an experiment to the cleanup list with workspace context.
@@ -195,34 +191,4 @@ class TestContext:
 
         self.secrets_to_delete[name.strip()] = namespace.strip()
         logger.info(f"Added Secret {name} in namespace '{namespace}' to cleanup list")
-
-    def add_mlflowconfig_for_restore(self, name: str, namespace: str, spec: dict[str, Any]) -> None:
-        """Track an existing MLflowConfig that should be restored after the test."""
-        if not name or not name.strip():
-            logger.error("Attempted to add MLflowConfig for restore with empty name")
-            raise ValueError("name cannot be empty")
-        if not namespace or not namespace.strip():
-            logger.error(f"Attempted to add MLflowConfig {name} for restore with empty namespace")
-            raise ValueError("namespace cannot be empty")
-
-        self.mlflowconfigs_to_restore[name.strip()] = {
-            "namespace": namespace.strip(),
-            "spec": spec,
-        }
-        logger.info(f"Added MLflowConfig {name} in namespace '{namespace}' to restore list")
-
-    def add_secret_for_restore(self, name: str, namespace: str, data: dict[str, Any]) -> None:
-        """Track an existing Secret that should be restored after the test."""
-        if not name or not name.strip():
-            logger.error("Attempted to add Secret for restore with empty name")
-            raise ValueError("name cannot be empty")
-        if not namespace or not namespace.strip():
-            logger.error(f"Attempted to add Secret {name} for restore with empty namespace")
-            raise ValueError("namespace cannot be empty")
-
-        self.secrets_to_restore[name.strip()] = {
-            "namespace": namespace.strip(),
-            "data": data,
-        }
-        logger.info(f"Added Secret {name} in namespace '{namespace}' to restore list")
 
