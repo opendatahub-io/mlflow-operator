@@ -14,7 +14,6 @@ import os
 import sys
 import time
 import tempfile
-import base64
 from pathlib import Path
 from typing import List, Union
 from urllib.parse import quote_plus
@@ -24,11 +23,9 @@ class MLflowDeployer:
     def __init__(self, args):
         self.args = args
         self.repo_root = Path(__file__).parent.parent.parent.parent
-        self._dsci_name = None
-        self._original_dsci_ca_bundle = ""
         self._tls_ca_bundle_cm = None
-        self._postgres_cert_pem = None
-        self._seaweedfs_cert_pem = None
+        self._ca_tmpdir = None
+        self._ca_cert_pem = None
 
         # Set default endpoints if not provided
         # For externals3 the endpoint is caller-supplied; don't override with the
@@ -196,14 +193,11 @@ class MLflowDeployer:
                 "--ignore-not-found", "-n", self.args.namespace,
             ], capture_output=True)
 
-        # Restore DSCI (ODH path) or delete the ConfigMap we created (vanilla K8s path).
-        self._restore_dsci_ca_bundle()
-        if not self._dsci_name:
-            # No DSCI — attempt to delete the direct ConfigMap (harmless if absent).
-            self.run_command([
-                "kubectl", "delete", "configmap", "mlflow-ca-bundle",
-                "--ignore-not-found", "-n", self.args.namespace,
-            ], capture_output=True)
+        # Delete the CA bundle ConfigMap we created (harmless if absent).
+        self.run_command([
+            "kubectl", "delete", "configmap", "mlflow-ca-bundle",
+            "--ignore-not-found", "-n", self.args.namespace,
+        ], capture_output=True)
 
     def deploy_mlflow_operator(self):
         """Deploy MLflow operator using kustomize"""
@@ -288,34 +282,66 @@ class MLflowDeployer:
         cmd += ["-n", self.args.namespace]
         self.run_command(cmd, "Creating S3 credentials secret", capture_output=True)
 
+    def _ensure_ca(self):
+        """Generate a self-signed CA key+cert (once) for signing server certificates.
+
+        The CA cert PEM is stored in self._ca_cert_pem and used as the single
+        trust anchor in the CA bundle ConfigMap.
+        """
+        if self._ca_tmpdir:
+            return
+        self._ca_tmpdir = tempfile.TemporaryDirectory(prefix="mlflow-ca-")
+        ca_dir = self._ca_tmpdir.name
+        ca_key = f"{ca_dir}/ca.key"
+        ca_cert = f"{ca_dir}/ca.crt"
+        self.run_command([
+            "openssl", "req", "-new", "-x509", "-days", "3650", "-nodes",
+            "-subj", "/CN=mlflow-test-ca",
+            "-keyout", ca_key,
+            "-out", ca_cert,
+        ], "Generating CA certificate", capture_output=True)
+        with open(ca_cert) as f:
+            self._ca_cert_pem = f.read()
+        print("🔐 CA certificate generated")
+
     def _create_tls_secret(self, secret_name: str, cn: str,
                            cert_filename: str = "tls.crt",
                            key_filename: str = "tls.key",
-                           extra_sans: list = None) -> str:
-        """Generate a self-signed TLS cert via host openssl and create a K8s Secret.
+                           extra_sans: list = None):
+        """Generate a server cert signed by the internal CA and create a K8s Secret.
 
-        SANs always include DNS:cn.  Pass extra_sans (e.g. the full service FQDN)
-        to cover additional hostnames that clients may connect to.
-
-        Returns the PEM-encoded certificate so callers can inject it into trust stores.
+        Calls _ensure_ca() to create the CA if it doesn't exist yet.
+        SANs always include DNS:cn plus any extra_sans.
         """
+        self._ensure_ca()
         sans = [f"DNS:{cn}"] + (extra_sans or [])
         san_str = ",".join(sans)
-        print(f"🔐 Generating self-signed TLS cert (CN={cn}, SANs={san_str}) for {secret_name}...")
+        print(f"🔐 Generating CA-signed cert (CN={cn}, SANs={san_str}) for {secret_name}...")
         with tempfile.TemporaryDirectory() as tmpdir:
-            cert_path = f"{tmpdir}/{cert_filename}"
             key_path = f"{tmpdir}/{key_filename}"
+            csr_path = f"{tmpdir}/server.csr"
+            cert_path = f"{tmpdir}/{cert_filename}"
+            ext_path = f"{tmpdir}/ext.cnf"
+
+            with open(ext_path, "w") as f:
+                f.write(f"subjectAltName={san_str}\n")
 
             self.run_command([
-                "openssl", "req", "-new", "-x509", "-days", "3650", "-nodes",
+                "openssl", "req", "-new", "-nodes",
                 "-subj", f"/CN={cn}",
-                "-addext", f"subjectAltName={san_str}",
-                "-out", cert_path,
                 "-keyout", key_path,
-            ], f"Generating self-signed TLS cert for {cn}", capture_output=True)
+                "-out", csr_path,
+            ], capture_output=True)
 
-            with open(cert_path) as f:
-                cert_pem = f.read()
+            self.run_command([
+                "openssl", "x509", "-req", "-days", "3650",
+                "-CA", f"{self._ca_tmpdir.name}/ca.crt",
+                "-CAkey", f"{self._ca_tmpdir.name}/ca.key",
+                "-CAcreateserial",
+                "-extfile", ext_path,
+                "-in", csr_path,
+                "-out", cert_path,
+            ], f"Signing cert for {cn}", capture_output=True)
 
             self.run_command([
                 "kubectl", "delete", "secret", secret_name,
@@ -329,106 +355,7 @@ class MLflowDeployer:
                 "-n", self.args.namespace,
             ], f"Creating TLS Secret {secret_name}", capture_output=True)
 
-            return cert_pem
-
-    def _get_dsci_name(self) -> str:
-        """Return the name of the DSCInitialization resource, or empty string if absent."""
-        result = subprocess.run(
-            ["kubectl", "get", "dscinitialization",
-             "-o", "jsonpath={.items[0].metadata.name}"],
-            capture_output=True, text=True,
-        )
-        return result.stdout.strip() if result.returncode == 0 else ""
-
-    def _setup_tls_ca_bundle(self, cert_pems: list):
-        """Make all self-signed certs trusted by the MLflow pod.
-
-        Accepts a list of PEM strings (postgres, seaweedfs, or both) and combines
-        them into a single CA bundle so the MLflow pod trusts every TLS endpoint.
-
-        Two paths depending on whether a DSCInitialization resource exists:
-
-        ODH/RHOAI cluster (DSCI present):
-          - Appends the combined bundle to DSCInitialization.spec.trustedCABundle.customCABundle.
-          - ODH propagates it as the odh-trusted-ca-bundle ConfigMap into every
-            data-science namespace.
-          - Waits for the ConfigMap to appear before returning.
-          - Saves the original bundle value so cleanup can restore it.
-
-        Vanilla Kubernetes / Kind (no DSCI):
-          - Creates an mlflow-ca-bundle ConfigMap in the target namespace directly.
-          - No propagation wait needed.
-        """
-        combined_pem = "\n".join(p.strip() for p in cert_pems if p)
-        dsci_name = self._get_dsci_name()
-
-        if dsci_name:
-            # ── ODH path ──────────────────────────────────────────────────────
-            result = subprocess.run(
-                ["kubectl", "get", "dscinitialization", dsci_name,
-                 "-o", "jsonpath={.spec.trustedCABundle.customCABundle}"],
-                capture_output=True, text=True,
-            )
-            self._dsci_name = dsci_name
-            self._original_dsci_ca_bundle = result.stdout if result.returncode == 0 else ""
-
-            # Persist the original bundle in a Secret so that --cleanup-tls can
-            # restore it even when called from a separate process invocation.
-            self.run_command([
-                "kubectl", "delete", "secret", "mlflow-tls-cleanup-state",
-                "--ignore-not-found", "-n", self.args.namespace,
-            ], capture_output=True)
-            self.run_command([
-                "kubectl", "create", "secret", "generic", "mlflow-tls-cleanup-state",
-                f"--from-literal=dsci-name={dsci_name}",
-                f"--from-literal=original-ca-bundle={self._original_dsci_ca_bundle}",
-                "-n", self.args.namespace,
-            ], "Saving original DSCI CA bundle for later restoration",
-                capture_output=True)
-
-            new_bundle = "\n".join(
-                filter(None, [self._original_dsci_ca_bundle.strip(), combined_pem])
-            )
-            patch = json.dumps({"spec": {"trustedCABundle": {"customCABundle": new_bundle}}})
-            self.run_command(
-                ["kubectl", "patch", "dscinitialization", dsci_name,
-                 "--type=merge", "-p", patch],
-                f"Injecting TLS CA certs into DSCInitialization/{dsci_name}",
-                capture_output=True,
-            )
-
-            print("⏳ Waiting for odh-trusted-ca-bundle ConfigMap to propagate...")
-            deadline = time.time() + 120
-            propagated = False
-            while time.time() < deadline:
-                result = subprocess.run(
-                    ["kubectl", "get", "configmap", "odh-trusted-ca-bundle",
-                     "-n", self.args.namespace, "-o", "json"],
-                    capture_output=True, text=True,
-                )
-                if result.returncode == 0:
-                    cm_data = json.loads(result.stdout).get("data", {})
-                    if combined_pem in cm_data.get("odh-ca-bundle.crt", ""):
-                        print("✅ odh-trusted-ca-bundle ConfigMap contains updated bundle")
-                        propagated = True
-                        break
-                time.sleep(5)
-
-            if propagated:
-                self._tls_ca_bundle_cm = "odh-trusted-ca-bundle"
-            else:
-                # DSCI propagation failed — fall back to a direct ConfigMap so
-                # MLflow doesn't start without a CA trust anchor.
-                print("⚠️  Timed out waiting for odh-trusted-ca-bundle — creating mlflow-ca-bundle fallback")
-                self._dsci_name = None
-                self._create_direct_ca_bundle(combined_pem)
-
-        else:
-            # ── Fallback path (Kind / vanilla Kubernetes) ─────────────────────
-            print("ℹ️  No DSCInitialization found — creating mlflow-ca-bundle ConfigMap directly")
-            self._create_direct_ca_bundle(combined_pem)
-
-    def _create_direct_ca_bundle(self, combined_pem: str):
+    def _create_infra_ca_bundle(self, combined_pem: str):
         """Create an mlflow-ca-bundle ConfigMap directly in the target namespace."""
         cm_name = "mlflow-ca-bundle"
         self.run_command([
@@ -443,59 +370,12 @@ class MLflowDeployer:
             capture_output=True)
         self._tls_ca_bundle_cm = cm_name
 
-    def _restore_dsci_ca_bundle(self):
-        """Restore DSCInitialization.spec.trustedCABundle.customCABundle to its original value.
-
-        When called from a separate process (--cleanup-tls), reads the saved values
-        from the mlflow-tls-cleanup-state Secret created during setup.
-        """
-        # Try to load from Secret if not already in memory (cross-process invocation).
-        if not self._dsci_name:
-            for field, jsonpath in [
-                ("dsci-name", "{.data['dsci-name']}"),
-                ("original-ca-bundle", "{.data['original-ca-bundle']}"),
-            ]:
-                result = subprocess.run(
-                    ["kubectl", "get", "secret", "mlflow-tls-cleanup-state",
-                     "-n", self.args.namespace,
-                     "-o", f"jsonpath={jsonpath}"],
-                    capture_output=True, text=True,
-                )
-                if result.returncode != 0:
-                    print("ℹ️  No mlflow-tls-cleanup-state Secret found — skipping DSCI restore")
-                    return
-                value = base64.b64decode(result.stdout.strip()).decode() if result.stdout.strip() else ""
-                if field == "dsci-name":
-                    self._dsci_name = value
-                else:
-                    self._original_dsci_ca_bundle = value
-
-        if not self._dsci_name:
-            return
-
-        patch = json.dumps(
-            {"spec": {"trustedCABundle": {"customCABundle": self._original_dsci_ca_bundle}}}
-        )
-        result = self.run_command(
-            ["kubectl", "patch", "dscinitialization", self._dsci_name,
-             "--type=merge", "-p", patch],
-            f"Restoring DSCInitialization/{self._dsci_name} CA bundle",
-            check=False, capture_output=True,
-        )
-        if result and result.returncode == 0:
-            self.run_command([
-                "kubectl", "delete", "secret", "mlflow-tls-cleanup-state",
-                "--ignore-not-found", "-n", self.args.namespace,
-            ], capture_output=True)
-        else:
-            print("⚠️  DSCI patch failed — keeping mlflow-tls-cleanup-state for retry")
-
     def deploy_seaweedfs(self):
         """Deploy SeaweedFS for S3-compatible storage"""
         print("🌊 Deploying SeaweedFS...")
 
         if self.args.seaweedfs_tls:
-            self._seaweedfs_cert_pem = self._create_tls_secret(
+            self._create_tls_secret(
                 "seaweedfs-tls-certs", cn="minio-service",
                 cert_filename="tls.crt", key_filename="tls.key",
                 extra_sans=[
@@ -792,7 +672,7 @@ class MLflowDeployer:
         print("🐘 Deploying PostgreSQL...")
 
         if self.args.postgres_tls:
-            self._postgres_cert_pem = self._create_tls_secret(
+            self._create_tls_secret(
                 "postgres-tls-certs", cn="postgres-service",
                 cert_filename="server.crt", key_filename="server.key",
                 extra_sans=[
@@ -939,21 +819,18 @@ class MLflowDeployer:
         # Set up the CA trust anchor for TLS endpoints.  Three paths:
         #  1. Caller supplied --ca-bundle-configmap: use it directly.
         #  2. Caller supplied --ca-bundle-path: create a ConfigMap from the file.
-        #  3. Self-signed certs generated above: combine into a bundle via DSCI or ConfigMap.
+        #  3. Self-signed certs generated above: combine into a bundle ConfigMap.
         if self.args.ca_bundle_configmap:
             self._tls_ca_bundle_cm = self.args.ca_bundle_configmap
-            mlflow_cr["spec"]["caBundleConfigMap"] = {"name": self._tls_ca_bundle_cm}
         elif self.args.ca_bundle_path:
             with open(self.args.ca_bundle_path) as f:
                 ca_pem = f.read()
-            self._create_direct_ca_bundle(ca_pem)
+            self._create_infra_ca_bundle(ca_pem)
+        elif self._ca_cert_pem:
+            self._create_infra_ca_bundle(self._ca_cert_pem)
+
+        if self._tls_ca_bundle_cm:
             mlflow_cr["spec"]["caBundleConfigMap"] = {"name": self._tls_ca_bundle_cm}
-        else:
-            tls_cert_pems = [p for p in [self._postgres_cert_pem, self._seaweedfs_cert_pem] if p]
-            if tls_cert_pems:
-                self._setup_tls_ca_bundle(tls_cert_pems)
-                if not self._dsci_name:
-                    mlflow_cr["spec"]["caBundleConfigMap"] = {"name": self._tls_ca_bundle_cm}
 
         # Write CR to file
         cr_file = Path("/tmp/mlflow-cr.yaml")
@@ -1320,7 +1197,11 @@ class MLflowDeployer:
                 fpath = kind_overlay / fname
                 if fpath.exists():
                     fpath.unlink()
-                    print(f"🗑️  Removed {fpath}")
+            # Clean up the CA temp directory (contains CA private key).
+            if self._ca_tmpdir:
+                self._ca_tmpdir.cleanup()
+                self._ca_tmpdir = None
+                print("🗑️  Removed CA temp directory")
 
 
 def main():
