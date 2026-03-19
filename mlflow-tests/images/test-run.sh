@@ -73,6 +73,10 @@ TLS (self-deployed infrastructure):
   SEAWEEDFS_TLS         true|false — enable TLS on the self-deployed SeaweedFS S3 endpoint (default: false)
                         When true, the S3 endpoint scheme is automatically switched to https://.
                         A self-signed cert is generated on the host via openssl and stored as a K8s Secret.
+  CA_BUNDLE_PATH        Path to a PEM CA bundle file (for externally-provided TLS storage).
+                        Mutually exclusive with CA_BUNDLE_CONFIGMAP.
+  CA_BUNDLE_CONFIGMAP   Name of an existing ConfigMap containing the CA bundle.
+                        Mutually exclusive with CA_BUNDLE_PATH.
 
 Operator / OpenShift:
   DEPLOY_MLFLOW_OPERATOR  true|false — patch the OLM CSV instead of deploying via kustomize;
@@ -173,6 +177,8 @@ SEAWEEDFS_IMAGE="${SEAWEEDFS_IMAGE:-}"
 # TLS flags for self-deployed infrastructure
 POSTGRES_TLS="${POSTGRES_TLS:-false}"
 SEAWEEDFS_TLS="${SEAWEEDFS_TLS:-false}"
+CA_BUNDLE_PATH="${CA_BUNDLE_PATH:-}"
+CA_BUNDLE_CONFIGMAP="${CA_BUNDLE_CONFIGMAP:-}"
 
 # PostgreSQL sslmode appended to the connection URI.
 # Leave empty to let deploy.py use its default ("disable" for self-deployed postgres).
@@ -376,6 +382,8 @@ run_suite() {
         [ -n "${DB_SSLMODE:-}"      ] && deploy_args+=(--postgres-sslmode "$DB_SSLMODE")
         [ "${POSTGRES_TLS:-false}"  = "true" ] && deploy_args+=(--postgres-tls)
         [ "${SEAWEEDFS_TLS:-false}" = "true" ] && deploy_args+=(--seaweedfs-tls)
+        [ -n "${CA_BUNDLE_PATH:-}"      ] && deploy_args+=(--ca-bundle-path       "$CA_BUNDLE_PATH")
+        [ -n "${CA_BUNDLE_CONFIGMAP:-}" ] && deploy_args+=(--ca-bundle-configmap  "$CA_BUNDLE_CONFIGMAP")
 
         # Skip operator when OLM manages it, when explicitly requested, or when it
         # was already deployed by a previous suite in this run.

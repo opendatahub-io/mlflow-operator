@@ -936,16 +936,24 @@ class MLflowDeployer:
                 }
             }
 
-        # Combine all self-signed CA certs (postgres and/or seaweedfs) into a
-        # single CA bundle ConfigMap. The operator mounts and injects the
-        # necessary env vars (PGSSLROOTCERT, REQUESTS_CA_BUNDLE, AWS_CA_BUNDLE).
-        tls_cert_pems = [p for p in [self._postgres_cert_pem, self._seaweedfs_cert_pem] if p]
-        if tls_cert_pems:
-            self._setup_tls_ca_bundle(tls_cert_pems)
-            # On ODH/RHOAI, the MLflow instance picks the certs from odh-trusted-ca-bundle ConfigMap
-            # (which we provided via DSCI), if not available, provide the certs via CR.
-            if not self._dsci_name:
-                mlflow_cr["spec"]["caBundleConfigMap"] = {"name": self._tls_ca_bundle_cm}
+        # Set up the CA trust anchor for TLS endpoints.  Three paths:
+        #  1. Caller supplied --ca-bundle-configmap: use it directly.
+        #  2. Caller supplied --ca-bundle-path: create a ConfigMap from the file.
+        #  3. Self-signed certs generated above: combine into a bundle via DSCI or ConfigMap.
+        if self.args.ca_bundle_configmap:
+            self._tls_ca_bundle_cm = self.args.ca_bundle_configmap
+            mlflow_cr["spec"]["caBundleConfigMap"] = {"name": self._tls_ca_bundle_cm}
+        elif self.args.ca_bundle_path:
+            with open(self.args.ca_bundle_path) as f:
+                ca_pem = f.read()
+            self._create_direct_ca_bundle(ca_pem)
+            mlflow_cr["spec"]["caBundleConfigMap"] = {"name": self._tls_ca_bundle_cm}
+        else:
+            tls_cert_pems = [p for p in [self._postgres_cert_pem, self._seaweedfs_cert_pem] if p]
+            if tls_cert_pems:
+                self._setup_tls_ca_bundle(tls_cert_pems)
+                if not self._dsci_name:
+                    mlflow_cr["spec"]["caBundleConfigMap"] = {"name": self._tls_ca_bundle_cm}
 
         # Write CR to file
         cr_file = Path("/tmp/mlflow-cr.yaml")
@@ -1231,16 +1239,20 @@ class MLflowDeployer:
             if missing:
                 raise ValueError(f"externals3 requires {', '.join(missing)} to be set")
 
+        if self.args.ca_bundle_path and self.args.ca_bundle_configmap:
+            raise ValueError("--ca-bundle-path and --ca-bundle-configmap are mutually exclusive")
+
         if self.args.skip_infrastructure:
             tls_flags = []
             if self.args.postgres_tls:
                 tls_flags.append("--postgres-tls")
             if self.args.seaweedfs_tls:
                 tls_flags.append("--seaweedfs-tls")
-            if tls_flags:
+            has_ca = self.args.ca_bundle_path or self.args.ca_bundle_configmap
+            if tls_flags and not has_ca:
                 raise ValueError(
-                    f"--skip-infrastructure cannot be combined with {', '.join(tls_flags)}: "
-                    "TLS certs are generated during infrastructure deployment"
+                    f"--skip-infrastructure with {', '.join(tls_flags)} requires "
+                    "--ca-bundle-path or --ca-bundle-configmap"
                 )
 
     def deploy(self):
@@ -1316,7 +1328,8 @@ def main():
     parser.add_argument("--cleanup-tls", action="store_true", default=False,
                         help="Remove TLS resources created by a prior deployment and exit. "
                              "Only --namespace, --postgres-tls, and --seaweedfs-tls are "
-                             "used; all other arguments are ignored.")
+                             "used; all other arguments are ignored. Resources from "
+                             "--ca-bundle-configmap are externally managed and not cleaned up.")
 
     # Basic configuration
     parser.add_argument("--namespace", default="mlflow",
@@ -1355,6 +1368,15 @@ def main():
                        help="Enable TLS on the self-deployed PostgreSQL server.")
     parser.add_argument("--seaweedfs-tls", action="store_true", default=False,
                        help="Enable TLS on the self-deployed SeaweedFS S3 endpoint.")
+
+    # External CA bundle — use when connecting to pre-existing TLS-enabled storage
+    # (i.e. --skip-infrastructure + --postgres-tls / --seaweedfs-tls).
+    parser.add_argument("--ca-bundle-path", default="",
+                       help="Path to a PEM CA bundle file. deploy.py creates a ConfigMap from it. "
+                            "Mutually exclusive with --ca-bundle-configmap.")
+    parser.add_argument("--ca-bundle-configmap", default="",
+                       help="Name of an existing ConfigMap containing the CA bundle. "
+                            "Mutually exclusive with --ca-bundle-path.")
 
     # Target platform — selects the appropriate kustomize overlay for infrastructure
     parser.add_argument("--platform", default="base", choices=["base", "openshift"],
