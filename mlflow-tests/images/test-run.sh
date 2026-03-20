@@ -18,6 +18,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+UV_PROJECT_DIR="${UV_PROJECT_DIR:-$REPO_ROOT/mlflow-tests}"
 DEPLOY_PY="${DEPLOY_PY:-$REPO_ROOT/.github/actions/deploy/deploy.py}"
 
 # Source env defaults and CSV-patching helpers
@@ -440,7 +441,7 @@ run_suite() {
                 ;;
         esac
 
-        uv run --no-sync "$DEPLOY_PY" "${deploy_args[@]}" || return $?
+        uv run --project "$UV_PROJECT_DIR" --no-sync "$DEPLOY_PY" "${deploy_args[@]}" || return $?
         _OPERATOR_DEPLOYED=true
     fi
 
@@ -515,7 +516,7 @@ run_suite() {
     echo "  Running tests (output: $results_file)..."
     cd "$SCRIPT_DIR/.."
     local suite_exit=0
-    uv run --no-sync pytest --junit-xml="$results_file" "${PYTEST_ARGS[@]}" || suite_exit=$?
+    uv run --project "$UV_PROJECT_DIR" --no-sync pytest --junit-xml="$results_file" "${PYTEST_ARGS[@]}" || suite_exit=$?
     cd "$SCRIPT_DIR"
 
     return "$suite_exit"
