@@ -85,8 +85,19 @@ jobs:
             serve_artifacts: "false"
             registry_store: "postgres"
             python_version: "3.13"
+          # TLS variant — validates MLflow connects to postgres + s3 over TLS.
+          # Only serve_artifacts=true so the test runner doesn't need direct
+          # TLS access to the backends (MLflow proxies everything).
+          - k8s_version: "v1.34.0"
+            backend_store: "postgres"
+            artifact_storage: "s3"
+            serve_artifacts: "true"
+            registry_store: "postgres"
+            python_version: "3.13"
+            postgres_tls: "true"
+            seaweedfs_tls: "true"
       fail-fast: false # So that failure in 1 type of parameterized job does not cause other jobs to terminate prematurely
-    name: MLflow Integration tests - K8sVersion=${{ matrix.k8s_version }} serve_artifacts=${{ matrix.serve_artifacts }} artifact_storage=${{ matrix.artifact_storage }} backend_store=${{ matrix.backend_store }} registry_store=${{ matrix.registry_store }} python_version=${{ matrix.python_version }}
+    name: MLflow Integration tests - K8sVersion=${{ matrix.k8s_version }} serve_artifacts=${{ matrix.serve_artifacts }} artifact_storage=${{ matrix.artifact_storage }} backend_store=${{ matrix.backend_store }} registry_store=${{ matrix.registry_store }} python_version=${{ matrix.python_version }} postgres_tls=${{ matrix.postgres_tls || 'false' }} seaweedfs_tls=${{ matrix.seaweedfs_tls || 'false' }}
 
     steps:
       - name: Checkout repository
@@ -140,6 +151,8 @@ jobs:
           serve_artifacts: ${{ inputs.serve_artifacts || matrix.serve_artifacts }}
           s3_access_key: ${{ env.AWS_ACCESS_KEY_ID }}
           s3_secret_key: ${{ env.AWS_SECRET_ACCESS_KEY }}
+          postgres_tls: ${{ matrix.postgres_tls || 'false' }}
+          seaweedfs_tls: ${{ matrix.seaweedfs_tls || 'false' }}
 
       - name: Verify deployment
         run: |
@@ -279,7 +292,7 @@ jobs:
         id: upload-report
         if: (!cancelled())
         with:
-          name: integration-test-results-${{ matrix.k8s_version }}-${{ matrix.backend_store }}-${{ matrix.registry_store }}-${{ matrix.artifact_storage }}-${{ matrix.serve_artifacts }}-${{ matrix.python_version }}
+          name: integration-test-results-${{ matrix.k8s_version }}-${{ matrix.backend_store }}-${{ matrix.registry_store }}-${{ matrix.artifact_storage }}-${{ matrix.serve_artifacts }}-${{ matrix.python_version }}-postgres_tls_${{ matrix.postgres_tls || 'false' }}-seaweedfs_tls_${{ matrix.seaweedfs_tls || 'false' }}
           path: test-results/${{ env.HTML_REPORT }}
           retention-days: 30
 
@@ -321,7 +334,7 @@ jobs:
         uses: actions/upload-artifact@v4
         if: ${{ steps.collect-logs.outcome == 'success' && !cancelled() }}
         with:
-          name: debug-logs-${{ matrix.k8s_version }}-${{ matrix.backend_store }}-${{ matrix.registry_store }}-${{ matrix.artifact_storage }}-${{ matrix.serve_artifacts }}-${{ matrix.python_version }}
+          name: debug-logs-${{ matrix.k8s_version }}-${{ matrix.backend_store }}-${{ matrix.registry_store }}-${{ matrix.artifact_storage }}-${{ matrix.serve_artifacts }}-${{ matrix.python_version }}-postgres_tls_${{ matrix.postgres_tls || 'false' }}-seaweedfs_tls_${{ matrix.seaweedfs_tls || 'false' }} 
           path: debug-logs/
           retention-days: 7
 

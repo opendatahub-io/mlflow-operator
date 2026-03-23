@@ -5,6 +5,8 @@ metadata:
 spec:
   template:
     spec:
+      securityContext:
+        fsGroup: 999
       containers:
         - name: postgres
           # Override the entrypoint to enable SSL using certs from the
