@@ -85,8 +85,25 @@ jobs:
             serve_artifacts: "false"
             registry_store: "postgres"
             python_version: "3.13"
+          # TLS variants — postgres + s3 with self-signed certs
+          - k8s_version: "v1.34.0"
+            backend_store: "postgres"
+            artifact_storage: "s3"
+            serve_artifacts: "true"
+            registry_store: "postgres"
+            python_version: "3.13"
+            postgres_tls: "true"
+            seaweedfs_tls: "true"
+          - k8s_version: "v1.34.0"
+            backend_store: "postgres"
+            artifact_storage: "s3"
+            serve_artifacts: "false"
+            registry_store: "postgres"
+            python_version: "3.13"
+            postgres_tls: "true"
+            seaweedfs_tls: "true"
       fail-fast: false # So that failure in 1 type of parameterized job does not cause other jobs to terminate prematurely
-    name: MLflow Integration tests - K8sVersion=${{ matrix.k8s_version }} serve_artifacts=${{ matrix.serve_artifacts }} artifact_storage=${{ matrix.artifact_storage }} backend_store=${{ matrix.backend_store }} registry_store=${{ matrix.registry_store }} python_version=${{ matrix.python_version }}
+    name: MLflow Integration tests - K8sVersion=${{ matrix.k8s_version }} serve_artifacts=${{ matrix.serve_artifacts }} artifact_storage=${{ matrix.artifact_storage }} backend_store=${{ matrix.backend_store }} registry_store=${{ matrix.registry_store }} python_version=${{ matrix.python_version }}${{ matrix.postgres_tls == 'true' && ' TLS' || '' }}
 
     steps:
       - name: Checkout repository
@@ -140,6 +157,8 @@ jobs:
           serve_artifacts: ${{ inputs.serve_artifacts || matrix.serve_artifacts }}
           s3_access_key: ${{ env.AWS_ACCESS_KEY_ID }}
           s3_secret_key: ${{ env.AWS_SECRET_ACCESS_KEY }}
+          postgres_tls: ${{ matrix.postgres_tls || 'false' }}
+          seaweedfs_tls: ${{ matrix.seaweedfs_tls || 'false' }}
 
       - name: Verify deployment
         run: |
@@ -179,7 +198,11 @@ jobs:
           echo "✅ PostgreSQL accessible at localhost:5432"
 
           # Set backend store URI for tests
-          echo "MLFLOW_BACKEND_STORE_URI=postgresql://postgres:mysecretpassword@localhost:5432/mydatabase" >> "$GITHUB_ENV"
+          SSLMODE_PARAM=""
+          if [ "${{ matrix.postgres_tls }}" = "true" ]; then
+            SSLMODE_PARAM="?sslmode=require"
+          fi
+          echo "MLFLOW_BACKEND_STORE_URI=postgresql://postgres:mysecretpassword@localhost:5432/mydatabase${SSLMODE_PARAM}" >> "$GITHUB_ENV"
 
       - name: Setup MinIO port forward
         id: setup-minio
@@ -198,10 +221,15 @@ jobs:
 
           # Give port-forward a moment to establish
           sleep 5
-          echo "✅ MinIO accessible at http://localhost:9000"
-
-          # Set output for other steps to use
-          echo "minio_localhost_endpoint=http://localhost:9000" >> "$GITHUB_OUTPUT"
+          if [ "${{ matrix.seaweedfs_tls }}" = "true" ]; then
+            echo "✅ MinIO accessible at https://localhost:9000 (TLS)"
+            echo "minio_localhost_endpoint=https://localhost:9000" >> "$GITHUB_OUTPUT"
+            echo "AWS_CA_BUNDLE=" >> "$GITHUB_ENV"
+            echo "MLFLOW_S3_IGNORE_TLS=true" >> "$GITHUB_ENV"
+          else
+            echo "✅ MinIO accessible at http://localhost:9000"
+            echo "minio_localhost_endpoint=http://localhost:9000" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Extract Kubernetes admin token
         id: extract-token
