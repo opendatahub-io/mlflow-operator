@@ -151,13 +151,15 @@ func TestRenderChart(t *testing.T) {
 						for i, arg := range args {
 							if arg == "--allowed-hosts" {
 								hasAllowedHosts = true
-								if i+1 < len(args) {
-									hosts := args[i+1]
-									if hosts == "" {
-										t.Error("--allowed-hosts flag present but hosts list is empty")
-									}
-									t.Logf("Allowed hosts: %s", hosts)
+								if i+1 >= len(args) {
+									t.Error("--allowed-hosts flag present but missing hosts list value")
+									break
 								}
+								hosts := args[i+1]
+								if hosts == "" {
+									t.Error("--allowed-hosts flag present but hosts list is empty")
+								}
+								t.Logf("Allowed hosts: %s", hosts)
 								break
 							}
 						}
