@@ -25,6 +25,7 @@ The MLflow Operator automates the deployment and lifecycle management of MLflow 
 - docker version 17.03+.
 - kubectl version v1.11.3+.
 - Access to a Kubernetes v1.11.3+ cluster.
+- Python 3.11+ with `kubernetes` and `PyYAML` installed when using `make deploy-kind` or running `./.github/actions/deploy/deploy.py` directly.
 
 ### Deployment Modes
 
@@ -111,6 +112,8 @@ make deploy-kind ARTIFACT_STORAGE=s3
 # Deploy with full production-like setup
 make deploy-kind BACKEND_STORE=postgres REGISTRY_STORE=postgres ARTIFACT_STORAGE=s3
 ```
+
+> **NOTE**: The GitHub deploy action and the `mlflow-tests` test image already install the Python dependencies required by `deploy.py`. For local direct use, install them with `python3 -m pip install kubernetes pyyaml`.
 
 For detailed instructions, advanced configuration options, and troubleshooting, see the [Kind Deployment Guide](docs/kind-deployment.md).
 
