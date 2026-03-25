@@ -315,7 +315,7 @@ func TestRenderChart_CABundle_ODHOnly(t *testing.T) {
 
 	// Verify file-based env vars point to combined CA bundle
 	expectedFilePath := caCombinedBundle
-	fileBasedEnvVars := []string{"SSL_CERT_FILE", "REQUESTS_CA_BUNDLE", "AWS_CA_BUNDLE", "PGSSLROOTCERT"}
+	fileBasedEnvVars := []string{"SSL_CERT_FILE", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE", "AWS_CA_BUNDLE", "PGSSLROOTCERT"}
 	for _, envName := range fileBasedEnvVars {
 		if foundEnvVars[envName] != expectedFilePath {
 			t.Errorf("%s = %v, want %v", envName, foundEnvVars[envName], expectedFilePath)
@@ -370,7 +370,7 @@ func TestRenderChart_NoCABundle(t *testing.T) {
 	container := containers[0].(map[string]interface{})
 	envVars, _, _ := unstructured.NestedSlice(container, "env")
 
-	caBundleEnvVars := []string{"SSL_CERT_FILE", "REQUESTS_CA_BUNDLE", "AWS_CA_BUNDLE", "PGSSLROOTCERT"}
+	caBundleEnvVars := []string{"SSL_CERT_FILE", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE", "AWS_CA_BUNDLE", "PGSSLROOTCERT"}
 	for _, env := range envVars {
 		envMap := env.(map[string]interface{})
 		name := envMap["name"].(string)

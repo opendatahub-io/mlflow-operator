@@ -82,14 +82,15 @@ func TestMlflowToHelmValues_Resources(t *testing.T) {
 			values, err := renderer.mlflowToHelmValues(tt.mlflow, "test-namespace", RenderOptions{})
 			g.Expect(err).NotTo(gomega.HaveOccurred())
 
-			resources, ok := values["resources"].(map[string]interface{})
+			rawResources, exists := values["resources"]
 			if !tt.wantResourcesSet {
-				if ok {
+				if exists {
 					t.Error("resources should not be set when not configured in CR spec")
 				}
 				return
 			}
 
+			resources, ok := rawResources.(map[string]interface{})
 			if !ok {
 				t.Fatal("resources not found in values or wrong type")
 			}

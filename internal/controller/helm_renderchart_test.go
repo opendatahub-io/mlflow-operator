@@ -81,10 +81,12 @@ func TestRenderChart(t *testing.T) {
 			namespace: "test-ns",
 			wantErr:   false,
 			validateObjs: func(t *testing.T, objs []*unstructured.Unstructured) {
+				foundDeployment := false
 				for _, obj := range objs {
 					if obj.GetKind() != deploymentKind {
 						continue
 					}
+					foundDeployment = true
 
 					containers, found, err := unstructured.NestedSlice(obj.Object, "spec", "template", "spec", "containers")
 					if err != nil || !found || len(containers) == 0 {
@@ -110,6 +112,9 @@ func TestRenderChart(t *testing.T) {
 						t.Errorf("readinessProbe path = %s, want %s", readinessPath, expectedPath)
 					}
 				}
+				if !foundDeployment {
+					t.Fatal("Deployment not found in rendered objects")
+				}
 			},
 		},
 		{
@@ -127,8 +132,10 @@ func TestRenderChart(t *testing.T) {
 			namespace: "test-ns",
 			wantErr:   false,
 			validateObjs: func(t *testing.T, objs []*unstructured.Unstructured) {
+				foundDeployment := false
 				for _, obj := range objs {
 					if obj.GetKind() == deploymentKind {
+						foundDeployment = true
 						containers, found, err := unstructured.NestedSlice(obj.Object, "spec", "template", "spec", "containers")
 						if err != nil || !found || len(containers) == 0 {
 							t.Fatalf("Failed to get containers from deployment: found=%v, err=%v", found, err)
@@ -170,6 +177,9 @@ func TestRenderChart(t *testing.T) {
 							t.Errorf("%s not found in deployment args", staticPrefixArg)
 						}
 					}
+				}
+				if !foundDeployment {
+					t.Fatal("Deployment not found in rendered objects")
 				}
 			},
 		},
