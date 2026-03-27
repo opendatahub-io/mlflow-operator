@@ -170,10 +170,10 @@ TLS is terminated inside the MLflow container using uvicorn options. Certificate
 
 The operator requires two levels of RBAC permissions:
 
-- **Cluster-scoped** (`config/rbac/role.yaml`): Manages the MLflow custom resource lifecycle, enumerates namespaces, reads artifact storage credentials, watches MLflowConfig overrides, manages ClusterRoles/ClusterRoleBindings for MLflow server pods, and handles OpenShift console links and Gateway API routes.
+- **Cluster-scoped** (`config/rbac/role.yaml`): Manages the MLflow custom resource lifecycle, enumerates namespaces, reads and watches the well-known artifact storage secret, watches MLflowConfig overrides, manages ClusterRoles/ClusterRoleBindings for MLflow server pods, and handles OpenShift console links and Gateway API routes.
 - **Namespace-scoped** (`config/rbac/namespace_role.yaml`): Manages deployment resources (ConfigMaps, Secrets, ServiceAccounts, Services, PVCs, Deployments, NetworkPolicies, ServiceMonitors) within the target namespace.
 
-The operator also creates a shared `mlflow` ClusterRole for the MLflow server pod itself, granting read-only cluster-wide access to namespaces, a single well-known secret (`mlflow-artifact-connection`), and MLflowConfig CRs. These cannot be scoped to a single namespace because MLflow serves requests across namespaces.
+The operator also creates a shared `mlflow` ClusterRole for the MLflow server pod itself, granting read-only cluster-wide access to namespaces, the well-known `mlflow-artifact-connection` secret, and MLflowConfig CRs. Secret access includes watch-based reads so namespace-specific artifact override updates can be observed across workspaces. These cannot be scoped to a single namespace because MLflow serves requests across namespaces.
 
 See the manifest files for detailed per-resource documentation.
 
@@ -270,6 +270,8 @@ spec:
 Use `apiVersion: mlflow.kubeflow.org/v1` for `MLflowConfig` resources.
 The `metadata.name` must be `mlflow` in every namespace where you want to apply overrides.
 The `spec.artifactRootSecret` must be `mlflow-artifact-connection` to keep Secret access tightly scoped.
+The operator still installs this CRD as part of `make install` and the kustomize overlays, but it is now kept as a vendored local copy at `config/crd/mlflow.kubeflow.org_mlflowconfigs.yaml`, refreshed from the upstream `mlflow-kubernetes-plugins` repository.
+The vendored upstream schema also validates `spec.artifactRootPath` more strictly: it must be relative, must not start with `/`, and must not contain `..` path segments.
 
 ### Custom CA Bundles
 
@@ -302,7 +304,7 @@ When CA bundles are present (platform or custom), PostgreSQL connections use `PG
 See the [config/samples](./config/samples/) directory for complete examples:
 - `mlflow_v1_mlflow.yaml` - OpenShift deployment with local storage and service-ca TLS
 - `mlflow_v1_mlflow_remote_storage.yaml` - Remote PostgreSQL + S3 storage with horizontal scaling
-- `mlflow_v1_mlflowconfig.yaml` - Namespace-scoped artifact storage override
+- `mlflow_v1_mlflowconfig.yaml` - Namespace-scoped artifact storage override using the upstream `MLflowConfig` CRD
 
 ## Troubleshooting
 

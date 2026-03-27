@@ -5,20 +5,19 @@
 #   - kubectl must be configured to connect to the cluster
 #   - CRD manifests must be generated (run 'make manifests' first)
 
-set -e
+set -euo pipefail
 
 # Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
-# Function to parse CRD configuration string (name:crd_file:crd_resource_name)
-# Sets global variables: crd_name, crd_file, crd_resource_name
+# Function to parse CRD configuration string (name|crd_source|crd_resource_name)
+# Sets global variables: crd_name, crd_source, crd_resource_name
 parse_crd_config() {
     local crd_config=$1
     local old_ifs=$IFS
-    IFS=':' read -r crd_name crd_file crd_resource_name <<< "$crd_config"
+    IFS='|' read -r crd_name crd_source crd_resource_name <<< "$crd_config"
     IFS=$old_ifs
 }
 
@@ -44,21 +43,19 @@ echo ""
 
 # Discover all sample files
 echo "Discovering sample files..."
-MLFLOW_SAMPLES=$(grep -l "kind: MLflow" config/samples/*.yaml 2>/dev/null | grep -v mlflowconfig || true)
-MLFLOWCONFIG_SAMPLES=$(grep -l "kind: MLflowConfig" config/samples/*.yaml 2>/dev/null || true)
+mapfile -t MLFLOW_SAMPLES < <(grep -l "kind: MLflow" config/samples/*.yaml 2>/dev/null | grep -v mlflowconfig || true)
+mapfile -t MLFLOWCONFIG_SAMPLES < <(grep -l "kind: MLflowConfig" config/samples/*.yaml 2>/dev/null || true)
 
-if [ -z "$MLFLOW_SAMPLES" ] && [ -z "$MLFLOWCONFIG_SAMPLES" ]; then
+if [ "${#MLFLOW_SAMPLES[@]}" -eq 0 ] && [ "${#MLFLOWCONFIG_SAMPLES[@]}" -eq 0 ]; then
     echo -e "${RED}ERROR: No samples found in config/samples/${NC}"
     exit 1
 fi
 
-if [ -n "$MLFLOW_SAMPLES" ]; then
-    count=$(echo "$MLFLOW_SAMPLES" | grep -c . || echo "0")
-    echo "Found $count MLflow sample(s)"
+if [ "${#MLFLOW_SAMPLES[@]}" -gt 0 ]; then
+    echo "Found ${#MLFLOW_SAMPLES[@]} MLflow sample(s)"
 fi
-if [ -n "$MLFLOWCONFIG_SAMPLES" ]; then
-    count=$(echo "$MLFLOWCONFIG_SAMPLES" | grep -c . || echo "0")
-    echo "Found $count MLflowConfig sample(s)"
+if [ "${#MLFLOWCONFIG_SAMPLES[@]}" -gt 0 ]; then
+    echo "Found ${#MLFLOWCONFIG_SAMPLES[@]} MLflowConfig sample(s)"
 fi
 echo ""
 
@@ -68,24 +65,28 @@ echo ""
 echo "Step 1: Installing CRDs and validating samples"
 echo "----------------------------------------------"
 
-# CRD configuration: (name:crd_file:crd_resource_name)
+# CRD configuration: (name|crd_source|crd_resource_name)
 CRDS=(
-    "MLflow:config/crd/bases/mlflow.opendatahub.io_mlflows.yaml:mlflows.mlflow.opendatahub.io"
-    "MLflowConfig:config/crd/bases/mlflow.kubeflow.org_mlflowconfigs.yaml:mlflowconfigs.mlflow.kubeflow.org"
+    "MLflow|config/crd/bases/mlflow.opendatahub.io_mlflows.yaml|mlflows.mlflow.opendatahub.io"
+    "MLflowConfig|config/crd/mlflow.kubeflow.org_mlflowconfigs.yaml|mlflowconfigs.mlflow.kubeflow.org"
 )
 
 # Install CRDs
 for crd_config in "${CRDS[@]}"; do
     parse_crd_config "$crd_config"
     
-    if [ ! -f "$crd_file" ]; then
-        echo -e "${RED}ERROR: CRD file not found at $crd_file${NC}"
-        echo "Run 'make manifests' to generate CRD files"
+    if [ ! -f "$crd_source" ]; then
+        echo -e "${RED}ERROR: CRD file not found at $crd_source${NC}"
+        if [ "$crd_name" = "MLflow" ]; then
+            echo "Run 'make manifests' to generate CRD files"
+        else
+            echo "Ensure the vendored CRD is checked in at $crd_source"
+        fi
         exit 1
     fi
     
     echo "Installing $crd_name CRD..."
-    if kubectl apply -f "$crd_file"; then
+    if kubectl apply -f "$crd_source"; then
         echo -e "${GREEN}✅ $crd_name CRD installed successfully${NC}"
     else
         echo -e "${RED}❌ $crd_name CRD installation failed${NC}"
@@ -108,7 +109,7 @@ echo ""
 
 # Validate all samples
 FAILED=0
-for sample in $MLFLOW_SAMPLES $MLFLOWCONFIG_SAMPLES; do
+for sample in "${MLFLOW_SAMPLES[@]}" "${MLFLOWCONFIG_SAMPLES[@]}"; do
     echo "Validating $sample..."
     if kubectl apply --dry-run=server -f "$sample" > /dev/null 2>&1; then
         echo -e "${GREEN}✅ $sample is valid${NC}"
@@ -144,7 +145,7 @@ echo ""
 
 # Check that all sample files are mentioned in AGENTS.md
 MISSING=0
-for sample in $MLFLOW_SAMPLES $MLFLOWCONFIG_SAMPLES; do
+for sample in "${MLFLOW_SAMPLES[@]}" "${MLFLOWCONFIG_SAMPLES[@]}"; do
     sample_name=$(basename "$sample")
     if ! grep -q "$sample_name" AGENTS.md; then
         echo -e "${RED}❌ Sample $sample_name is not documented in AGENTS.md${NC}"
@@ -170,7 +171,7 @@ echo "------------------------------------------------------------"
 
 # Check that all samples are either in resources or commented in kustomization.yaml
 MISSING=0
-for sample in $MLFLOW_SAMPLES $MLFLOWCONFIG_SAMPLES; do
+for sample in "${MLFLOW_SAMPLES[@]}" "${MLFLOWCONFIG_SAMPLES[@]}"; do
     sample_name=$(basename "$sample")
     if ! grep -q "$sample_name" config/samples/kustomization.yaml; then
         echo -e "${RED}❌ Sample $sample_name is not referenced in kustomization.yaml${NC}"

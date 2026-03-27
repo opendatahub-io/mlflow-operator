@@ -213,6 +213,42 @@ func TestRenderChart(t *testing.T) {
 						if obj.GetName() != expectedClusterRoleName {
 							t.Errorf("ClusterRole name = %s, want %s (should be static, shared across all MLflow instances)", obj.GetName(), expectedClusterRoleName)
 						}
+
+						rules, found, err := unstructured.NestedSlice(obj.Object, "rules")
+						if err != nil || !found {
+							t.Fatalf("Failed to get ClusterRole rules: found=%v, err=%v", found, err)
+						}
+
+						foundArtifactSecretRule := false
+						for _, rule := range rules {
+							ruleMap, ok := rule.(map[string]interface{})
+							if !ok {
+								continue
+							}
+
+							resources, _, _ := unstructured.NestedStringSlice(ruleMap, "resources")
+							resourceNames, _, _ := unstructured.NestedStringSlice(ruleMap, "resourceNames")
+							if len(resources) == 1 && resources[0] == "secrets" &&
+								len(resourceNames) == 1 && resourceNames[0] == "mlflow-artifact-connection" {
+								foundArtifactSecretRule = true
+
+								verbs, found, err := unstructured.NestedStringSlice(ruleMap, "verbs")
+								if err != nil || !found {
+									t.Fatalf("Failed to get secret rule verbs: found=%v, err=%v", found, err)
+								}
+
+								expectedVerbs := map[string]bool{"get": true, "list": true, "watch": true}
+								for _, verb := range verbs {
+									delete(expectedVerbs, verb)
+								}
+								if len(expectedVerbs) != 0 {
+									t.Errorf("secret rule missing verbs: %v", expectedVerbs)
+								}
+							}
+						}
+						if !foundArtifactSecretRule {
+							t.Error("ClusterRole secret rule for mlflow-artifact-connection not found")
+						}
 					case "ClusterRoleBinding":
 						foundClusterRoleBinding = true
 						if obj.GetName() != expectedBindingName {

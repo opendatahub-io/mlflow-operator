@@ -16,7 +16,7 @@ rules:
   - apiGroups: [""]
     resources: ["secrets"]
     resourceNames: ["mlflow-artifact-connection"]
-    verbs: ["get"]
+    verbs: ["get", "list", "watch"]
   # Required for workspace-aware configuration lookups
   - apiGroups: ["mlflow.kubeflow.org"]
     resources: ["mlflowconfigs"]
