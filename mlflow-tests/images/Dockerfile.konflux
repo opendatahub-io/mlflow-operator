@@ -1,0 +1,55 @@
+# Konflux-compatible Dockerfile for MLflow integration test image.
+# Uses ubi-minimal for smaller image size. Non-hermetic (downloads at build time).
+
+FROM registry.access.redhat.com/ubi9/ubi-minimal:9.7
+
+ENV KUBECONFIG=/mlflow/.kube/config
+ENV DEPLOY_PY=/mlflow/.github/actions/deploy/deploy.py
+
+USER root
+
+ARG OC_VERSION=4.18.3
+ARG KUSTOMIZE_VERSION=5.8.0
+
+RUN microdnf install -y --setopt=tsflags=nodocs \
+      python3.12 python3.12-pip \
+      tar gzip git && \
+    microdnf clean all && \
+    ln -sf /usr/bin/python3.12 /usr/bin/python3
+
+RUN curl -fsSL "https://mirror.openshift.com/pub/openshift-v4/clients/ocp/${OC_VERSION}/openshift-client-linux.tar.gz" \
+      -o /tmp/oc-client.tar.gz && \
+    tar -xf /tmp/oc-client.tar.gz -C /tmp && \
+    cp /tmp/oc /usr/local/bin/oc && \
+    cp /tmp/kubectl /usr/local/bin/kubectl && \
+    rm -f /tmp/oc-client.tar.gz /tmp/oc /tmp/kubectl
+
+RUN curl -fsSL "https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize/v${KUSTOMIZE_VERSION}/kustomize_v${KUSTOMIZE_VERSION}_linux_amd64.tar.gz" \
+      -o /tmp/kustomize.tar.gz && \
+    tar -xf /tmp/kustomize.tar.gz -C /usr/local/bin && \
+    rm -f /tmp/kustomize.tar.gz
+
+RUN pip3.12 install --no-cache-dir uv==0.9.7
+
+RUN mkdir -p /mlflow && chown 1001:0 /mlflow
+
+USER 1001
+
+ENV HOME=/mlflow
+
+EXPOSE 8080
+
+WORKDIR /mlflow
+
+COPY --chown=1001:1001 ./mlflow-tests/uv.lock        ./mlflow-tests/
+COPY --chown=1001:1001 ./mlflow-tests/pyproject.toml ./mlflow-tests/
+COPY --chown=1001:1001 ./mlflow-tests/README.md      ./mlflow-tests/
+COPY --chown=1001:1001 ./mlflow-tests/src            ./mlflow-tests/src
+
+RUN cd mlflow-tests && VIRTUAL_ENV="" uv sync --locked
+
+COPY --chown=1001:1001 .github/actions/deploy/deploy.py ./.github/actions/deploy/deploy.py
+COPY --chown=1001:1001 ./config ./config
+COPY --chown=1001:1001 ./mlflow-tests ./mlflow-tests
+
+ENTRYPOINT ["bash", "mlflow-tests/images/test-run.sh"]
