@@ -120,7 +120,7 @@ mlflow:
   workspaceStoreUri: "kubernetes://"
   # Optional label selector to determine which namespaces are exposed as MLflow workspaces.
   # This becomes the MLFLOW_K8S_WORKSPACE_LABEL_SELECTOR environment variable.
-  # workspaceLabelSelector: ""
+  # workspaceLabelSelector: "mlflow-enabled=true"
   # Enable artifact serving
   # When enabled, adds the --serve-artifacts flag to the MLflow server and uses artifactsDestination
   # to configure where artifacts are stored. This allows clients to log and retrieve artifacts
