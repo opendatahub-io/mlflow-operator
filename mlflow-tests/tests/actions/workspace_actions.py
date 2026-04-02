@@ -13,31 +13,8 @@ from ..shared import TestContext
 logger = logging.getLogger(__name__)
 
 
-def _extract_names(obj) -> set[str]:
-    if isinstance(obj, list):
-        items = obj
-    elif isinstance(obj, dict):
-        items = obj.get("workspaces") or obj.get("items") or obj.get("namespaces") or []
-    else:
-        items = []
-
-    out: set[str] = set()
-    for item in items:
-        if not isinstance(item, dict):
-            continue
-
-        name = item.get("name")
-        if isinstance(name, str):
-            out.add(name)
-            continue
-
-        metadata = item.get("metadata")
-        if isinstance(metadata, dict):
-            meta_name = metadata.get("name")
-            if isinstance(meta_name, str):
-                out.add(meta_name)
-
-    return out
+def _extract_names(payload: dict) -> set[str]:
+    return {ws["name"] for ws in payload.get("workspaces", [])}
 
 
 def action_list_workspaces(test_context: TestContext) -> None:
