@@ -9,6 +9,11 @@ from .actions import (
     action_create_registered_model,
     action_delete_registered_model,
 )
+from .shared.resource_map import (
+    PRIMARY_RESOURCE_REF,
+    PRIMARY_RESOURCE_SLOT,
+    SECONDARY_RESOURCE_SLOT,
+)
 from .validations.model_validations import (
     validate_model_retrieved,
     validate_model_created,
@@ -59,6 +64,35 @@ class TestRegisteredModels(TestBase):
             )
         ),
         TestData(
+            test_name="Validate that user with GET permission scoped to one registered model can get that model",
+            user_info=UserInfo(
+                workspace=Config.WORKSPACES[0],
+                verbs=[KubeVerb.GET],
+                resource_types=[ResourceType.REGISTERED_MODELS],
+                resource_names={ResourceType.REGISTERED_MODELS: [PRIMARY_RESOURCE_REF]},
+            ),
+            workspace_to_use=Config.WORKSPACES[0],
+            test_steps=TestStep(
+                action_func=action_get_registered_model,
+                validate_func=validate_model_retrieved,
+            ),
+        ),
+        TestData(
+            test_name="Validate that user with GET permission scoped to one registered model cannot get a different model in the same workspace",
+            user_info=UserInfo(
+                workspace=Config.WORKSPACES[0],
+                verbs=[KubeVerb.GET],
+                resource_types=[ResourceType.REGISTERED_MODELS],
+                resource_names={ResourceType.REGISTERED_MODELS: [PRIMARY_RESOURCE_REF]},
+            ),
+            workspace_to_use=Config.WORKSPACES[0],
+            resource_slot=SECONDARY_RESOURCE_SLOT,
+            test_steps=TestStep(
+                action_func=action_get_registered_model,
+                validate_func=validate_authentication_denied,
+            ),
+        ),
+        TestData(
             test_name="Validate that user with CREATE permission can create registered model",
             user_info=UserInfo(workspace=Config.WORKSPACES[0], verbs=[KubeVerb.CREATE], resource_types=[ResourceType.REGISTERED_MODELS]),
             workspace_to_use=Config.WORKSPACES[0],
@@ -85,6 +119,8 @@ class TestRegisteredModels(TestBase):
                 validate_func=validate_authentication_denied
             )
         ),
+        # Preserve the existing explicit standalone scenarios in addition to the
+        # surrounding negative cases so the suite does not reduce prior coverage.
         TestData(
             test_name="Validate that user with CREATE permission can create registered model",
             user_info=UserInfo(workspace=Config.WORKSPACES[0], verbs=[KubeVerb.CREATE], resource_types=[ResourceType.REGISTERED_MODELS]),
@@ -112,15 +148,29 @@ class TestRegisteredModels(TestBase):
                 validate_func=validate_authentication_denied
             )
         ),
-
         # Additional negative test cases
         TestData(
             test_name="User with GET permission cannot delete registered model",
-            user_info=UserInfo(workspace=Config.WORKSPACES[0], verbs=[KubeVerb.GET], resource_types=[ResourceType.REGISTERED_MODELS]),
             workspace_to_use=Config.WORKSPACES[0],
             test_steps = [
-                TestStep(action_func=action_get_registered_model),  # First get a model to set up context
-                TestStep(action_func=action_delete_registered_model, validate_func=validate_authentication_denied)
+                TestStep(
+                    action_func=action_create_registered_model,
+                    validate_func=validate_model_created,
+                    user_info=UserInfo(
+                        workspace=Config.WORKSPACES[0],
+                        verbs=[KubeVerb.CREATE],
+                        resource_types=[ResourceType.REGISTERED_MODELS],
+                    ),
+                ),
+                TestStep(
+                    action_func=action_delete_registered_model,
+                    validate_func=validate_authentication_denied,
+                    user_info=UserInfo(
+                        workspace=Config.WORKSPACES[0],
+                        verbs=[KubeVerb.GET],
+                        resource_types=[ResourceType.REGISTERED_MODELS],
+                    ),
+                ),
             ]
         ),
         TestData(
@@ -161,11 +211,26 @@ class TestRegisteredModels(TestBase):
         ),
         TestData(
             test_name="User with LIST permission cannot delete registered model without DELETE permission",
-            user_info=UserInfo(workspace=Config.WORKSPACES[0], verbs=[KubeVerb.LIST], resource_types=[ResourceType.REGISTERED_MODELS]),
             workspace_to_use=Config.WORKSPACES[0],
             test_steps = [
-                TestStep(action_func=action_get_registered_model),  # First get a model to set up context
-                TestStep(action_func=action_delete_registered_model, validate_func=validate_authentication_denied)
+                TestStep(
+                    action_func=action_create_registered_model,
+                    validate_func=validate_model_created,
+                    user_info=UserInfo(
+                        workspace=Config.WORKSPACES[0],
+                        verbs=[KubeVerb.CREATE],
+                        resource_types=[ResourceType.REGISTERED_MODELS],
+                    ),
+                ),
+                TestStep(
+                    action_func=action_delete_registered_model,
+                    validate_func=validate_authentication_denied,
+                    user_info=UserInfo(
+                        workspace=Config.WORKSPACES[0],
+                        verbs=[KubeVerb.LIST],
+                        resource_types=[ResourceType.REGISTERED_MODELS],
+                    ),
+                ),
             ]
         ),
     ]
@@ -193,7 +258,8 @@ class TestRegisteredModels(TestBase):
                 workspace=test_data.user_info.workspace,
                 verbs=test_data.user_info.verbs,
                 resource_types=test_data.user_info.resource_types,
-                subresources=test_data.user_info.subresources
+                subresources=test_data.user_info.subresources,
+                resource_names=test_data.user_info.resource_names,
             )
             logger.info(f"Created user: {user_info.uname}")
             logger.debug(f"Created authenticated MLflow client for user: {user_info.uname}")
@@ -206,6 +272,12 @@ class TestRegisteredModels(TestBase):
             self.test_context.active_workspace = test_data.workspace_to_use
             mlflow.set_workspace(self.test_context.active_workspace)
             logger.info(f"Set active workspace to: {test_data.workspace_to_use}")
+            # Read-path scenarios use the baseline resource selected here; create-step
+            # scenarios may overwrite active_model_name later in the test flow.
+            self._set_active_model_from_map(
+                test_data.workspace_to_use,
+                slot=test_data.resource_slot or PRIMARY_RESOURCE_SLOT,
+            )
 
         # Step 4-5: Execute test steps (actions and validations)
         self._execute_test_steps(test_data=test_data)

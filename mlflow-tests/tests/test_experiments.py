@@ -10,6 +10,11 @@ from .actions import (
     action_create_experiment,
     action_delete_experiment,
 )
+from .shared.resource_map import (
+    PRIMARY_RESOURCE_REF,
+    PRIMARY_RESOURCE_SLOT,
+    SECONDARY_RESOURCE_SLOT,
+)
 from .validations.experiment_validations import (
     validate_experiment_retrieved,
     validate_experiment_created,
@@ -60,6 +65,35 @@ class TestExperiments(TestBase):
             )
         ),
         TestData(
+            test_name="Validate that user with GET permission scoped to one experiment can get that experiment",
+            user_info=UserInfo(
+                workspace=Config.WORKSPACES[0],
+                verbs=[KubeVerb.GET],
+                resource_types=[ResourceType.EXPERIMENTS],
+                resource_names={ResourceType.EXPERIMENTS: [PRIMARY_RESOURCE_REF]},
+            ),
+            workspace_to_use=Config.WORKSPACES[0],
+            test_steps=TestStep(
+                action_func=action_get_experiment,
+                validate_func=validate_experiment_retrieved,
+            ),
+        ),
+        TestData(
+            test_name="Validate that user with GET permission scoped to one experiment cannot get a different experiment in the same workspace",
+            user_info=UserInfo(
+                workspace=Config.WORKSPACES[0],
+                verbs=[KubeVerb.GET],
+                resource_types=[ResourceType.EXPERIMENTS],
+                resource_names={ResourceType.EXPERIMENTS: [PRIMARY_RESOURCE_REF]},
+            ),
+            workspace_to_use=Config.WORKSPACES[0],
+            resource_slot=SECONDARY_RESOURCE_SLOT,
+            test_steps=TestStep(
+                action_func=action_get_experiment,
+                validate_func=validate_authentication_denied,
+            ),
+        ),
+        TestData(
             test_name="Validate that user with CREATE permission can create experiment",
             user_info=UserInfo(workspace=Config.WORKSPACES[0], verbs=[KubeVerb.CREATE], resource_types=[ResourceType.EXPERIMENTS]),
             workspace_to_use=Config.WORKSPACES[0],
@@ -90,12 +124,27 @@ class TestExperiments(TestBase):
         # Additional negative test cases
         TestData(
             test_name="User with GET permission cannot delete experiment",
-            user_info=UserInfo(workspace=Config.WORKSPACES[0], verbs=[KubeVerb.GET], resource_types=[ResourceType.EXPERIMENTS]),
             workspace_to_use=Config.WORKSPACES[0],
-            test_steps = TestStep(
-                action_func=action_delete_experiment,
-                validate_func=validate_authentication_denied
-            )
+            test_steps = [
+                TestStep(
+                    action_func=action_create_experiment,
+                    validate_func=validate_experiment_created,
+                    user_info=UserInfo(
+                        workspace=Config.WORKSPACES[0],
+                        verbs=[KubeVerb.CREATE],
+                        resource_types=[ResourceType.EXPERIMENTS],
+                    ),
+                ),
+                TestStep(
+                    action_func=action_delete_experiment,
+                    validate_func=validate_authentication_denied,
+                    user_info=UserInfo(
+                        workspace=Config.WORKSPACES[0],
+                        verbs=[KubeVerb.GET],
+                        resource_types=[ResourceType.EXPERIMENTS],
+                    ),
+                ),
+            ]
         ),
         TestData(
             test_name="User with CREATE permission cannot delete experiment without DELETE permission",
@@ -117,12 +166,27 @@ class TestExperiments(TestBase):
         ),
         TestData(
             test_name="User with LIST permission cannot delete experiment without DELETE permission",
-            user_info=UserInfo(workspace=Config.WORKSPACES[0], verbs=[KubeVerb.LIST], resource_types=[ResourceType.EXPERIMENTS]),
             workspace_to_use=Config.WORKSPACES[0],
-            test_steps = TestStep(
-                action_func=action_delete_experiment,
-                validate_func=validate_authentication_denied
-            )
+            test_steps = [
+                TestStep(
+                    action_func=action_create_experiment,
+                    validate_func=validate_experiment_created,
+                    user_info=UserInfo(
+                        workspace=Config.WORKSPACES[0],
+                        verbs=[KubeVerb.CREATE],
+                        resource_types=[ResourceType.EXPERIMENTS],
+                    ),
+                ),
+                TestStep(
+                    action_func=action_delete_experiment,
+                    validate_func=validate_authentication_denied,
+                    user_info=UserInfo(
+                        workspace=Config.WORKSPACES[0],
+                        verbs=[KubeVerb.LIST],
+                        resource_types=[ResourceType.EXPERIMENTS],
+                    ),
+                ),
+            ]
         ),
     ]
 
@@ -148,7 +212,8 @@ class TestExperiments(TestBase):
                 workspace=test_data.user_info.workspace,
                 verbs=test_data.user_info.verbs,
                 resource_types=test_data.user_info.resource_types,
-                subresources=test_data.user_info.subresources
+                subresources=test_data.user_info.subresources,
+                resource_names=test_data.user_info.resource_names,
             )
             logger.info(f"Created user: {user_info.uname}")
 
@@ -162,6 +227,12 @@ class TestExperiments(TestBase):
             self.test_context.active_workspace = test_data.workspace_to_use
             mlflow.set_workspace(self.test_context.active_workspace)
             logger.info(f"Set active workspace to: {test_data.workspace_to_use}")
+            # Read-path scenarios use the baseline resource selected here; create-step
+            # scenarios may overwrite active_experiment_id later in the test flow.
+            self._set_active_experiment_from_map(
+                test_data.workspace_to_use,
+                slot=test_data.resource_slot or PRIMARY_RESOURCE_SLOT,
+            )
 
         # Step 4-5: Execute test steps (actions and validations)
         self._execute_test_steps(test_data=test_data)

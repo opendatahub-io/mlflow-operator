@@ -10,6 +10,7 @@ class Config:
     MLFLOW_URI: str = os.getenv("MLFLOW_TRACKING_URI", "https://localhost:8080")
     DISABLE_TLS: str = os.getenv("DISABLE_TLS", "true")
     CA_BUNDLE: str = os.getenv("ca_bundle", "")
+    REQUEST_TIMEOUT: int = int(os.getenv("MLFLOW_REQUEST_TIMEOUT", "30"))
     ARTIFACT_STORAGE = os.getenv("artifact_storage", "file")
     SERVE_ARTIFACTS = os.getenv("serve_artifacts", "true") == "true"
     AWS_ACCESS_KEY = os.getenv("AWS_ACCESS_KEY_ID", "")

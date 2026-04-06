@@ -9,6 +9,7 @@ import random
 import mlflow
 from mlflow_tests.enums import ResourceType
 from ..shared import TestContext
+from ..shared.resource_map import get_resource_entry
 
 logger = logging.getLogger(__name__)
 random_gen = random.Random()
@@ -26,7 +27,16 @@ def action_get_registered_model(test_context: TestContext) -> None:
     """
     logger.info(f"Starting registered model retrieval in workspace '{test_context.active_workspace}'")
 
-    model_name = test_context.resource_map[ResourceType.REGISTERED_MODELS][test_context.active_workspace]
+    # Most read-path scenarios preselect the exact model name in the test
+    # harness. Keep this fallback so callers that only set workspace context
+    # still read the baseline primary model.
+    model_name = test_context.active_model_name
+    if model_name is None:
+        model_name = get_resource_entry(
+            test_context.resource_map,
+            ResourceType.REGISTERED_MODELS,
+            test_context.active_workspace,
+        )["name"]
     logger.debug(f"Retrieving registered model with name: {model_name}")
 
     model = test_context.user_client.get_registered_model(model_name)

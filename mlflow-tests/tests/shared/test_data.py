@@ -14,6 +14,9 @@ class TestStep:
     action_func: Callable[[TestContext], None] = None
     workspace_to_use: str | None = None
     user_info: UserInfo | None = None
+    # Prevent pytest from collecting this dataclass as a test class because its
+    # name starts with "Test".
+    __test__ = False
 
     def __str__(self) -> str:
         validate_name = self.validate_func.__name__ if self.validate_func else None
@@ -27,6 +30,7 @@ class TestStep:
     def __repr__(self) -> str:
         return self.__str__()
 
+
 @dataclass
 class TestData:
     """Test data structure for parameterized tests.
@@ -39,13 +43,18 @@ class TestData:
     test_steps: list[TestStep] | TestStep
     user_info: Optional[UserInfo] = None
     workspace_to_use: Optional[str] = None
+    resource_slot: Optional[str] = None
+    # Prevent pytest from collecting this dataclass as a test class because its
+    # name starts with "Test".
+    __test__ = False
 
     def __str__(self) -> str:
         user = self.user_info.__str__() if self.user_info else None
         return (f"Test Data: "
                 f"name={self.test_name} "
                 f"user_info={user} "
-                f"workspace={self.workspace_to_use}")
+                f"workspace={self.workspace_to_use} "
+                f"resource_slot={self.resource_slot}")
 
     def __repr__(self) -> str:
         return self.__str__()

@@ -10,6 +10,7 @@ import mlflow
 from mlflow.exceptions import MlflowException
 from mlflow_tests.enums import ResourceType
 from ..shared import TestContext
+from ..shared.resource_map import get_resource_entry
 
 logger = logging.getLogger(__name__)
 random_gen = random.Random()
@@ -27,7 +28,16 @@ def action_get_experiment(test_context: TestContext) -> None:
     """
     logger.info(f"Starting experiment retrieval in workspace '{test_context.active_workspace}'")
 
-    experiment_id = test_context.resource_map[ResourceType.EXPERIMENTS][test_context.active_workspace]
+    # Most read-path scenarios preselect the exact experiment ID in the test
+    # harness. Keep this fallback so callers that only set workspace context
+    # still read the baseline primary experiment.
+    experiment_id = test_context.active_experiment_id
+    if experiment_id is None:
+        experiment_id = get_resource_entry(
+            test_context.resource_map,
+            ResourceType.EXPERIMENTS,
+            test_context.active_workspace,
+        )["id"]
     logger.debug(f"Retrieving experiment with ID: {experiment_id}")
 
     experiment = mlflow.get_experiment(experiment_id)

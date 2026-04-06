@@ -209,7 +209,8 @@ class TestMLflowArtifacts(TestBase):
                 workspace=test_data.user_info.workspace,
                 verbs=test_data.user_info.verbs,
                 resource_types=test_data.user_info.resource_types,
-                subresources=test_data.user_info.subresources
+                subresources=test_data.user_info.subresources,
+                resource_names=test_data.user_info.resource_names,
             )
             logger.info(f"Created user: {user_info.uname}")
 
@@ -224,24 +225,12 @@ class TestMLflowArtifacts(TestBase):
             mlflow.set_workspace(self.test_context.active_workspace)
             logger.info(f"Set active workspace to: {test_data.workspace_to_use}")
 
-        # Safely retrieve experiment ID with boundary check
-        experiments_in_workspace = self.resource_map[ResourceType.EXPERIMENTS].get(test_data.workspace_to_use, [])
-
-        # Handle both scalar strings and sequences (list/tuple)
-        if not experiments_in_workspace:
-            # Empty/None value
-            logger.warning(f"No experiments found in workspace '{test_data.workspace_to_use}', using None")
-            self.test_context.active_experiment_id = None
-        elif isinstance(experiments_in_workspace, str):
-            # Scalar string case - use directly
-            self.test_context.active_experiment_id = experiments_in_workspace
-            logger.info(f"Set active experiment ID to: {self.test_context.active_experiment_id}")
-        elif isinstance(experiments_in_workspace, (list, tuple)) and len(experiments_in_workspace) > 0:
-            # Sequence case - use first element
-            self.test_context.active_experiment_id = experiments_in_workspace[0]
-            logger.info(f"Set active experiment ID to: {self.test_context.active_experiment_id}")
-        else:
-            # Empty sequence or unexpected type
+        try:
+            active_experiment_id = self._set_active_experiment_from_map(
+                test_data.workspace_to_use,
+            )
+            logger.info(f"Set active experiment ID to: {active_experiment_id}")
+        except KeyError:
             logger.warning(f"No experiments found in workspace '{test_data.workspace_to_use}', using None")
             self.test_context.active_experiment_id = None
 

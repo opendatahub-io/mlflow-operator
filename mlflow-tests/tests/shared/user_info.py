@@ -7,7 +7,7 @@ from mlflow.client import MlflowClient
 class UserInfo:
     """Class for storing user information with getters and setters."""
 
-    def __init__(self, uname: Optional[str] = None, upass: Optional[str] = None, workspace: Optional[str] = None, resource_types: Optional[list[ResourceType]] = None, verbs: Optional[list[KubeVerb]] = None, subresources: Optional[list[str]] = None, client: Optional[MlflowClient] = None):
+    def __init__(self, uname: Optional[str] = None, upass: Optional[str] = None, workspace: Optional[str] = None, resource_types: Optional[list[ResourceType]] = None, verbs: Optional[list[KubeVerb]] = None, subresources: Optional[list[str]] = None, resource_names: Optional[dict[ResourceType, list[str]]] = None, client: Optional[MlflowClient] = None):
         """Initialize UserInfo with username, password, workspace, resource type, verbs, and authenticated client.
 
         Args:
@@ -17,6 +17,7 @@ class UserInfo:
             resource_types: List of Resource type for the user
             verbs: List of Kubernetes verbs for permissions
             subresources: Optional list of subresources (e.g., ["gatewaysecrets/use"])
+            resource_names: Optional mapping of resource type to allowed names
             client: Authenticated MLflow client for this user
         """
         self._uname = uname
@@ -25,6 +26,7 @@ class UserInfo:
         self._resource_types = resource_types
         self._verbs = verbs or []
         self._subresources = subresources or []
+        self._resource_names = resource_names or {}
         self._client = client
 
     @property
@@ -200,6 +202,23 @@ class UserInfo:
         """
         return self._client
 
+    @property
+    def resource_names(self) -> dict[ResourceType, list[str]]:
+        """Get the resourceNames mapping for this user."""
+        return self._resource_names
+
+    def set_resource_names(self, value: dict[ResourceType, list[str]]) -> "UserInfo":
+        """Set the resourceNames mapping with method chaining support."""
+        if not isinstance(value, dict):
+            raise ValueError("resource_names must be a dictionary")
+        for key, val in value.items():
+            if not isinstance(key, ResourceType):
+                raise ValueError("resource_names keys must be ResourceType enum values")
+            if not isinstance(val, list) or not all(isinstance(name, str) for name in val):
+                raise ValueError("resource_names values must be lists of strings")
+        self._resource_names = value
+        return self
+
     def set_client(self, value: Optional[MlflowClient]) -> "UserInfo":
         """Set the authenticated MLflow client with method chaining support.
 
@@ -232,6 +251,11 @@ class UserInfo:
             parts.append(f"verbs={verb_names}")
         if self._subresources:
             parts.append(f"subresources={self._subresources}")
+        if self._resource_names:
+            names_by_resource = {
+                resource.value: names for resource, names in self._resource_names.items()
+            }
+            parts.append(f"resource_names={names_by_resource}")
 
         return f"UserInfo({', '.join(parts)})"
 
@@ -260,5 +284,6 @@ class UserInfo:
                 self._resource_types == other._resource_types and
                 self._verbs == other._verbs and
                 self._subresources == other._subresources and
+                self._resource_names == other._resource_names and
                 self._client == other._client)
 

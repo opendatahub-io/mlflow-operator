@@ -32,12 +32,15 @@ class TestContext:
         resource_map: Shared resource map from fixtures
         last_error: Last structured error encountered during test execution
         current_run_id: ID of currently active MLflow run for artifact operations
+        current_trace_id: ID of the currently active MLflow trace
+        current_trace_name: Name of the currently active MLflow trace
         temp_artifact_path: Path to temporary artifact file
         temp_artifact_content: Content of temporary artifact
         artifact_list: List of artifacts returned from list_artifacts operation
         downloaded_path: Path where artifact was downloaded
         model: Created or loaded model object
         model_uri: URI of logged model
+        active_trace: Retrieved MLflow trace object
         artifact_location: Artifact storage URI from run info
         expected_artifact_bucket: Expected S3 bucket name for custom artifact location
         expected_artifact_path: Expected relative path within bucket for custom artifacts
@@ -56,15 +59,18 @@ class TestContext:
     active_user: Optional[UserInfo] = None
     user_client: Optional[MlflowClient] = None
     users_to_delete: list[UserInfo] = field(default_factory=list)
-    resource_map: dict[ResourceType, dict[str, list[str] | str]] = field(default_factory=dict)
+    resource_map: dict[ResourceType, dict[str, dict[str, dict[str, str]]]] = field(default_factory=dict)
     last_error: Optional[ErrorResponse] = None
     current_run_id: Optional[str] = None
+    current_trace_id: Optional[str] = None
+    current_trace_name: Optional[str] = None
     temp_artifact_path: Optional[str] = None
     temp_artifact_content: Optional[str] = None
     artifact_list: Optional[list] = None
     downloaded_path: Optional[str] = None
     model: Optional[Any] = None
     model_uri: Optional[str] = None
+    active_trace: Optional[Any] = None
     artifact_location: Optional[str] = None
     expected_artifact_bucket: Optional[str] = None
     expected_artifact_path: Optional[str] = None
@@ -74,6 +80,9 @@ class TestContext:
     discovered_workspaces: set[str] = field(default_factory=set)
     unlabeled_namespace: Optional[str] = None
     namespaces_to_delete: set[str] = field(default_factory=set)
+    # Prevent pytest from collecting this dataclass as a test class because its
+    # name starts with "Test".
+    __test__ = False
 
     def add_experiment_for_cleanup(self, experiment_id: str, workspace: str) -> None:
         """Add an experiment to the cleanup list with workspace context.

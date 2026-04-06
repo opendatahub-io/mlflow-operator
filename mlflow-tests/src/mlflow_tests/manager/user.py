@@ -56,7 +56,8 @@ class K8UserManager:
         workspace_name: str,
         verbs: list[KubeVerb],
         resources: list[ResourceType],
-        subresources: list[str] = None,
+        subresources: list[str] | None = None,
+        resource_names: dict[ResourceType, list[str]] | None = None,
     ) -> None:
         """Create a Kubernetes Role and bind it to a user.
 
@@ -66,9 +67,11 @@ class K8UserManager:
             verbs: List of Kubernetes verbs to grant
             resources: Resources to grant access to
             subresources: Optional list of subresources (e.g., ["gatewaysecrets/use"])
+            resource_names: Optional mapping of resource type to allowed names
         """
         role_name = f"{name}-role"
         binding_name = f"{name}-binding"
+        resource_names = resource_names or {}
 
         logger.info(f"Creating K8s role '{role_name}' for user '{name}' in namespace '{workspace_name}'")
         logger.debug(f"Role details - Verbs: {[v.value for v in verbs]}, Resources: {[r.value for r in resources]}")
@@ -77,13 +80,23 @@ class K8UserManager:
         verb_strings = [verb.value for verb in verbs]
         k8s_resources = [r.get_k8s_resource() for r in resources]
         logger.info(f"RBAC Permissions - Verbs: {verb_strings}, MLflow Resources: {k8s_resources}")
+        if resource_names:
+            logger.info(
+                "RBAC resourceNames - %s",
+                {resource.value: names for resource, names in resource_names.items()},
+            )
         if subresources:
             logger.info(f"Subresources: {subresources}")
-        logger.info(f"Additional permissions: Core K8s API (namespaces, serviceaccounts, secrets), RBAC read access")
+        logger.info("Additional permissions: Core K8s API (namespaces, serviceaccounts, secrets), RBAC read access")
 
         # Create the role
         self.role_manager.create_role(
-            role_name, workspace_name, verbs, resources, subresources
+            role_name,
+            workspace_name,
+            verbs,
+            resources,
+            subresources,
+            resource_names,
         )
         logger.info(f"Created K8s role '{role_name}' with comprehensive permissions")
 
@@ -115,11 +128,19 @@ class K8UserManager:
                 logger.warning(f"Using fallback verb '{test_verb}' for RBAC verification")
 
             try:
+                verification_resource_name = None
+                scoped_names = resource_names.get(resource, [])
+                if scoped_names:
+                    # Current scenarios scope to a single resource name. If future tests
+                    # grant multiple names for one resource type, expand this verification.
+                    verification_resource_name = scoped_names[0]
+
                 self.role_manager.verify_rbac_permissions(
                     service_account_name=name,
                     namespace=workspace_name,
                     resource=resource.get_k8s_resource(),
                     verb=test_verb,
+                    resource_name=verification_resource_name,
                     max_retries=10,
                     retry_delay=1.0
                 )

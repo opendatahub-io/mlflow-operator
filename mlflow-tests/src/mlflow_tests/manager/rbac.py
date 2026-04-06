@@ -1,10 +1,11 @@
 """Kubernetes RBAC management."""
 
 import logging
+import time
 from kubernetes import client
 from kubernetes.client.rest import ApiException
 
-from mlflow_tests.enums import ResourceType, KubeVerb
+from mlflow_tests.enums import KubeVerb, ResourceType
 
 logger = logging.getLogger(__name__)
 
@@ -26,7 +27,8 @@ class K8RoleManager:
         namespace: str,
         verbs: list[KubeVerb],
         resources: list[ResourceType],
-        subresources: list[str] = None,
+        subresources: list[str] | None = None,
+        resource_names: dict[ResourceType, list[str]] | None = None,
     ) -> None:
         """Create a Kubernetes Role with specified permissions.
 
@@ -36,32 +38,60 @@ class K8RoleManager:
             verbs: List of Kubernetes verbs to grant
             resources: MLflow resources to grant access to
             subresources: Optional list of subresources (e.g., ["gatewaysecrets/use"])
+            resource_names: Optional mapping of resource type to allowed names
 
         Raises:
             ApiException: If creation fails
         """
-        # Get K8s verbs from verb list
         main_verbs = [verb.value for verb in verbs]
         subresources = subresources or []
+        resource_names = resource_names or {}
 
         # Get K8s resource names from ResourceType
-        resource_names = [r.get_k8s_resource() for r in resources]
+        k8s_resources = [r.get_k8s_resource() for r in resources]
 
         # Create policy rules
         policy_rules = []
 
         # Rule 1: MLflow main resources (experiments, registeredmodels, jobs, etc.)
-        if resource_names:
+        unscoped_resources = []
+        for resource in resources:
+            scoped_names = resource_names.get(resource, [])
+            if not scoped_names:
+                unscoped_resources.append(resource.get_k8s_resource())
+                continue
+
+            policy_rules.append(
+                client.V1PolicyRule(
+                    api_groups=["mlflow.kubeflow.org"],
+                    resources=[resource.get_k8s_resource()],
+                    verbs=main_verbs,
+                    resource_names=scoped_names,
+                )
+            )
+            logger.debug(
+                "Added name-scoped resource rule: resource=%s, verbs=%s, names=%s",
+                resource.get_k8s_resource(),
+                main_verbs,
+                scoped_names,
+            )
+
+        if unscoped_resources:
             mlflow_main_rule = client.V1PolicyRule(
                 api_groups=["mlflow.kubeflow.org"],
-                resources=resource_names,
+                resources=unscoped_resources,
                 verbs=main_verbs,
             )
             policy_rules.append(mlflow_main_rule)
-            logger.debug(f"Added main resource rule: resources={resource_names}, verbs={main_verbs}")
+            logger.debug(
+                "Added main resource rule: resources=%s, verbs=%s",
+                unscoped_resources,
+                main_verbs,
+            )
 
         # Rule 2: MLflow sub-resources (gatewaysecrets/use, gatewayendpoints/use, etc.)
         # Only add if subresources are explicitly provided
+        gateway_sub_resources: list[str] = []
         if subresources:
             # Use provided subresources directly
             mlflow_sub_rule = client.V1PolicyRule(
@@ -73,7 +103,6 @@ class K8RoleManager:
             logger.debug(f"Added sub-resource rule: resources={subresources}, verbs=['create']")
         else:
             # Auto-detect gateway sub-resources from resource types if subresources not specified
-            gateway_sub_resources = []
             for resource in resources:
                 gateway_sub_resources.extend(resource.get_k8s_sub_resources())
 
@@ -115,7 +144,13 @@ class K8RoleManager:
         try:
             self.rbac_v1_api.create_namespaced_role(namespace=namespace, body=k8s_role)
             logger.info(f"Created role '{name}' in namespace '{namespace}' with {len(policy_rules)} policy rules")
-            logger.info(f"Role '{name}' permissions: main_resources={resource_names}, sub_resources={gateway_sub_resources}")
+            logger.info(
+                "Role '%s' permissions: main_resources=%s, scoped_resources=%s, sub_resources=%s",
+                name,
+                k8s_resources,
+                {resource.value: names for resource, names in resource_names.items()},
+                gateway_sub_resources,
+            )
         except ApiException as e:
             if e.status == 409:  # Resource already exists - ignore
                 logger.debug(f"Role '{name}' already exists, continuing")
@@ -173,6 +208,7 @@ class K8RoleManager:
         namespace: str,
         resource: str,
         verb: str,
+        resource_name: str | None = None,
         max_retries: int = 10,
         retry_delay: float = 2.0
     ) -> None:
@@ -183,6 +219,7 @@ class K8RoleManager:
             namespace: Namespace for the check
             resource: K8s resource to check (e.g. 'registeredmodels')
             verb: K8s verb to check (e.g. 'delete')
+            resource_name: Optional name for name-scoped authorization checks
             max_retries: Maximum number of verification attempts
             retry_delay: Delay between attempts (exponential backoff)
 
@@ -200,6 +237,8 @@ class K8RoleManager:
 
         for api_group in api_groups_to_try:
             logger.debug(f"Trying RBAC verification for {service_account_name} with API group '{api_group}' for {verb} {resource}")
+            sar_resource_name = resource_name if resource_name else None
+            current_delay = retry_delay
 
             # Create SubjectAccessReview to verify permissions
             sar = V1SubjectAccessReview(
@@ -208,7 +247,8 @@ class K8RoleManager:
                         namespace=namespace,
                         verb=verb,
                         resource=resource,
-                        group=api_group
+                        group=api_group,
+                        name=sar_resource_name,
                     ),
                     user=f"system:serviceaccount:{namespace}:{service_account_name}"
                 )
@@ -222,19 +262,17 @@ class K8RoleManager:
                         logger.info(f"RBAC permissions verified for {service_account_name} - can {verb} {resource} (API group: {api_group})")
                         return
                     else:
-                        if result.status.allowed:
+                        if result.status.reason:
                             reason = result.status.reason
                         logger.debug(f"RBAC denied for API group '{api_group}' (attempt {attempt + 1}/{max_retries}): {reason}")
                         if attempt < max_retries - 1:
-                            import time
-                            time.sleep(retry_delay)
-                            retry_delay *= 1.2  # Smaller backoff multiplier
+                            time.sleep(current_delay)
+                            current_delay *= 1.2  # Smaller backoff multiplier
                 except Exception as e:
                     logger.debug(f"RBAC verification attempt {attempt + 1} failed for API group '{api_group}': {e}")
-                    if attempt < max_retries:
-                        import time
-                        time.sleep(retry_delay)
-                        retry_delay *= 1.2
+                    if attempt < max_retries - 1:
+                        time.sleep(current_delay)
+                        current_delay *= 1.2
                     else:
                         break  # Try next API group
 

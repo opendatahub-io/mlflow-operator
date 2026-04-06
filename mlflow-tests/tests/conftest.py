@@ -176,45 +176,55 @@ def create_experiments_and_runs(setup_clients):
         mlflow.set_workspace(workspace)
         logger.debug(f"Set active workspace to: {workspace}")
 
-        # Create experiment and store it in a resource map
-        experiment_name = f"test-experiment-{random_gen.randint(1, 10000)}"
-        logger.debug(f"Creating baseline experiment: {experiment_name}")
+        experiment_resources = {}
+        for slot in ("primary", "secondary"):
+            experiment_name = f"test-experiment-{slot}-{random_gen.randint(1, 10000)}"
+            logger.debug(f"Creating {slot} baseline experiment: {experiment_name}")
 
-        try:
-            experiment_id = mlflow.create_experiment(experiment_name)
-            logger.info(f"Created experiment '{experiment_name}' with ID: {experiment_id} in workspace '{workspace}'")
-        except Exception as e:
-            logger.error(f"Failed to create baseline experiment in workspace '{workspace}': {e}")
-            logger.error(f"Authentication may not be properly configured. Check credentials.")
-            raise
+            try:
+                experiment_id = mlflow.create_experiment(experiment_name)
+                logger.info(
+                    "Created %s experiment '%s' with ID: %s in workspace '%s'",
+                    slot,
+                    experiment_name,
+                    experiment_id,
+                    workspace,
+                )
+            except Exception as e:
+                logger.error(f"Failed to create baseline experiment in workspace '{workspace}': {e}")
+                logger.error("Authentication may not be properly configured. Check credentials.")
+                raise
 
-        if ResourceType.EXPERIMENTS in resource_map.keys():
-            resources = resource_map[ResourceType.EXPERIMENTS]
-            resources.update({workspace: experiment_id})
-            resource_map.update({ResourceType.EXPERIMENTS: resources})
-        else:
-            resource_map[ResourceType.EXPERIMENTS] = {workspace: experiment_id}
-        logger.debug(f"Added experiment to resource map for workspace '{workspace}'")
+            experiment_resources[slot] = {
+                "id": experiment_id,
+                "name": experiment_name,
+            }
 
-        # Create registered model and store it in resource map
-        model_name = f"test-model-{random_gen.randint(1, 10000)}"
-        logger.debug(f"Creating baseline registered model: {model_name}")
+        resource_map.setdefault(ResourceType.EXPERIMENTS, {})[workspace] = experiment_resources
+        logger.debug(f"Added experiment resources to resource map for workspace '{workspace}'")
 
-        try:
-            model = admin_client.create_registered_model(model_name)
-            logger.info(f"Created registered model '{model_name}' in workspace '{workspace}'")
-        except Exception as e:
-            logger.error(f"Failed to create baseline registered model in workspace '{workspace}': {e}")
-            logger.error(f"Authentication may not be properly configured. Check credentials.")
-            raise
+        model_resources = {}
+        for slot in ("primary", "secondary"):
+            model_name = f"test-model-{slot}-{random_gen.randint(1, 10000)}"
+            logger.debug(f"Creating {slot} baseline registered model: {model_name}")
 
-        if ResourceType.REGISTERED_MODELS in resource_map.keys():
-            resources = resource_map[ResourceType.REGISTERED_MODELS]
-            resources.update({workspace: model_name})
-            resource_map.update({ResourceType.REGISTERED_MODELS: resources})
-        else:
-            resource_map[ResourceType.REGISTERED_MODELS] = {workspace: model_name}
-        logger.debug(f"Added registered model to resource map for workspace '{workspace}'")
+            try:
+                model = admin_client.create_registered_model(model_name)
+                logger.info(
+                    "Created %s registered model '%s' in workspace '%s'",
+                    slot,
+                    model_name,
+                    workspace,
+                )
+            except Exception as e:
+                logger.error(f"Failed to create baseline registered model in workspace '{workspace}': {e}")
+                logger.error("Authentication may not be properly configured. Check credentials.")
+                raise
+
+            model_resources[slot] = {"name": model.name}
+
+        resource_map.setdefault(ResourceType.REGISTERED_MODELS, {})[workspace] = model_resources
+        logger.debug(f"Added registered model resources to resource map for workspace '{workspace}'")
 
     logger.info(f"Successfully created all baseline resources")
     logger.info(f"Resource summary - Experiments: {len(resource_map.get(ResourceType.EXPERIMENTS, {}))}, "
