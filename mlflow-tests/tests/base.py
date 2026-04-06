@@ -519,6 +519,7 @@ class TestBase:
                 logger.debug(f"Created authenticated MLflow client for user: {user_info.uname}")
 
             if step.workspace_to_use:
+                self.test_context.active_workspace = step.workspace_to_use
                 mlflow.set_workspace(step.workspace_to_use)
 
             # Execute action if present (don't stop on failure - validation will check if it was expected)
@@ -581,8 +582,14 @@ class TestBase:
 
         # Generic error handling: if action failed and this is not an "expected failure" validation,
         # show the actual action error instead of letting validation give misleading messages
-        if (self.test_context.last_error is not None and
-            validation_name != 'validate_authentication_denied'):
+        if (
+            self.test_context.last_error is not None
+            and validation_name
+            not in {
+                "validate_authentication_denied",
+                "validate_authentication_denied_or_resource_not_found",
+            }
+        ):
 
             error_response = self.test_context.last_error
             user_name = self.test_context.active_user.uname if self.test_context.active_user else "unknown"

@@ -58,6 +58,76 @@ def validate_authentication_denied(test_context: TestContext) -> None:
         logger.debug(f"Error context: {error_response.error.details}")
 
 
+def validate_authentication_denied_or_resource_not_found(
+    test_context: TestContext,
+) -> None:
+    """Validate that an isolated resource is either denied or hidden.
+
+    Cross-workspace access may be surfaced as an authorization failure or as a
+    missing resource when the API intentionally hides the foreign object.
+    """
+    user_name = test_context.active_user.uname
+    workspace = test_context.active_workspace
+    logger.info(
+        "Validating that action was denied or resource was hidden for user '%s' in workspace '%s'",
+        user_name,
+        workspace,
+    )
+
+    if test_context.last_error is None:
+        logger.error(
+            "Validation failed: Action should have failed for isolated resource access by '%s', but succeeded",
+            user_name,
+        )
+        raise AssertionError(
+            f"Action should have failed for isolated resource access by unauthorized user '{user_name}', but succeeded"
+        )
+
+    error_response: ErrorResponse = test_context.last_error
+    isolation_denied_codes = {
+        ErrorCode.PERMISSION_DENIED,
+        ErrorCode.FORBIDDEN,
+        ErrorCode.WORKSPACE_ACCESS_DENIED,
+    }
+    if error_response.error.code in isolation_denied_codes:
+        logger.info(
+            "Successfully validated workspace isolation - access denied (%s)",
+            error_response.error.code,
+        )
+        logger.debug("Error details: %s", error_response.error.message)
+        if error_response.error.details:
+            logger.debug("Error context: %s", error_response.error.details)
+        return
+
+    if error_response.error.code in {
+        ErrorCode.UNAUTHENTICATED,
+        ErrorCode.AUTHENTICATION_FAILED,
+    }:
+        raise AssertionError(
+            "Isolation validation got authentication failure; this indicates invalid test auth setup, not RBAC isolation."
+        )
+
+    if error_response.error.code == ErrorCode.RESOURCE_NOT_FOUND:
+        logger.info(
+            "Successfully validated workspace isolation - foreign resource is hidden as not found"
+        )
+        logger.debug(f"Error details: {error_response.error.message}")
+        if error_response.error.details:
+            logger.debug(f"Error context: {error_response.error.details}")
+        return
+
+    logger.error(
+        "Validation failed: Expected permission/authentication error or hidden resource, got: %s - %s",
+        error_response.error.code,
+        error_response.error.message,
+    )
+    raise AssertionError(
+        f"Action failed with unexpected error for user {user_name}: "
+        f"{error_response.error.code} - {error_response.error.message}. "
+        f"Expected workspace isolation denial or hidden resource."
+    )
+
+
 def validate_resource_retrieved_or_created(
     test_context: TestContext,
     resource_field: str,

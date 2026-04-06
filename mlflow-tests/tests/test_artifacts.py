@@ -30,6 +30,7 @@ from .validations import (
     validate_run_created,
     validate_run_ended,
     validate_authentication_denied,
+    validate_authentication_denied_or_resource_not_found,
     validate_custom_artifact_location,
     validate_no_error,
 )
@@ -136,12 +137,29 @@ class TestMLflowArtifacts(TestBase):
             ]
         ),
         TestData(
-            test_name="User with CREATE permission cannot perform operations in different workspace",
-            user_info=UserInfo(workspace=Config.WORKSPACES[0], verbs=[KubeVerb.CREATE], resource_types=[ResourceType.EXPERIMENTS, ResourceType.JOBS]),
+            test_name="User with UPDATE permission on workspace 1 cannot log model to run in workspace 2",
             workspace_to_use=Config.WORKSPACES[1],
             test_steps = [
-                TestStep(action_func=action_start_run, validate_func=validate_authentication_denied),
-                TestStep(action_func=action_create_model, validate_func=validate_authentication_denied)
+                TestStep(
+                    action_func=action_start_run,
+                    validate_func=validate_run_created,
+                    user_info=UserInfo(
+                        workspace=Config.WORKSPACES[1],
+                        verbs=[KubeVerb.GET, KubeVerb.UPDATE],
+                        resource_types=[ResourceType.EXPERIMENTS],
+                    ),
+                ),
+                TestStep(action_func=action_create_model, validate_func=validate_local_model_created),
+                TestStep(
+                    action_func=action_log_model,
+                    validate_func=validate_authentication_denied_or_resource_not_found,
+                    workspace_to_use=Config.WORKSPACES[0],
+                    user_info=UserInfo(
+                        workspace=Config.WORKSPACES[0],
+                        verbs=[KubeVerb.GET, KubeVerb.UPDATE],
+                        resource_types=[ResourceType.EXPERIMENTS],
+                    ),
+                ),
             ]
         ),
         TestData(

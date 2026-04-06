@@ -30,6 +30,7 @@ from .trace_validations import (
 )
 from .validation_utils import (
     validate_authentication_denied,
+    validate_authentication_denied_or_resource_not_found,
     validate_resource_retrieved_or_created,
     validate_no_error,
 )
@@ -54,6 +55,7 @@ __all__ = [
     "validate_run_ended",
     "validate_trace_logged",
     "validate_authentication_denied",
+    "validate_authentication_denied_or_resource_not_found",
     "validate_resource_retrieved_or_created",
     "validate_no_error",
     "validate_custom_artifact_location",
