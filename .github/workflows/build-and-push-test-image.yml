@@ -1,14 +1,19 @@
 name: Build and Push Test Image
 
-# This workflow builds and pushes the mlflow-tests/image/Dockerfile.test image to quay.io
-# The image is tagged with the branch name to allow for branch-specific testing
+# Builds and pushes the mlflow-tests image to quay.io on branch pushes.
+#
+# Tag scheme:
+#   odh/main           -> main
+#   odh/release-<TAG>  -> odh-release-<TAG>
+#   rhds/main          -> rhds-main
+#   rhds/rhoai-<TAG>   -> rhoai-<TAG>
 
 on:
   push:
     branches:
       - main
-      - "release-[0-9]*" # release branches
-      - '[0-9]*'  # tagged versions
+      - "release-[0-9]*"
+      - "rhoai-[0-9]*"
   workflow_dispatch:
     inputs:
       branch_name:
@@ -42,19 +47,32 @@ jobs:
         shell: bash
         run: |
           if [[ "$EVENT_NAME" == "workflow_dispatch" && -n "$INPUT_BRANCH" ]]; then
-            # Use manually provided branch name
             BRANCH_NAME="$INPUT_BRANCH"
           else
-            # Use the current branch name, sanitizing it for use as a Docker tag
             BRANCH_NAME="$REF_NAME"
           fi
 
-          # Sanitize branch name for Docker tag (replace / with -, remove invalid chars)
+          # Sanitize for Docker tag
           TAG_NAME=$(echo "$BRANCH_NAME" | sed 's/[^a-zA-Z0-9._-]/-/g' | tr '[:upper:]' '[:lower:]')
 
-          # Prefix tag with rhds- when running in red-hat-data-services repo
+          IS_RHDS=false
           if [[ "$REPO" == red-hat-data-services/* ]]; then
-            TAG_NAME="rhds-${TAG_NAME}"
+            IS_RHDS=true
+          fi
+
+          # Apply prefixes to avoid tag collisions across repos:
+          #   RHDS main       -> rhds-main  (distinguish from ODH main)
+          #   RHDS rhoai-*    -> rhoai-*    (already namespaced)
+          #   ODH  main       -> main       (canonical)
+          #   ODH  release-*  -> odh-release-*
+          if [[ "$IS_RHDS" == "true" ]]; then
+            if [[ ! "$TAG_NAME" =~ ^rhoai- ]]; then
+              TAG_NAME="rhds-${TAG_NAME}"
+            fi
+          else
+            if [[ "$TAG_NAME" != "main" ]]; then
+              TAG_NAME="odh-${TAG_NAME}"
+            fi
           fi
 
           {
@@ -64,8 +82,8 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
           echo "Building image for branch: $BRANCH_NAME"
-          echo "Docker tag will be: $TAG_NAME"
-          echo "Full image name: quay.io/${{ env.QUAY_ORG }}/${{ env.IMAGE_REPO }}:${TAG_NAME}"
+          echo "Docker tag: $TAG_NAME"
+          echo "Full image: quay.io/${{ env.QUAY_ORG }}/${{ env.IMAGE_REPO }}:${TAG_NAME}"
 
       - name: Build and push test image
         uses: ./.github/actions/build
