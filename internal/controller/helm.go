@@ -556,6 +556,29 @@ func (h *HelmRenderer) mlflowToHelmValues(mlflow *mlflowv1.MLflow, namespace str
 		"additionalEgressRules": additionalEgressRules,
 	}
 
+	// Garbage collection - disabled unless explicitly configured in the CR
+	gcValues := map[string]interface{}{
+		"enabled": false,
+	}
+	if mlflow.Spec.GarbageCollection != nil {
+		gcValues["enabled"] = true
+		gcValues["schedule"] = mlflow.Spec.GarbageCollection.Schedule
+		gcValues["serviceAccount"] = map[string]interface{}{
+			"name": GCServiceAccountName,
+		}
+		if mlflow.Spec.GarbageCollection.OlderThan != nil {
+			gcValues["olderThan"] = *mlflow.Spec.GarbageCollection.OlderThan
+		}
+		if mlflow.Spec.GarbageCollection.Resources != nil {
+			resourcesMap, err := runtime.DefaultUnstructuredConverter.ToUnstructured(mlflow.Spec.GarbageCollection.Resources)
+			if err != nil {
+				return nil, fmt.Errorf("failed to convert garbageCollection.resources: %w", err)
+			}
+			gcValues["resources"] = resourcesMap
+		}
+	}
+	values["garbageCollection"] = gcValues
+
 	return values, nil
 }
 

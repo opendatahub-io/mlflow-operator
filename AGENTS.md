@@ -129,6 +129,7 @@ charts/mlflow/
     ├── rbac.yaml
     ├── pvc.yaml
     ├── deployment.yaml           # MLflow server with kubernetes-auth and TLS
+    ├── cronjob.yaml              # Garbage collection CronJob
     └── service.yaml
 ```
 
@@ -261,11 +262,14 @@ The `config/samples/` directory contains example MLflow custom resource configur
    - Manual TLS certificate management
    - Shows upstreamCASecret configuration
 
-4. **mlflow_v1_mlflow_remote_storage.yaml** - Remote storage
+4. **mlflow_v1_mlflow_remote_storage.yaml** - Remote storage with garbage collection
    - PostgreSQL for metadata
    - S3 for artifacts
    - No PVC required (fully remote)
    - Multi-replica deployment
+   - Periodic garbage collection via CronJob
+   - `mlflow-gc-sa` ServiceAccount for the CronJob
+   - `mlflow-gc` ClusterRole and ClusterRoleBinding for the CronJob
 
 5. **mlflow_v1_mlflow_digest.yaml** - Digest-based images
    - Uses SHA256 image digests for reproducibility

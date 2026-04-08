@@ -4,6 +4,7 @@
 #
 # - configmaps, secrets, serviceaccounts, services, persistentvolumeclaims: managing MLflow deployment resources
 # - deployments: managing the MLflow Deployment
+# - cronjobs: managing the garbage collection CronJob
 # - networkpolicies: managing network access to MLflow pods
 # - servicemonitors: Prometheus monitoring integration
 apiVersion: rbac.authorization.k8s.io/v1
@@ -32,6 +33,18 @@ rules:
   - apps
   resources:
   - deployments
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - batch
+  resources:
+  - cronjobs
   verbs:
   - create
   - delete

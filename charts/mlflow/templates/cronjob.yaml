@@ -1,0 +1,194 @@
+{{- if .Values.garbageCollection.enabled }}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: mlflow-gc{{ .Values.resourceSuffix }}
+  namespace: {{ .Values.namespace }}
+  labels:
+    app: mlflow-gc{{ .Values.resourceSuffix }}
+    {{- with .Values.commonLabels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  schedule: {{ .Values.garbageCollection.schedule | quote }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      template:
+        metadata:
+          labels:
+            app: mlflow-gc{{ .Values.resourceSuffix }}
+            {{- with .Values.commonLabels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+        spec:
+          serviceAccountName: {{ .Values.garbageCollection.serviceAccount.name }}
+          automountServiceAccountToken: true
+          restartPolicy: Never
+          {{- with .Values.podSecurityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.nodeSelector }}
+          nodeSelector:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.affinity }}
+          affinity:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.tolerations }}
+          tolerations:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          volumes:
+            - name: tmp
+              emptyDir:
+                sizeLimit: 128Mi
+            {{- if .Values.storage.enabled }}
+            - name: mlflow-storage
+              persistentVolumeClaim:
+                claimName: mlflow-pvc{{ .Values.resourceSuffix }}
+            {{- end }}
+            {{- if .Values.caBundle.configMaps }}
+            {{- range $i, $cm := .Values.caBundle.configMaps }}
+            - name: ca-bundle-{{ $i }}
+              configMap:
+                name: {{ $cm.name }}
+                optional: true
+            {{- end }}
+            - name: combined-ca-bundle
+              emptyDir: {}
+            {{- end }}
+          {{- if .Values.caBundle.configMaps }}
+          initContainers:
+            - name: combine-ca-bundles
+              image: {{ .Values.image.name }}
+              {{- if .Values.image.imagePullPolicy }}
+              imagePullPolicy: {{ .Values.image.imagePullPolicy }}
+              {{- end }}
+              command:
+                - /bin/sh
+                - -c
+                - |
+                  set -e
+{{ include "mlflow.caBundleFunctions" . | indent 18 }}
+                  combine_ca_bundles
+              env:
+                - name: CA_BUNDLE_FILE_PATHS
+                  value: {{ include "mlflow.caBundleFilePaths" . | quote }}
+                - name: CA_BUNDLE_MOUNT_PATHS
+                  value: {{ include "mlflow.caBundleMountPaths" . | quote }}
+                - name: CA_BUNDLE_OUTPUT
+                  value: {{ .Values.caBundle.outputPath | quote }}
+              volumeMounts:
+                - name: tmp
+                  mountPath: /tmp
+                - name: combined-ca-bundle
+                  mountPath: {{ dir .Values.caBundle.outputPath }}
+                {{- range $i, $cm := .Values.caBundle.configMaps }}
+                - name: ca-bundle-{{ $i }}
+                  mountPath: {{ $cm.mountPath }}
+                  readOnly: true
+                {{- end }}
+              {{- with .Values.securityContext }}
+              securityContext:
+                {{- toYaml . | nindent 16 }}
+              {{- end }}
+              resources:
+                requests:
+                  cpu: 10m
+                  memory: 16Mi
+                limits:
+                  cpu: 100m
+                  memory: 64Mi
+          {{- end }}
+          containers:
+            - name: mlflow-gc
+              image: {{ .Values.image.name }}
+              {{- if .Values.image.imagePullPolicy }}
+              imagePullPolicy: {{ .Values.image.imagePullPolicy }}
+              {{- end }}
+              command:
+                - mlflow
+              args:
+                - gc
+                {{- if .Values.mlflow.backendStoreUriFrom }}
+                - --backend-store-uri=$(MLFLOW_BACKEND_STORE_URI)
+                {{- else }}
+                - --backend-store-uri={{ .Values.mlflow.backendStoreUri }}
+                {{- end }}
+                {{- if .Values.garbageCollection.olderThan }}
+                - --older-than={{ .Values.garbageCollection.olderThan }}
+                {{- end }}
+                - --all-workspaces
+              env:
+                - name: MLFLOW_DISABLE_TELEMETRY
+                  value: "true"
+                - name: MLFLOW_ENABLE_WORKSPACES
+                  value: "true"
+                - name: MLFLOW_WORKSPACE_STORE_URI
+                  value: {{ .Values.mlflow.workspaceStoreUri | quote }}
+                {{- if .Values.mlflow.workspaceLabelSelector }}
+                - name: MLFLOW_K8S_WORKSPACE_LABEL_SELECTOR
+                  value: {{ .Values.mlflow.workspaceLabelSelector | quote }}
+                {{- end }}
+                - name: MLFLOW_BACKEND_STORE_URI
+                  {{- if .Values.mlflow.backendStoreUriFrom }}
+                  valueFrom:
+                    {{- toYaml .Values.mlflow.backendStoreUriFrom | nindent 20 }}
+                  {{- else }}
+                  value: {{ .Values.mlflow.backendStoreUri | quote }}
+                  {{- end }}
+                - name: MLFLOW_TRACKING_URI
+                  value: "https://mlflow{{ .Values.resourceSuffix }}.{{ .Values.namespace }}.svc:{{ .Values.mlflow.port }}"
+                - name: MLFLOW_TRACKING_INSECURE_TLS
+                  value: "false"
+                - name: MLFLOW_TRACKING_AUTH
+                  value: "kubernetes"
+                {{- if .Values.caBundle.configMaps }}
+                - name: SSL_CERT_FILE
+                  value: {{ .Values.caBundle.outputPath | quote }}
+                - name: REQUESTS_CA_BUNDLE
+                  value: {{ .Values.caBundle.outputPath | quote }}
+                - name: CURL_CA_BUNDLE
+                  value: {{ .Values.caBundle.outputPath | quote }}
+                - name: AWS_CA_BUNDLE
+                  value: {{ .Values.caBundle.outputPath | quote }}
+                - name: PGSSLROOTCERT
+                  value: {{ .Values.caBundle.outputPath | quote }}
+                - name: PGSSLMODE
+                  value: "verify-full"
+                - name: MLFLOW_MYSQL_CA
+                  value: {{ .Values.caBundle.outputPath | quote }}
+                - name: MLFLOW_S3_IGNORE_TLS
+                  value: "false"
+                {{- end }}
+              {{- if .Values.envFrom }}
+              envFrom:
+                {{- toYaml .Values.envFrom | nindent 16 }}
+              {{- end }}
+              volumeMounts:
+                - name: tmp
+                  mountPath: /tmp
+                {{- if .Values.storage.enabled }}
+                - name: mlflow-storage
+                  mountPath: /mlflow
+                {{- end }}
+                {{- if .Values.caBundle.configMaps }}
+                - name: combined-ca-bundle
+                  mountPath: {{ dir .Values.caBundle.outputPath }}
+                  readOnly: true
+                {{- end }}
+              {{- with .Values.securityContext }}
+              securityContext:
+                {{- toYaml . | nindent 16 }}
+              {{- end }}
+              {{- with .Values.garbageCollection.resources }}
+              resources:
+                {{- toYaml . | nindent 16 }}
+              {{- end }}
+{{- end }}

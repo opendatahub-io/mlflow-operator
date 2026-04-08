@@ -160,11 +160,13 @@ helm install mlflow . -n opendatahub --create-namespace \
 
 ### Authentication and Security
 
-MLflow is deployed with the `kubernetes-auth` app enabled. The operator sets `MLFLOW_K8S_AUTH_AUTHORIZATION_MODE=self_subject_access_review`, so authorization checks are performed directly by MLflow using the caller's token—no special RBAC permissions are required beyond listing namespaces for the workspaces feature.
+MLflow is deployed with the `kubernetes-auth` app enabled. The operator sets `MLFLOW_K8S_AUTH_AUTHORIZATION_MODE=self_subject_access_review`, so authorization checks are performed directly by MLflow using the caller's token. For the server itself, no special RBAC permissions are required beyond listing namespaces for the workspaces feature.
 
 The deployment always sets `MLFLOW_DISABLE_TELEMETRY=true` and `MLFLOW_SERVER_ENABLE_JOB_EXECUTION=false` to disable telemetry and job execution by default.
 
 TLS is terminated inside the MLflow container using uvicorn options. Certificates come from the `mlflow-tls` secret, which is created automatically on OpenShift via the `service.beta.openshift.io/serving-cert-secret-name` annotation. If you need to provide your own certificates, place `tls.crt` and `tls.key` in a secret named `mlflow-tls` (or override `tls.secretName` in Helm values). On OpenShift, the operator sets `UVICORN_SSL_CIPHERS=PROFILE=SYSTEM` by default unless `spec.env` already defines that variable, so uvicorn follows the platform crypto policy, including FIPS-compatible TLS 1.2 and 1.3 cipher selection.
+
+When garbage collection is enabled, the CronJob runs under a separate `mlflow-gc-sa` ServiceAccount with its own `mlflow-gc` ClusterRole and ClusterRoleBinding.
 
 ### Operator RBAC Privileges
 
