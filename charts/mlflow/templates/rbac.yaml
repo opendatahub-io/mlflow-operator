@@ -39,3 +39,38 @@ subjects:
   - kind: ServiceAccount
     name: {{ .Values.serviceAccount.name }}
     namespace: {{ .Values.namespace }}
+{{- if .Values.garbageCollection.enabled }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: mlflow-gc{{ .Values.resourceSuffix }}
+  labels:
+    app: mlflow-gc{{ .Values.resourceSuffix }}
+    {{- with .Values.commonLabels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+rules:
+  # Pseudo-resource permissions for `mlflow gc`
+  - apiGroups: ["mlflow.kubeflow.org"]
+    resources: ["experiments"]
+    verbs: ["get", "list", "update", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: mlflow-gc{{ .Values.resourceSuffix }}
+  labels:
+    app: mlflow-gc{{ .Values.resourceSuffix }}
+    {{- with .Values.commonLabels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: mlflow-gc{{ .Values.resourceSuffix }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ .Values.garbageCollection.serviceAccount.name }}
+    namespace: {{ .Values.namespace }}
+{{- end }}

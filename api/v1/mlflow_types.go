@@ -221,6 +221,14 @@ type MLflowSpec struct {
 	// +optional
 	// +kubebuilder:validation:MaxItems=32
 	NetworkPolicyAdditionalEgressRules []networkingv1.NetworkPolicyEgressRule `json:"networkPolicyAdditionalEgressRules,omitempty"`
+
+	// GarbageCollection configures a CronJob that permanently deletes soft-deleted
+	// MLflow resources (runs, experiments, and logged models) along with their artifacts.
+	// Resources must be soft-deleted first (e.g. via the UI or API) before garbage
+	// collection will remove them. Use OlderThan to restrict deletion to resources
+	// that have been in the deleted state for a minimum duration.
+	// +optional
+	GarbageCollection *GarbageCollectionSpec `json:"garbageCollection,omitempty"`
 }
 
 // CABundleConfigMapSpec specifies a ConfigMap containing CA certificates.
@@ -230,6 +238,29 @@ type CABundleConfigMapSpec struct {
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:MinLength=1
 	Name string `json:"name"`
+}
+
+// GarbageCollectionSpec configures periodic garbage collection via `mlflow gc`.
+// The CronJob permanently removes soft-deleted runs, experiments, and logged models
+// along with their associated artifacts from the configured backend and artifact stores.
+type GarbageCollectionSpec struct {
+	// Schedule is the cron expression for when garbage collection runs
+	// (e.g., "0 2 * * 0" for weekly at 2 AM on Sunday).
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MinLength=1
+	Schedule string `json:"schedule"`
+
+	// OlderThan restricts garbage collection to resources that have been in the
+	// deleted state for at least this duration (e.g., "30d", "7d12h").
+	// If not specified, all soft-deleted resources are permanently removed regardless of age.
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:Pattern=`^(\d+(\.\d+)?d)?(\d+(\.\d+)?h)?(\d+(\.\d+)?m)?(\d+(\.\d+)?s)?$`
+	// +optional
+	OlderThan *string `json:"olderThan,omitempty"`
+
+	// Resources for the garbage collection Job container.
+	// +optional
+	Resources *corev1.ResourceRequirements `json:"resources,omitempty"`
 }
 
 // ImageConfig contains container image configuration

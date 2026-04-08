@@ -75,6 +75,11 @@ spec:
     - name: AWS_DEFAULT_REGION
       value: us-east-1
 
+  # Garbage collection
+  garbageCollection:
+    schedule: "0 2 * * 0"
+    olderThan: "30d"
+
   # Custom CA Bundle (Optional)
   # For connecting to services with self-signed certificates or private CAs
   # caBundleConfigMap:

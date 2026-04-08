@@ -24,6 +24,7 @@ import (
 	consolev1 "github.com/openshift/api/console/v1"
 	monitoringv1 "github.com/prometheus-operator/prometheus-operator/pkg/apis/monitoring/v1"
 	appsv1 "k8s.io/api/apps/v1"
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -101,6 +102,35 @@ func (r *MLflowReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	// Handle deletion - all resources are cleaned up via owner references
 	if mlflow.GetDeletionTimestamp() != nil {
 		return ctrl.Result{}, nil
+	}
+
+	// Clean up GC resources when garbage collection is disabled.
+	if mlflow.Spec.GarbageCollection == nil {
+		gcSuffix := "-gc" + getResourceSuffix(mlflow.Name)
+		gcResources := []struct {
+			obj  client.Object
+			name string
+			ns   string
+		}{
+			{&batchv1.CronJob{}, ResourceName + gcSuffix, targetNamespace},
+			{&corev1.ServiceAccount{}, GCServiceAccountName, targetNamespace},
+			{&rbacv1.ClusterRoleBinding{}, ResourceName + gcSuffix, ""},
+			{&rbacv1.ClusterRole{}, ResourceName + gcSuffix, ""},
+		}
+		for _, res := range gcResources {
+			key := types.NamespacedName{Name: res.name, Namespace: res.ns}
+			existing := res.obj.DeepCopyObject().(client.Object)
+			if err := r.Get(ctx, key, existing); err == nil {
+				if err := r.Delete(ctx, existing); err != nil && !errors.IsNotFound(err) {
+					log.Error(err, "Failed to delete GC resource", "kind", existing.GetObjectKind().GroupVersionKind().Kind, "name", res.name)
+					return ctrl.Result{}, err
+				}
+				log.Info("Deleted GC resource", "kind", existing.GetObjectKind().GroupVersionKind().Kind, "name", res.name)
+			} else if !errors.IsNotFound(err) {
+				log.Error(err, "Failed to check for GC resource", "name", res.name)
+				return ctrl.Result{}, err
+			}
+		}
 	}
 
 	// Validate user-provided CA bundle ConfigMap if specified
@@ -377,6 +407,7 @@ func (r *MLflowReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	builder := ctrl.NewControllerManagedBy(mgr).
 		For(&mlflowv1.MLflow{}).
 		Owns(&appsv1.Deployment{}).
+		Owns(&batchv1.CronJob{}).
 		Owns(&corev1.Secret{}).
 		Owns(&corev1.Service{}).
 		Owns(&corev1.ServiceAccount{}).
