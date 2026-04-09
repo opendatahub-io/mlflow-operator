@@ -7,7 +7,17 @@ from mlflow.client import MlflowClient
 class UserInfo:
     """Class for storing user information with getters and setters."""
 
-    def __init__(self, uname: Optional[str] = None, upass: Optional[str] = None, workspace: Optional[str] = None, resource_types: Optional[list[ResourceType]] = None, verbs: Optional[list[KubeVerb]] = None, subresources: Optional[list[str]] = None, resource_names: Optional[dict[ResourceType, list[str]]] = None, client: Optional[MlflowClient] = None):
+    def __init__(
+        self,
+        uname: Optional[str] = None,
+        upass: Optional[str] = None,
+        workspace: Optional[str] = None,
+        resource_types: Optional[list[ResourceType]] = None,
+        verbs: Optional[list[KubeVerb]] = None,
+        subresources: Optional[list[str]] = None,
+        resource_names: Optional[dict[ResourceType, list[str]]] = None,
+        client: Optional[MlflowClient] = None,
+    ):
         """Initialize UserInfo with username, password, workspace, resource type, verbs, and authenticated client.
 
         Args:

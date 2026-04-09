@@ -56,6 +56,20 @@ class TestTraces(TestBase):
                 validate_func=validate_authentication_denied,
             ),
         ),
+        TestData(
+            test_name="Agent with GET and UPDATE in one workspace cannot send traces in a different workspace",
+            user_info=UserInfo(
+                workspace=Config.WORKSPACES[0],
+                verbs=[KubeVerb.GET, KubeVerb.UPDATE],
+                resource_types=[ResourceType.EXPERIMENTS],
+            ),
+            workspace_to_use=Config.WORKSPACES[1],
+            resource_slot=PRIMARY_RESOURCE_SLOT,
+            test_steps=TestStep(
+                action_func=action_post_trace_v3_direct,
+                validate_func=validate_authentication_denied,
+            ),
+        ),
     ]
 
     @pytest.mark.parametrize("test_data", test_scenarios, ids=lambda x: x.test_name)

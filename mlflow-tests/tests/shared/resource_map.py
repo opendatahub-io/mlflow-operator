@@ -50,6 +50,10 @@ def resolve_resource_name_refs(
     resource_names: dict[ResourceType, list[str]] | None,
 ) -> dict[ResourceType, list[str]]:
     """Resolve placeholder resource names against the session baseline resources."""
+    placeholder_to_slot = {
+        PRIMARY_RESOURCE_REF: PRIMARY_RESOURCE_SLOT,
+        SECONDARY_RESOURCE_REF: SECONDARY_RESOURCE_SLOT,
+    }
     resolved_resource_names: dict[ResourceType, list[str]] = {}
     for resource_type, names in (resource_names or {}).items():
         resolved_names = []
@@ -57,20 +61,17 @@ def resolve_resource_name_refs(
             # These placeholders resolve to the Kubernetes RBAC resourceName. For the
             # resource types covered here, that is the human-readable MLflow resource
             # name (for example the experiment name or registered model name), not the ID.
-            if name == PRIMARY_RESOURCE_REF:
-                resolved_names.append(
-                    get_resource_entry(resource_map, resource_type, workspace)[
-                        "name"
-                    ]
-                )
-            elif name == SECONDARY_RESOURCE_REF:
+            slot = placeholder_to_slot.get(name)
+            if slot is not None:
                 resolved_names.append(
                     get_resource_entry(
                         resource_map,
                         resource_type,
                         workspace,
-                        slot=SECONDARY_RESOURCE_SLOT,
-                    )["name"]
+                        slot=slot,
+                    )[
+                        "name"
+                    ]
                 )
             else:
                 resolved_names.append(name)

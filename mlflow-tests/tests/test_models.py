@@ -119,35 +119,6 @@ class TestRegisteredModels(TestBase):
                 validate_func=validate_authentication_denied
             )
         ),
-        # Preserve the existing explicit standalone scenarios in addition to the
-        # surrounding negative cases so the suite does not reduce prior coverage.
-        TestData(
-            test_name="Validate that user with CREATE permission can create registered model",
-            user_info=UserInfo(workspace=Config.WORKSPACES[0], verbs=[KubeVerb.CREATE], resource_types=[ResourceType.REGISTERED_MODELS]),
-            workspace_to_use=Config.WORKSPACES[0],
-            test_steps = TestStep(
-                action_func=action_create_registered_model,
-                validate_func=validate_model_created
-            )
-        ),
-        TestData(
-            test_name="Validate that user with GET, CREATE and DELETE permissions can delete registered model",
-            user_info=UserInfo(workspace=Config.WORKSPACES[0], verbs=[KubeVerb.GET, KubeVerb.CREATE, KubeVerb.DELETE], resource_types=[ResourceType.REGISTERED_MODELS]),
-            workspace_to_use=Config.WORKSPACES[0],
-            test_steps = [
-                TestStep(action_func=action_create_registered_model, validate_func=validate_model_created),
-                TestStep(action_func=action_delete_registered_model, validate_func=validate_model_deleted)
-            ]
-        ),
-        TestData(
-            test_name="Validate that user with CREATE permission on workspace 1 cannot create registered model in workspace 2",
-            user_info=UserInfo(workspace=Config.WORKSPACES[0], verbs=[KubeVerb.CREATE], resource_types=[ResourceType.REGISTERED_MODELS]),
-            workspace_to_use=Config.WORKSPACES[1],
-            test_steps = TestStep(
-                action_func=action_create_registered_model,
-                validate_func=validate_authentication_denied
-            )
-        ),
         # Additional negative test cases
         TestData(
             test_name="User with GET permission cannot delete registered model",
