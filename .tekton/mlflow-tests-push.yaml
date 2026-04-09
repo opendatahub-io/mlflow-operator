@@ -8,7 +8,7 @@ metadata:
     pipelinesascode.tekton.dev/cancel-in-progress: "false"
     pipelinesascode.tekton.dev/max-keep-runs: "3"
     pipelinesascode.tekton.dev/on-cel-expression: event == "push" && (target_branch
-      == "main" || target_branch.matches("^rhoai-.*") || target_branch.matches("^release-.*"))
+      == "main" || target_branch.matches("^rhoai-[0-9]") || target_branch.matches("^release-[0-9]"))
   creationTimestamp: null
   labels:
     appstudio.openshift.io/application: opendatahub-builds

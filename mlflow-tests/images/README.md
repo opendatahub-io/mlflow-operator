@@ -2,7 +2,7 @@
 
 This directory contains the integration test image and orchestration script for the MLflow Operator.
 Tests are intended to be run against a live OpenShift cluster with the MLflow Operator already installed
-(via RHOAI or ODH). They are also used in CI via the test container image defined in `test.Dockerfile`.
+(via RHOAI or ODH). They are also used in CI via the test container image defined in `Dockerfile.konflux`.
 
 The tests validate workspace-scoped RBAC behaviour by deploying a real MLflow instance via the operator,
 then exercising experiment, model, and artifact operations as users with varying Kubernetes permissions.
@@ -42,7 +42,7 @@ service via its cluster-internal DNS name, bypassing the OpenShift gateway entir
 
 ```bash
 # From the repository root
-podman build -f mlflow-tests/images/test.Dockerfile -t mlflow-tests:latest .
+podman build -f mlflow-tests/images/Dockerfile.konflux -t mlflow-tests:latest .
 
 # --user root is required locally because the host kubeconfig is typically chmod 600.
 # This is safe with local podman; OpenShift SCCs prevent root containers in-cluster.
