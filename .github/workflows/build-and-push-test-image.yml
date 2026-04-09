@@ -1,14 +1,16 @@
 name: Build and Push Test Image
 
-# This workflow builds and pushes the mlflow-tests/image/Dockerfile.test image to quay.io
-# The image is tagged with the branch name to allow for branch-specific testing
+# Builds and pushes the mlflow-tests image to quay.io/opendatahub.
+# Konflux also builds on push (.tekton/mlflow-tests-push*.yaml) but pushes
+# to quay.io/rhoai which is not publicly accessible. GHA builds ensure
+# the image is available in the public opendatahub org for CI consumers.
 
 on:
   push:
     branches:
       - main
-      - "release-[0-9]*" # release branches
-      - '[0-9]*'  # tagged versions
+      - "release-[0-9]*"
+      - "rhoai-[0-9]*"
   workflow_dispatch:
     inputs:
       branch_name:
@@ -21,7 +23,7 @@ env:
   QUAY_ID: ${{ secrets.QUAY_ROBOT_USERNAME }}
   QUAY_TOKEN: ${{ secrets.QUAY_ROBOT_TOKEN }}
   IMAGE_REPO: mlflow-tests
-  DOCKERFILE_PATH: mlflow-tests/images/test.Dockerfile
+  DOCKERFILE_PATH: mlflow-tests/images/Dockerfile.konflux
 
 jobs:
   build-test-image:
@@ -52,9 +54,15 @@ jobs:
           # Sanitize branch name for Docker tag (replace / with -, remove invalid chars)
           TAG_NAME=$(echo "$BRANCH_NAME" | sed 's/[^a-zA-Z0-9._-]/-/g' | tr '[:upper:]' '[:lower:]')
 
-          # Prefix tag with rhds- when running in red-hat-data-services repo
+          # Prefix tags to avoid collisions with Konflux builds.
+          # Konflux pushes {{target_branch}} directly (e.g. main, rhoai-3.4).
           if [[ "$REPO" == red-hat-data-services/* ]]; then
-            TAG_NAME="rhds-${TAG_NAME}"
+            # rhoai-* branches are already namespaced
+            if [[ ! "$TAG_NAME" =~ ^rhoai- ]]; then
+              TAG_NAME="rhds-${TAG_NAME}"
+            fi
+          else
+            TAG_NAME="odh-${TAG_NAME}"
           fi
 
           {
