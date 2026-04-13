@@ -13,7 +13,7 @@ ARG KUSTOMIZE_VERSION=5.8.0
 
 RUN microdnf install -y --setopt=tsflags=nodocs \
       python3.12 python3.12-pip \
-      tar gzip git && \
+      tar gzip git findutils gettext && \
     microdnf clean all && \
     ln -sf /usr/bin/python3.12 /usr/bin/python3
 
