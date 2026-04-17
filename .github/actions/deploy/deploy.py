@@ -7,6 +7,7 @@ storage backends (SQLite/PostgreSQL) and artifact storage (file/S3).
 """
 
 import argparse
+import base64
 import json
 import os
 import subprocess
@@ -193,9 +194,13 @@ class MLflowDeployer:
                 "--ignore-not-found", "-n", self.args.namespace,
             ], capture_output=True)
 
-        # Delete the CA bundle ConfigMap we created (harmless if absent).
+        # Delete the CA bundle ConfigMap and CA keypair secret (harmless if absent).
         self.run_command([
             "kubectl", "delete", "configmap", "mlflow-ca-bundle",
+            "--ignore-not-found", "-n", self.args.namespace,
+        ], capture_output=True)
+        self.run_command([
+            "kubectl", "delete", "secret", "mlflow-ca-keypair",
             "--ignore-not-found", "-n", self.args.namespace,
         ], capture_output=True)
 
@@ -282,12 +287,44 @@ class MLflowDeployer:
         cmd += ["-n", self.args.namespace]
         self.run_command(cmd, "Creating S3 credentials secret", capture_output=True)
 
+    def _recover_ca(self):
+        """Recover the CA keypair from the mlflow-ca-keypair secret.
+
+        When TLS secrets are reused from a prior run, we still need the CA
+        that signed them so any *new* secrets (e.g. SeaweedFS added in suite 2)
+        are signed by the same CA and the single CA bundle stays consistent.
+        """
+        if self._ca_cert_pem or self._ca_tmpdir:
+            return
+        result = subprocess.run(
+            ["kubectl", "get", "secret", "mlflow-ca-keypair",
+             "-n", self.args.namespace, "-o", "json"],
+            capture_output=True, text=True,
+        )
+        if result.returncode != 0:
+            return
+        data = json.loads(result.stdout).get("data", {})
+        if "ca.crt" not in data or "ca.key" not in data:
+            return
+        self._ca_tmpdir = tempfile.TemporaryDirectory(prefix="mlflow-ca-")
+        ca_dir = self._ca_tmpdir.name
+        for filename in ("ca.crt", "ca.key"):
+            with open(f"{ca_dir}/{filename}", "w") as f:
+                f.write(base64.b64decode(data[filename]).decode())
+        with open(f"{ca_dir}/ca.crt") as f:
+            self._ca_cert_pem = f.read()
+        print("🔐 Recovered CA keypair from existing mlflow-ca-keypair secret")
+
     def _ensure_ca(self):
         """Generate a self-signed CA key+cert (once) for signing server certificates.
 
         The CA cert PEM is stored in self._ca_cert_pem and used as the single
-        trust anchor in the CA bundle ConfigMap.
+        trust anchor in the CA bundle ConfigMap.  The keypair is also persisted
+        to a K8s secret so it can be recovered across deploy.py invocations.
         """
+        if self._ca_tmpdir:
+            return
+        self._recover_ca()
         if self._ca_tmpdir:
             return
         self._ca_tmpdir = tempfile.TemporaryDirectory(prefix="mlflow-ca-")
@@ -302,7 +339,13 @@ class MLflowDeployer:
         ], "Generating CA certificate", capture_output=True)
         with open(ca_cert) as f:
             self._ca_cert_pem = f.read()
-        print("🔐 CA certificate generated")
+        self.run_command([
+            "kubectl", "create", "secret", "generic", "mlflow-ca-keypair",
+            f"--from-file=ca.crt={ca_cert}",
+            f"--from-file=ca.key={ca_key}",
+            "-n", self.args.namespace,
+        ], "Persisting CA keypair to secret", capture_output=True)
+        print("🔐 CA certificate generated and persisted")
 
     def _create_tls_secret(self, secret_name: str, cn: str,
                            cert_filename: str = "tls.crt",
@@ -312,7 +355,17 @@ class MLflowDeployer:
 
         Calls _ensure_ca() to create the CA if it doesn't exist yet.
         SANs always include DNS:cn plus any extra_sans.
+        Skips creation if the secret already exists (preserves cert/CA
+        consistency across sequential deploy.py invocations).
         """
+        result = subprocess.run(
+            ["kubectl", "get", "secret", secret_name, "-n", self.args.namespace],
+            capture_output=True,
+        )
+        if result.returncode == 0:
+            print(f"🔐 TLS secret '{secret_name}' already exists, reusing")
+            return
+
         self._ensure_ca()
         sans = [f"DNS:{cn}"] + (extra_sans or [])
         san_str = ",".join(sans)
@@ -709,22 +762,6 @@ class MLflowDeployer:
                 "Waiting for PostgreSQL deployment to be available"
             )
 
-            # When TLS is enabled the secret may have been regenerated with a
-            # new CA. Restart the pod and wait for the rollout to complete so
-            # the new cert is mounted before MLflow tries to connect.
-            if self.args.postgres_tls:
-                self.run_command(
-                    f"kubectl rollout restart deployment/postgres-deployment "
-                    f"-n {self.args.namespace}",
-                    "Restarting PostgreSQL to pick up new TLS certs",
-                    capture_output=True,
-                )
-                self.run_command(
-                    f"kubectl rollout status deployment/postgres-deployment "
-                    f"--timeout=300s -n {self.args.namespace}",
-                    "Waiting for PostgreSQL rollout to complete"
-                )
-
         except Exception as e:
             print(f"❌ PostgreSQL deployment failed to become ready: {e}")
             self.debug_deployment("postgres-deployment", self.args.namespace)
@@ -864,10 +901,11 @@ class MLflowDeployer:
                 }
             }
 
-        # Set up the CA trust anchor for TLS endpoints.  Three paths:
+        # Set up the CA trust anchor for TLS endpoints.  Four paths:
         #  1. Caller supplied --ca-bundle-configmap: use it directly.
         #  2. Caller supplied --ca-bundle-path: create a ConfigMap from the file.
         #  3. Self-signed certs generated above: combine into a bundle ConfigMap.
+        #  4. TLS secrets were reused from a prior run: reuse the existing ConfigMap.
         if self.args.ca_bundle_configmap:
             self._tls_ca_bundle_cm = self.args.ca_bundle_configmap
         elif self.args.ca_bundle_path:
@@ -876,6 +914,12 @@ class MLflowDeployer:
             self._create_infra_ca_bundle(ca_pem)
         elif self._ca_cert_pem:
             self._create_infra_ca_bundle(self._ca_cert_pem)
+        elif subprocess.run(
+            ["kubectl", "get", "configmap", "mlflow-ca-bundle",
+             "-n", self.args.namespace],
+            capture_output=True,
+        ).returncode == 0:
+            self._tls_ca_bundle_cm = "mlflow-ca-bundle"
 
         if self._tls_ca_bundle_cm:
             mlflow_cr["spec"]["caBundleConfigMap"] = {"name": self._tls_ca_bundle_cm}
