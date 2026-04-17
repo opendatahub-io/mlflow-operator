@@ -708,6 +708,7 @@ class MLflowDeployer:
                 f"--timeout=300s -n {self.args.namespace}",
                 "Waiting for PostgreSQL deployment to be available"
             )
+
         except Exception as e:
             print(f"❌ PostgreSQL deployment failed to become ready: {e}")
             self.debug_deployment("postgres-deployment", self.args.namespace)
@@ -737,7 +738,15 @@ class MLflowDeployer:
                 "image": {
                     "image": self.args.mlflow_image,
                     "imagePullPolicy": "Always"
-                }
+                },
+                "networkPolicyAdditionalEgressRules": [
+                    {
+                        "ports": [
+                            {"protocol": "UDP", "port": 5353},
+                            {"protocol": "TCP", "port": 5353},
+                        ]
+                    }
+                ]
             }
         }
 
