@@ -709,6 +709,22 @@ class MLflowDeployer:
                 "Waiting for PostgreSQL deployment to be available"
             )
 
+            # When TLS is enabled the secret may have been regenerated with a
+            # new CA. Restart the pod and wait for the rollout to complete so
+            # the new cert is mounted before MLflow tries to connect.
+            if self.args.postgres_tls:
+                self.run_command(
+                    f"kubectl rollout restart deployment/postgres-deployment "
+                    f"-n {self.args.namespace}",
+                    "Restarting PostgreSQL to pick up new TLS certs",
+                    capture_output=True,
+                )
+                self.run_command(
+                    f"kubectl rollout status deployment/postgres-deployment "
+                    f"--timeout=300s -n {self.args.namespace}",
+                    "Waiting for PostgreSQL rollout to complete"
+                )
+
         except Exception as e:
             print(f"❌ PostgreSQL deployment failed to become ready: {e}")
             self.debug_deployment("postgres-deployment", self.args.namespace)

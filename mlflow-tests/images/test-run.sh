@@ -456,9 +456,6 @@ run_suite() {
         [ -n "$PF_PID" ] && kill -0 "$PF_PID" 2>/dev/null && kill "$PF_PID" && PF_PID=""
         # --wait ensures finalizers have completed before the next suite's deploy.py apply.
         kubectl delete mlflow "$MLFLOW_NAME" -n "$NAMESPACE" --ignore-not-found --wait --timeout=120s 2>/dev/null || true
-        # Restart infra pods so they pick up any regenerated TLS secrets.
-        kubectl delete pod -l app=mlflow-postgres -n "$NAMESPACE" --ignore-not-found 2>/dev/null || true
-        kubectl delete pod -l app=seaweedfs -n "$NAMESPACE" --ignore-not-found 2>/dev/null || true
     }
     trap _suite_teardown RETURN
 
