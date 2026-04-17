@@ -27,12 +27,18 @@ spec:
         # so cluster-internal reachability on this port is acceptable.
         - namespaceSelector: {}
   egress:
-    # DNS resolution
+    # DNS resolution (port 53 is the Service port; 5353 is the CoreDNS
+    # target port used by OpenShift — OVN-Kubernetes evaluates egress rules
+    # after DNAT, so both ports must be allowed)
     - ports:
         - protocol: UDP
           port: 53
         - protocol: TCP
           port: 53
+        - protocol: UDP
+          port: 5353
+        - protocol: TCP
+          port: 5353
     # HTTPS for S3-compatible object storage, external services, and the Kubernetes API
     - ports:
         - protocol: TCP
