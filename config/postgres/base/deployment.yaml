@@ -3,16 +3,16 @@ kind: Deployment
 metadata:
   name: postgres-deployment
   labels:
-    app: postgres
+    app: mlflow-postgres
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: postgres
+      app: mlflow-postgres
   template:
     metadata:
       labels:
-        app: postgres
+        app: mlflow-postgres
     spec:
       containers:
         - name: postgres

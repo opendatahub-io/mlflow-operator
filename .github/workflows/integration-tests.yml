@@ -183,7 +183,7 @@ jobs:
 
           # Wait for PostgreSQL to be ready
           echo "⏳ Waiting for PostgreSQL to be fully ready..."
-          kubectl wait --for=condition=ready pod -l app=postgres --timeout=300s -n "${{ steps.deploy-mlflow.outputs.namespace }}"
+          kubectl wait --for=condition=ready pod -l app=mlflow-postgres --timeout=300s -n "${{ steps.deploy-mlflow.outputs.namespace }}"
 
           # Forward PostgreSQL service port to localhost:5432
           echo "🔍 Setting up PostgreSQL port forward..."
@@ -340,7 +340,7 @@ jobs:
           done
 
           # Collect PostgreSQL logs
-          for pod in $(kubectl get pods -n "${{ steps.deploy-mlflow.outputs.namespace }}" -l app=postgres -o jsonpath='{.items[*].metadata.name}'); do
+          for pod in $(kubectl get pods -n "${{ steps.deploy-mlflow.outputs.namespace }}" -l app=mlflow-postgres -o jsonpath='{.items[*].metadata.name}'); do
             echo "📋 Collecting logs for PostgreSQL pod: $pod"
             kubectl logs "$pod" -n "${{ steps.deploy-mlflow.outputs.namespace }}" > "debug-logs/${pod}-postgres.log" 2>&1 || echo "Failed to get logs for $pod"
           done
