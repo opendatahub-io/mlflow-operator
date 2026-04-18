@@ -7,16 +7,23 @@ storage backends (SQLite/PostgreSQL) and artifact storage (file/S3).
 """
 
 import argparse
+import copy
 import json
 import os
 import subprocess
 import sys
 import tempfile
 import time
-import yaml
 from pathlib import Path
 from typing import List, Union
 from urllib.parse import quote_plus
+
+from kubernetes import client, config
+from kubernetes.client.rest import ApiException
+from kubernetes.config.config_exception import ConfigException
+import yaml
+
+DEFAULT_COMMAND_TIMEOUT = 300
 
 
 class MLflowDeployer:
@@ -43,6 +50,12 @@ class MLflowDeployer:
         if self.args.postgres_sslmode is None:
             self.args.postgres_sslmode = "verify-full" if self.args.postgres_tls else "disable"
             print(f"  PostgreSQL sslmode defaulted to '{self.args.postgres_sslmode}'")
+
+        self.api_client = self._load_kubernetes_client()
+        self.core_api = client.CoreV1Api(self.api_client)
+        self.apps_api = client.AppsV1Api(self.api_client)
+        self.batch_api = client.BatchV1Api(self.api_client)
+        self.custom_api = client.CustomObjectsApi(self.api_client)
 
         print(f"Repository root: {self.repo_root}")
         print(f"Target namespace: {self.args.namespace}")
@@ -132,24 +145,322 @@ class MLflowDeployer:
                 process.wait()
             raise
 
+    def _load_kubernetes_client(self) -> client.ApiClient:
+        """Load Kubernetes credentials from the pod service account or kubeconfig."""
+        try:
+            config.load_incluster_config()
+            auth_source = "in-cluster service account"
+        except ConfigException:
+            config.load_kube_config()
+            auth_source = "kubeconfig"
+
+        print(f"🔐 Loaded Kubernetes credentials from {auth_source}")
+        return client.ApiClient()
+
+    @staticmethod
+    def _is_not_found(exc: ApiException) -> bool:
+        return exc.status == 404
+
+    def _serialize_k8s_object(self, obj):
+        if obj is None:
+            return None
+        return self.api_client.sanitize_for_serialization(obj)
+
+    def _delete_if_exists(self, delete_fn, *args, **kwargs):
+        try:
+            delete_fn(*args, **kwargs)
+        except ApiException as exc:
+            if not self._is_not_found(exc):
+                raise
+
+    def _read_optional(self, read_fn, *args, **kwargs):
+        try:
+            return read_fn(*args, **kwargs)
+        except ApiException as exc:
+            if self._is_not_found(exc):
+                return None
+            raise
+
+    def _apply_secret(self, name: str, string_data=None, file_data=None):
+        namespace = self.args.namespace
+        combined_string_data = dict(string_data or {})
+        for key, path in (file_data or {}).items():
+            with open(path) as f:
+                combined_string_data[key] = f.read()
+
+        body = client.V1Secret(
+            metadata=client.V1ObjectMeta(name=name, namespace=namespace),
+            string_data=combined_string_data,
+            type="Opaque",
+        )
+        existing = self._read_optional(self.core_api.read_namespaced_secret, name, namespace)
+        if existing:
+            body.metadata.resource_version = existing.metadata.resource_version
+            self.core_api.patch_namespaced_secret(name, namespace, body)
+        else:
+            self.core_api.create_namespaced_secret(namespace, body)
+
+    def _apply_configmap(self, name: str, data: dict):
+        namespace = self.args.namespace
+        body = client.V1ConfigMap(
+            metadata=client.V1ObjectMeta(name=name, namespace=namespace),
+            data=data,
+        )
+        existing = self._read_optional(self.core_api.read_namespaced_config_map, name, namespace)
+        if existing:
+            body.metadata.resource_version = existing.metadata.resource_version
+            self.core_api.patch_namespaced_config_map(name, namespace, body)
+        else:
+            self.core_api.create_namespaced_config_map(namespace, body)
+
+    def _apply_mlflow_cr(self, mlflow_cr: dict):
+        name = mlflow_cr["metadata"]["name"]
+        existing = None
+        try:
+            existing = self.custom_api.get_cluster_custom_object(
+                group="mlflow.opendatahub.io",
+                version="v1",
+                plural="mlflows",
+                name=name,
+            )
+        except ApiException as exc:
+            if not self._is_not_found(exc):
+                raise
+
+        if existing:
+            patch_body = copy.deepcopy(mlflow_cr)
+            patch_metadata = {"name": name}
+            existing_metadata = existing.get("metadata", {})
+            patch_metadata["resourceVersion"] = existing_metadata["resourceVersion"]
+            for field in ("finalizers", "labels", "annotations"):
+                value = existing_metadata.get(field)
+                if value:
+                    patch_metadata[field] = value
+            patch_body["metadata"] = patch_metadata
+            self.custom_api.patch_cluster_custom_object(
+                group="mlflow.opendatahub.io",
+                version="v1",
+                plural="mlflows",
+                name=name,
+                body=patch_body,
+            )
+        else:
+            self.custom_api.create_cluster_custom_object(
+                group="mlflow.opendatahub.io",
+                version="v1",
+                plural="mlflows",
+                body=mlflow_cr,
+            )
+
+    def _build_kustomize(self, path: Path, timeout: int = DEFAULT_COMMAND_TIMEOUT) -> str:
+        try:
+            return subprocess.run(
+                ["kustomize", "build", str(path)],
+                capture_output=True,
+                text=True,
+                check=True,
+                timeout=timeout,
+            ).stdout
+        except subprocess.CalledProcessError as exc:
+            if exc.stderr:
+                print(exc.stderr, file=sys.stderr)
+            if exc.stdout:
+                print(exc.stdout)
+            raise
+        except subprocess.TimeoutExpired as exc:
+            print(f"❌ kustomize build timed out after {timeout} seconds", file=sys.stderr)
+            if exc.stderr:
+                print(exc.stderr, file=sys.stderr)
+            if exc.stdout:
+                print(exc.stdout)
+            raise
+
+    def _run_envsubst(self, manifests: str, extra_env=None,
+                      timeout: int = DEFAULT_COMMAND_TIMEOUT) -> str:
+        env = {**os.environ, **(extra_env or {})}
+        try:
+            return subprocess.run(
+                ["envsubst"],
+                input=manifests,
+                capture_output=True,
+                text=True,
+                check=True,
+                env=env,
+                timeout=timeout,
+            ).stdout
+        except subprocess.CalledProcessError as exc:
+            if exc.stderr:
+                print(exc.stderr, file=sys.stderr)
+            if exc.stdout:
+                print(exc.stdout)
+            raise
+        except subprocess.TimeoutExpired as exc:
+            print(f"❌ envsubst timed out after {timeout} seconds", file=sys.stderr)
+            if exc.stderr:
+                print(exc.stderr, file=sys.stderr)
+            if exc.stdout:
+                print(exc.stdout)
+            raise
+
+    def _apply_manifest_stream(self, manifests: str, namespace: str = None,
+                               timeout: int = DEFAULT_COMMAND_TIMEOUT):
+        cmd = ["kubectl", "apply"]
+        if namespace:
+            cmd += ["-n", namespace]
+        cmd += ["-f", "-"]
+        try:
+            subprocess.run(
+                cmd,
+                input=manifests,
+                capture_output=True,
+                text=True,
+                check=True,
+                timeout=timeout,
+            )
+        except subprocess.CalledProcessError as exc:
+            if exc.stderr:
+                print(exc.stderr, file=sys.stderr)
+            if exc.stdout:
+                print(exc.stdout)
+            raise
+        except subprocess.TimeoutExpired as exc:
+            print(f"❌ kubectl apply timed out after {timeout} seconds", file=sys.stderr)
+            if exc.stderr:
+                print(exc.stderr, file=sys.stderr)
+            if exc.stdout:
+                print(exc.stdout)
+            raise
+
+    def _wait_for_pods_to_be_deleted(self, label_selector: str, namespace: str,
+                                     timeout: int = 60, poll_interval: int = 5):
+        elapsed_time = 0
+        while elapsed_time < timeout:
+            pods = self.core_api.list_namespaced_pod(
+                namespace=namespace,
+                label_selector=label_selector,
+            ).items
+            if not pods:
+                return True
+            time.sleep(poll_interval)
+            elapsed_time += poll_interval
+        print(
+            f"⚠️  Timed out waiting for pods matching '{label_selector}' "
+            f"to be deleted in namespace '{namespace}'"
+        )
+        return False
+
+    def _wait_for_resource_absent(self, read_fn, description: str, *args,
+                                  timeout: int = 60, poll_interval: int = 5):
+        elapsed_time = 0
+        while elapsed_time < timeout:
+            if self._read_optional(read_fn, *args) is None:
+                return True
+            time.sleep(poll_interval)
+            elapsed_time += poll_interval
+        raise Exception(f"Timed out waiting for {description} to be deleted after {timeout}s")
+
+    def _wait_for_deployment_available(self, deployment_name: str, namespace: str,
+                                       timeout: int = 300, poll_interval: int = 10):
+        print(f"⏳ Waiting for {deployment_name} deployment to become available...")
+        elapsed_time = 0
+        while elapsed_time < timeout:
+            deployment = self._read_optional(
+                self.apps_api.read_namespaced_deployment,
+                deployment_name,
+                namespace,
+            )
+            if deployment and deployment.status:
+                desired_replicas = (
+                    deployment.spec.replicas
+                    if deployment.spec and deployment.spec.replicas is not None
+                    else 1
+                )
+                observed_generation = deployment.status.observed_generation or 0
+                current_generation = deployment.metadata.generation or 0
+                updated_replicas = deployment.status.updated_replicas or 0
+                ready_replicas = deployment.status.ready_replicas or 0
+                conditions = deployment.status.conditions or []
+                is_available = any(c.type == "Available" and c.status == "True" for c in conditions)
+                if (
+                    is_available
+                    and observed_generation >= current_generation
+                    and updated_replicas >= desired_replicas
+                    and ready_replicas >= desired_replicas
+                ):
+                    print(f"✅ {deployment_name} deployment is available")
+                    return True
+            time.sleep(poll_interval)
+            elapsed_time += poll_interval
+            if elapsed_time < timeout:
+                print(
+                    f"⏳ Waiting for {deployment_name} deployment to become available... "
+                    f"({elapsed_time}/{timeout}s)"
+                )
+        raise Exception(f"Timeout waiting for {deployment_name} deployment to become available after {timeout}s")
+
+    def _wait_for_job_completion(self, job_name: str, namespace: str,
+                                 timeout: int = 400, poll_interval: int = 10):
+        print(f"⏳ Waiting for {job_name} job to complete...")
+        elapsed_time = 0
+        while elapsed_time < timeout:
+            job = self._read_optional(self.batch_api.read_namespaced_job, job_name, namespace)
+            if job and job.status:
+                conditions = job.status.conditions or []
+                if any(c.type == "Complete" and c.status == "True" for c in conditions):
+                    print(f"✅ {job_name} job completed successfully")
+                    return True
+                if any(c.type == "Failed" and c.status == "True" for c in conditions):
+                    raise Exception(f"Job {job_name} failed")
+            time.sleep(poll_interval)
+            elapsed_time += poll_interval
+            if elapsed_time < timeout:
+                print(f"⏳ Waiting for {job_name} job to complete... ({elapsed_time}/{timeout}s)")
+        raise Exception(f"Timeout waiting for {job_name} job to complete after {timeout}s")
+
+    @staticmethod
+    def _selector_to_string(match_labels: dict) -> str:
+        return ",".join(f"{key}={value}" for key, value in match_labels.items())
+
+    def _deployment_label_selector(self, deployment_name: str, namespace: str) -> str:
+        deployment = self._read_optional(
+            self.apps_api.read_namespaced_deployment,
+            deployment_name,
+            namespace,
+        )
+        if deployment and deployment.spec and deployment.spec.selector and deployment.spec.selector.match_labels:
+            return self._selector_to_string(deployment.spec.selector.match_labels)
+        return f"app={deployment_name}"
+
+    def _read_pod_phase(self, pod_name: str, namespace: str) -> str:
+        pod = self._read_optional(self.core_api.read_namespaced_pod, pod_name, namespace)
+        if pod and pod.status and pod.status.phase:
+            return pod.status.phase
+        return ""
+
+    def _get_mlflow_cr(self):
+        try:
+            return self.custom_api.get_cluster_custom_object(
+                group="mlflow.opendatahub.io",
+                version="v1",
+                plural="mlflows",
+                name="mlflow",
+            )
+        except ApiException as exc:
+            if self._is_not_found(exc):
+                return None
+            raise
+
     def create_namespace(self):
         """Create Kubernetes namespace"""
         print(f"🔨 Creating namespace '{self.args.namespace}'...")
-
-        # Check if namespace already exists
-        result = self.run_command(
-            f"kubectl get namespace {self.args.namespace}",
-            check=False, capture_output=True
-        )
-
-        if result and result.stdout and "Active" in result.stdout:
+        namespace = self._read_optional(self.core_api.read_namespace, self.args.namespace)
+        if namespace:
             print(f"✅ Namespace '{self.args.namespace}' already exists")
         else:
-            # Namespace doesn't exist, create it
-            self.run_command(
-                f"kubectl create namespace {self.args.namespace}",
-                f"Creating namespace {self.args.namespace}"
+            self.core_api.create_namespace(
+                client.V1Namespace(metadata=client.V1ObjectMeta(name=self.args.namespace))
             )
+            print(f"✅ Namespace '{self.args.namespace}' created")
 
     def generate_tls_certificates(self):
         """Generate TLS certificates for MLflow operator deployment"""
@@ -182,22 +493,25 @@ class MLflowDeployer:
         print("🧹 Cleaning up TLS resources...")
 
         if self.args.seaweedfs_tls:
-            self.run_command([
-                "kubectl", "delete", "secret", "seaweedfs-tls-certs",
-                "--ignore-not-found", "-n", self.args.namespace,
-            ], capture_output=True)
+            self._delete_if_exists(
+                self.core_api.delete_namespaced_secret,
+                "seaweedfs-tls-certs",
+                self.args.namespace,
+            )
 
         if self.args.postgres_tls:
-            self.run_command([
-                "kubectl", "delete", "secret", "postgres-tls-certs",
-                "--ignore-not-found", "-n", self.args.namespace,
-            ], capture_output=True)
+            self._delete_if_exists(
+                self.core_api.delete_namespaced_secret,
+                "postgres-tls-certs",
+                self.args.namespace,
+            )
 
         # Delete the CA bundle ConfigMap we created (harmless if absent).
-        self.run_command([
-            "kubectl", "delete", "configmap", "mlflow-ca-bundle",
-            "--ignore-not-found", "-n", self.args.namespace,
-        ], capture_output=True)
+        self._delete_if_exists(
+            self.core_api.delete_namespaced_config_map,
+            "mlflow-ca-bundle",
+            self.args.namespace,
+        )
 
     def deploy_mlflow_operator(self):
         """Deploy MLflow operator using kustomize"""
@@ -220,17 +534,15 @@ class MLflowDeployer:
 
         # Use the kind overlay with proper environment setup
         kind_overlay = self.repo_root / "config" / "overlays" / "kind"
-
-        cmd = f"cd {self.repo_root} && export NAMESPACE={self.args.namespace} && kustomize build {kind_overlay} | envsubst | kubectl apply -f -"
-        self.run_command(cmd, "Deploying MLflow operator")
+        manifests = self._build_kustomize(kind_overlay)
+        manifests = self._run_envsubst(manifests, {"NAMESPACE": self.args.namespace})
+        self._apply_manifest_stream(manifests)
 
         # Wait for operator to be ready (now in the correct namespace)
-        print("⏳ Waiting for MLflow operator to be ready...")
         try:
-            self.run_command(
-                "kubectl wait --for=condition=available deployment/mlflow-operator-controller-manager "
-                f"--timeout=300s -n {self.args.namespace}",
-                "Waiting for operator deployment"
+            self._wait_for_deployment_available(
+                "mlflow-operator-controller-manager",
+                self.args.namespace,
             )
         except Exception as e:
             print(f"❌ MLflow operator deployment failed to become ready: {e}")
@@ -248,39 +560,23 @@ class MLflowDeployer:
         sslmode_param = f"?sslmode={self.args.postgres_sslmode}" if self.args.postgres_sslmode else ""
         backend_uri = f"postgresql://{encoded_user}:{encoded_pass}@{self.args.postgres_host}:{self.args.postgres_port}/{self.args.postgres_backend_db}{sslmode_param}"
         registry_uri = f"postgresql://{encoded_user}:{encoded_pass}@{self.args.postgres_host}:{self.args.postgres_port}/{self.args.postgres_registry_db}{sslmode_param}"
-
-        # Delete existing secret if it exists
-        self.run_command([
-            "kubectl", "delete", "secret", "mlflow-db-credentials",
-            "--ignore-not-found", "-n", self.args.namespace
-        ], capture_output=True)
-
-        self.run_command([
-            "kubectl", "create", "secret", "generic", "mlflow-db-credentials",
-            f"--from-literal=backend-store-uri={backend_uri}",
-            f"--from-literal=registry-store-uri={registry_uri}",
-            "-n", self.args.namespace
-        ], "Creating PostgreSQL credentials secret", capture_output=True)
+        self._apply_secret("mlflow-db-credentials", {
+            "backend-store-uri": backend_uri,
+            "registry-store-uri": registry_uri,
+        })
+        print("✅ PostgreSQL credentials secret ready")
 
     def create_s3_secret(self):
         """Create S3/AWS credentials secret"""
         print("🔐 Creating S3 credentials secret...")
-
-        # Delete existing secret if it exists
-        self.run_command([
-            "kubectl", "delete", "secret", "aws-credentials",
-            "--ignore-not-found", "-n", self.args.namespace
-        ], capture_output=True)
-
-        cmd = [
-            "kubectl", "create", "secret", "generic", "aws-credentials",
-            f"--from-literal=AWS_ACCESS_KEY_ID={self.args.s3_access_key}",
-            f"--from-literal=AWS_SECRET_ACCESS_KEY={self.args.s3_secret_key}",
-        ]
+        secret_data = {
+            "AWS_ACCESS_KEY_ID": self.args.s3_access_key,
+            "AWS_SECRET_ACCESS_KEY": self.args.s3_secret_key,
+        }
         if self.args.s3_region:
-            cmd.append(f"--from-literal=AWS_DEFAULT_REGION={self.args.s3_region}")
-        cmd += ["-n", self.args.namespace]
-        self.run_command(cmd, "Creating S3 credentials secret", capture_output=True)
+            secret_data["AWS_DEFAULT_REGION"] = self.args.s3_region
+        self._apply_secret("aws-credentials", secret_data)
+        print("✅ S3 credentials secret ready")
 
     def _ensure_ca(self):
         """Generate a self-signed CA key+cert (once) for signing server certificates.
@@ -342,32 +638,20 @@ class MLflowDeployer:
                 "-in", csr_path,
                 "-out", cert_path,
             ], f"Signing cert for {cn}", capture_output=True)
-
-            self.run_command([
-                "kubectl", "delete", "secret", secret_name,
-                "--ignore-not-found", "-n", self.args.namespace,
-            ], capture_output=True)
-
-            self.run_command([
-                "kubectl", "create", "secret", "generic", secret_name,
-                f"--from-file={cert_filename}={cert_path}",
-                f"--from-file={key_filename}={key_path}",
-                "-n", self.args.namespace,
-            ], f"Creating TLS Secret {secret_name}", capture_output=True)
+            self._apply_secret(
+                secret_name,
+                file_data={
+                    cert_filename: cert_path,
+                    key_filename: key_path,
+                },
+            )
+            print(f"✅ TLS Secret {secret_name} ready")
 
     def _create_infra_ca_bundle(self, combined_pem: str):
         """Create an mlflow-ca-bundle ConfigMap directly in the target namespace."""
         cm_name = "mlflow-ca-bundle"
-        self.run_command([
-            "kubectl", "delete", "configmap", cm_name,
-            "--ignore-not-found", "-n", self.args.namespace,
-        ], capture_output=True)
-        self.run_command([
-            "kubectl", "create", "configmap", cm_name,
-            f"--from-literal=ca-bundle.crt={combined_pem}",
-            "-n", self.args.namespace,
-        ], f"Creating {cm_name} ConfigMap with combined TLS CA certs",
-            capture_output=True)
+        self._apply_configmap(cm_name, {"ca-bundle.crt": combined_pem})
+        print(f"✅ {cm_name} ConfigMap ready")
         self._tls_ca_bundle_cm = cm_name
 
     def deploy_seaweedfs(self):
@@ -402,25 +686,40 @@ class MLflowDeployer:
 
         # Idempotency: delete Deployment before PVC so the pod releases the
         # pvc-protection finalizer, then start fresh with a clean filer database.
-        self.run_command([
-            "kubectl", "delete", "deployment", "seaweedfs",
-            "--ignore-not-found", "-n", self.args.namespace,
-        ], capture_output=True)
-        self.run_command([
-            "kubectl", "wait", "--for=delete", "pod", "-l", "app=seaweedfs",
-            "--timeout=60s", "-n", self.args.namespace,
-        ], check=False, capture_output=True)
-        self.run_command([
-            "kubectl", "delete", "pvc", "seaweedfs-pvc",
-            "--ignore-not-found", "-n", self.args.namespace,
-        ], capture_output=True)
+        self._delete_if_exists(
+            self.apps_api.delete_namespaced_deployment,
+            "seaweedfs",
+            self.args.namespace,
+        )
+        if not self._wait_for_pods_to_be_deleted("app=seaweedfs", self.args.namespace):
+            raise Exception("Timed out waiting for SeaweedFS pods to terminate")
+        self._delete_if_exists(
+            self.core_api.delete_namespaced_persistent_volume_claim,
+            "seaweedfs-pvc",
+            self.args.namespace,
+        )
+        self._wait_for_resource_absent(
+            self.core_api.read_namespaced_persistent_volume_claim,
+            "seaweedfs PVC",
+            "seaweedfs-pvc",
+            self.args.namespace,
+        )
 
         # Delete existing job if it exists (jobs are immutable)
         print("🧹 Cleaning up existing SeaweedFS job...")
-        self.run_command([
-            "kubectl", "delete", "job", "init-seaweedfs",
-            "--ignore-not-found", "-n", self.args.namespace,
-        ], capture_output=True)
+        self._delete_if_exists(
+            self.batch_api.delete_namespaced_job,
+            "init-seaweedfs",
+            self.args.namespace,
+        )
+        self._wait_for_resource_absent(
+            self.batch_api.read_namespaced_job,
+            "init-seaweedfs job",
+            "init-seaweedfs",
+            self.args.namespace,
+        )
+        if not self._wait_for_pods_to_be_deleted("job-name=init-seaweedfs", self.args.namespace):
+            raise Exception("Timed out waiting for init-seaweedfs pods to terminate")
 
         # Create the s3config Secret with actual credentials before the
         # Deployment so the volume is ready when SeaweedFS starts.
@@ -435,34 +734,19 @@ class MLflowDeployer:
                 "actions": ["Admin"],
             }]
         })
-        dry_run = subprocess.run(
-            ["kubectl", "create", "secret", "generic", "seaweedfs-s3config",
-             f"--from-literal=s3.json={s3_config}",
-             "-n", self.args.namespace,
-             "--dry-run=client", "-o", "yaml"],
-            capture_output=True, text=True, check=True,
-        )
-        subprocess.run(
-            ["kubectl", "apply", "-f", "-"],
-            input=dry_run.stdout,
-            capture_output=True, text=True, check=True,
-        )
+        self._apply_secret("seaweedfs-s3config", {"s3.json": s3_config})
 
         # Build and apply manifests, filtering out Secrets that deploy.py manages
         # directly (seaweedfs-s3config and aws-credentials). Without this filter
         # the kustomize base defaults would overwrite caller-supplied credentials.
         print("📋 Deploying SeaweedFS")
-        kustomize_out = subprocess.run(
-            ["kustomize", "build", str(seaweedfs_path)],
-            capture_output=True, text=True, check=True,
-        )
         substitutions = {
             "$NAMESPACE": self.args.namespace,
             "$APPLICATION_CRD_ID": "mlflow-pipelines",
             "$PROFILE_NAMESPACE_LABEL": "mlflow-profile",
             "$S3_BUCKET": self.args.s3_bucket,
         }
-        manifests = kustomize_out.stdout
+        manifests = self._build_kustomize(seaweedfs_path)
         for var, val in substitutions.items():
             manifests = manifests.replace(var, val)
 
@@ -476,12 +760,7 @@ class MLflowDeployer:
                 and doc.get("metadata", {}).get("name") in managed_secrets
             )
         ) + "\n"
-
-        subprocess.run(
-            ["kubectl", "apply", "-f", "-"],
-            input=manifests, text=True, check=True,
-            capture_output=True,
-        )
+        self._apply_manifest_stream(manifests)
 
         # Wait for SeaweedFS to be ready
         try:
@@ -489,39 +768,33 @@ class MLflowDeployer:
             self.wait_for_deployment_to_exist("seaweedfs", self.args.namespace)
 
             # Then wait for it to become available
-            print("⏳ Waiting for SeaweedFS deployment to become available...")
-            self.run_command(
-                f"kubectl wait --for=condition=available deployment/seaweedfs "
-                f"--timeout=300s -n {self.args.namespace}",
-                "Waiting for SeaweedFS deployment to be available"
-            )
+            self._wait_for_deployment_available("seaweedfs", self.args.namespace)
         except Exception as e:
             print(f"❌ SeaweedFS deployment failed to become ready: {e}")
             self.debug_deployment("seaweedfs", self.args.namespace)
             raise
 
         # Wait for the init job to complete (increased timeout for SeaweedFS startup)
-        print("⏳ Waiting for SeaweedFS initialization to complete...")
         try:
-            self.run_command(
-                f"kubectl wait --for=condition=complete job/init-seaweedfs "
-                f"--timeout=400s -n {self.args.namespace}",
-                "Waiting for SeaweedFS initialization job",
-                timeout=400
-            )
+            self._wait_for_job_completion("init-seaweedfs", self.args.namespace)
         except Exception as e:
             print(f"❌ SeaweedFS initialization job failed to complete: {e}")
             # Debug the init job (though it's a job, not a deployment with pods using app= label)
             # We'll check the job status specifically
             try:
                 print("🔍 Debugging SeaweedFS initialization job...")
-                job_status = self.run_command(
-                    f"kubectl describe job init-seaweedfs -n {self.args.namespace}",
-                    check=False, capture_output=True
+                job_status = self._read_optional(
+                    self.batch_api.read_namespaced_job,
+                    "init-seaweedfs",
+                    self.args.namespace,
                 )
-                if job_status and job_status.stdout:
+                if job_status:
                     print(f"📋 SeaweedFS init job status:")
-                    print(job_status.stdout)
+                    print(yaml.safe_dump(
+                        self._serialize_k8s_object(job_status),
+                        default_flow_style=False,
+                        sort_keys=False,
+                    ))
                 else:
                     print("❌ No job status available or job not found")
 
@@ -553,34 +826,49 @@ class MLflowDeployer:
 
                 # Check if minio-service exists and get its endpoints
                 print("📋 Checking minio-service:")
-                minio_svc = self.run_command(
-                    f"kubectl get service minio-service -n {self.args.namespace} -o wide",
-                    check=False, capture_output=True
+                minio_svc = self._read_optional(
+                    self.core_api.read_namespaced_service,
+                    "minio-service",
+                    self.args.namespace,
                 )
-                if minio_svc and minio_svc.stdout:
-                    print(minio_svc.stdout)
+                if minio_svc:
+                    print(yaml.safe_dump(
+                        self._serialize_k8s_object(minio_svc),
+                        default_flow_style=False,
+                        sort_keys=False,
+                    ))
                 else:
                     print("❌ minio-service not found")
 
                 # Check if service endpoints are populated
                 print("📋 Checking minio-service endpoints:")
-                minio_endpoints = self.run_command(
-                    f"kubectl get endpoints minio-service -n {self.args.namespace} -o yaml",
-                    check=False, capture_output=True
+                minio_endpoints = self._read_optional(
+                    self.core_api.read_namespaced_endpoints,
+                    "minio-service",
+                    self.args.namespace,
                 )
-                if minio_endpoints and minio_endpoints.stdout:
-                    print(minio_endpoints.stdout)
+                if minio_endpoints:
+                    print(yaml.safe_dump(
+                        self._serialize_k8s_object(minio_endpoints),
+                        default_flow_style=False,
+                        sort_keys=False,
+                    ))
                 else:
                     print("❌ minio-service endpoints not found")
 
                 # Check seaweedfs service endpoints too
                 print("📋 Checking seaweedfs service endpoints:")
-                seaweed_endpoints = self.run_command(
-                    f"kubectl get endpoints seaweedfs -n {self.args.namespace} -o yaml",
-                    check=False, capture_output=True
+                seaweed_endpoints = self._read_optional(
+                    self.core_api.read_namespaced_endpoints,
+                    "seaweedfs",
+                    self.args.namespace,
                 )
-                if seaweed_endpoints and seaweed_endpoints.stdout:
-                    print(seaweed_endpoints.stdout)
+                if seaweed_endpoints:
+                    print(yaml.safe_dump(
+                        self._serialize_k8s_object(seaweed_endpoints),
+                        default_flow_style=False,
+                        sort_keys=False,
+                    ))
                 else:
                     print("❌ seaweedfs service endpoints not found")
 
@@ -590,12 +878,17 @@ class MLflowDeployer:
                 if seaweedfs_pods:
                     for pod_name in seaweedfs_pods:
                         print(f"📋 SeaweedFS pod {pod_name} status:")
-                        pod_status = self.run_command(
-                            f"kubectl get pod {pod_name} -n {self.args.namespace} -o wide",
-                            check=False, capture_output=True
+                        pod_status = self._read_optional(
+                            self.core_api.read_namespaced_pod,
+                            pod_name,
+                            self.args.namespace,
                         )
-                        if pod_status and pod_status.stdout:
-                            print(pod_status.stdout)
+                        if pod_status:
+                            print(yaml.safe_dump(
+                                self._serialize_k8s_object(pod_status),
+                                default_flow_style=False,
+                                sort_keys=False,
+                            ))
 
                         # Get SeaweedFS logs
                         print(f"📋 SeaweedFS pod {pod_name} logs:")
@@ -605,26 +898,23 @@ class MLflowDeployer:
 
                         # Check readiness probe status for this pod
                         print(f"📋 Checking readiness probe events for {pod_name}:")
-                        pod_events = self.run_command(
-                            f"kubectl get events --field-selector involvedObject.name={pod_name} "
-                            f"-n {self.args.namespace} --sort-by='.lastTimestamp'",
-                            check=False, capture_output=True
-                        )
-                        if pod_events and pod_events.stdout:
-                            print(pod_events.stdout)
+                        pod_events = self.get_pod_events(pod_name, self.args.namespace)
+                        if pod_events:
+                            print(pod_events)
 
                         # Test direct pod connectivity (bypass service)
                         print(f"📋 Testing direct pod connectivity for {pod_name}:")
-                        pod_ip = self.run_command(
-                            f"kubectl get pod {pod_name} -n {self.args.namespace} -o jsonpath='{{.status.podIP}}'",
-                            check=False, capture_output=True
-                        )
-                        if pod_ip and pod_ip.stdout:
-                            print(f"Pod IP: {pod_ip.stdout}")
+                        pod_ip = pod_status.status.pod_ip if pod_status and pod_status.status else ""
+                        if pod_ip:
+                            print(f"Pod IP: {pod_ip}")
                             direct_test = self.run_command(
-                                f"kubectl run debug-pod-direct --rm -i --restart=Never "
-                                f"--image=curlimages/curl -n {self.args.namespace} "
-                                f"-- curl -v --connect-timeout 10 http://{pod_ip.stdout}:8333/",
+                                [
+                                    "kubectl", "run", "debug-pod-direct", "--rm", "-i",
+                                    "--restart=Never", "--image=curlimages/curl",
+                                    "-n", self.args.namespace, "--",
+                                    "curl", "-v", "--connect-timeout", "10",
+                                    f"http://{pod_ip}:8333/",
+                                ],
                                 check=False, capture_output=True, timeout=60
                             )
                             if direct_test and direct_test.stdout:
@@ -634,9 +924,12 @@ class MLflowDeployer:
                 # Try to manually test the minio-service endpoint
                 print("🔍 Testing minio-service endpoint manually:")
                 endpoint_test = self.run_command(
-                    f"kubectl run test-pod --rm -i --restart=Never "
-                    f"--image=alpine/curl:latest -n {self.args.namespace} "
-                    f"-- curl -v --connect-timeout 10 http://minio-service.{self.args.namespace}:9000/",
+                    [
+                        "kubectl", "run", "test-pod", "--rm", "-i", "--restart=Never",
+                        "--image=alpine/curl:latest", "-n", self.args.namespace, "--",
+                        "curl", "-v", "--connect-timeout", "10",
+                        f"http://minio-service.{self.args.namespace}:9000/",
+                    ],
                     check=False, capture_output=True, timeout=60
                 )
                 if endpoint_test and endpoint_test.stdout:
@@ -646,9 +939,11 @@ class MLflowDeployer:
                 # Test service connectivity using the cluster DNS
                 print("🔍 Testing cluster DNS resolution:")
                 dns_test = self.run_command(
-                    f"kubectl run dns-test --rm -i --restart=Never "
-                    f"--image=busybox -n {self.args.namespace} "
-                    f"-- nslookup minio-service.{self.args.namespace}.svc.cluster.local",
+                    [
+                        "kubectl", "run", "dns-test", "--rm", "-i", "--restart=Never",
+                        "--image=busybox", "-n", self.args.namespace, "--",
+                        "nslookup", f"minio-service.{self.args.namespace}.svc.cluster.local",
+                    ],
                     check=False, capture_output=True, timeout=60
                 )
                 if dns_test and dns_test.stdout:
@@ -657,12 +952,13 @@ class MLflowDeployer:
 
                 # List all pods in the namespace to see what's available
                 print("🔍 Listing all pods in namespace for debugging:")
-                all_pods = self.run_command(
-                    f"kubectl get pods -n {self.args.namespace}",
-                    check=False, capture_output=True
-                )
-                if all_pods and all_pods.stdout:
-                    print(all_pods.stdout)
+                all_pods = self.core_api.list_namespaced_pod(self.args.namespace).items
+                if all_pods:
+                    print(yaml.safe_dump(
+                        [self._serialize_k8s_object(pod) for pod in all_pods],
+                        default_flow_style=False,
+                        sort_keys=False,
+                    ))
             except Exception as debug_e:
                 print(f"❌ Failed to debug SeaweedFS init job: {debug_e}")
             raise
@@ -693,8 +989,8 @@ class MLflowDeployer:
         ], f"Setting postgres image to {self.args.postgres_image}")
 
         # Note: PostgreSQL overlay doesn't use namespace parameter, so we apply directly to target namespace
-        cmd = f"cd {postgres_path} && kustomize build . | kubectl apply -n {self.args.namespace} -f -"
-        self.run_command(cmd, "Deploying PostgreSQL")
+        manifests = self._build_kustomize(postgres_path)
+        self._apply_manifest_stream(manifests, namespace=self.args.namespace)
 
         # Wait for PostgreSQL to be ready
         try:
@@ -702,12 +998,7 @@ class MLflowDeployer:
             self.wait_for_deployment_to_exist("postgres-deployment", self.args.namespace)
 
             # Then wait for it to become available
-            print("⏳ Waiting for PostgreSQL deployment to become available...")
-            self.run_command(
-                f"kubectl wait --for=condition=available deployment/postgres-deployment "
-                f"--timeout=300s -n {self.args.namespace}",
-                "Waiting for PostgreSQL deployment to be available"
-            )
+            self._wait_for_deployment_available("postgres-deployment", self.args.namespace)
         except Exception as e:
             print(f"❌ PostgreSQL deployment failed to become ready: {e}")
             self.debug_deployment("postgres-deployment", self.args.namespace)
@@ -855,16 +1146,11 @@ class MLflowDeployer:
         if self._tls_ca_bundle_cm:
             mlflow_cr["spec"]["caBundleConfigMap"] = {"name": self._tls_ca_bundle_cm}
 
-        # Write CR to file
-        cr_file = Path("/tmp/mlflow-cr.yaml")
-        with open(cr_file, 'w') as f:
-            yaml.dump(mlflow_cr, f, default_flow_style=False)
-
         print("Generated MLflow CR:")
         print(yaml.dump(mlflow_cr, default_flow_style=False))
 
         # Apply the CR
-        self.run_command(f"kubectl apply -f {cr_file}", "Creating MLflow CR")
+        self._apply_mlflow_cr(mlflow_cr)
 
         # Wait for MLflow deployment to be created first
         try:
@@ -875,13 +1161,8 @@ class MLflowDeployer:
             raise
 
         # Then wait for MLflow to be available
-        print("⏳ Waiting for MLflow to be available...")
         try:
-            self.run_command(
-                f"kubectl wait --for=condition=available deployment/mlflow "
-                f"--timeout=300s -n {self.args.namespace}",
-                "Waiting for MLflow deployment to be available"
-            )
+            self._wait_for_deployment_available("mlflow", self.args.namespace)
         except Exception as e:
             print(f"❌ MLflow deployment failed to become available: {e}")
             self._debug_mlflow_deployment()
@@ -904,13 +1185,18 @@ class MLflowDeployer:
 
                 # Get pod description
                 try:
-                    pod_description = self.run_command(
-                        f"kubectl describe pod {pod_name} -n {self.args.namespace}",
-                        check=False, capture_output=True
+                    pod_description = self._read_optional(
+                        self.core_api.read_namespaced_pod,
+                        pod_name,
+                        self.args.namespace,
                     )
-                    if pod_description and pod_description.stdout:
+                    if pod_description:
                         print(f"📋 Operator pod description for {pod_name}:")
-                        print(pod_description.stdout)
+                        print(yaml.safe_dump(
+                            self._serialize_k8s_object(pod_description),
+                            default_flow_style=False,
+                            sort_keys=False,
+                        ))
                 except Exception as e:
                     print(f"❌ Failed to get operator pod description for {pod_name}: {e}")
 
@@ -926,12 +1212,9 @@ class MLflowDeployer:
         # Check MLflow CR status (specific to operator debugging)
         try:
             print("\n📋 MLflow CR status:")
-            cr_status = self.run_command(
-                f"kubectl describe mlflow mlflow -n {self.args.namespace}",
-                check=False, capture_output=True
-            )
-            if cr_status and cr_status.stdout:
-                print(cr_status.stdout)
+            cr_status = self._get_mlflow_cr()
+            if cr_status:
+                print(yaml.safe_dump(cr_status, default_flow_style=False, sort_keys=False))
             else:
                 print("No MLflow CR found")
         except Exception as e:
@@ -949,15 +1232,12 @@ class MLflowDeployer:
         print("🌐 Setting up port forwarding...")
 
         # Check if service exists
-        try:
-            svc_output = self.run_command(
-                f"kubectl get service mlflow -n {self.args.namespace} -o yaml",
-                capture_output=True
-            )
-            if not svc_output:
-                print("❌ MLflow service not found")
-                return
-        except Exception:
+        service = self._read_optional(
+            self.core_api.read_namespaced_service,
+            "mlflow",
+            self.args.namespace,
+        )
+        if not service:
             print("❌ MLflow service not found")
             return
 
@@ -969,12 +1249,11 @@ class MLflowDeployer:
     def get_pods_for_deployment(self, deployment_name, namespace):
         """Get pod names for a given deployment"""
         try:
-            pod_names = self.run_command(
-                f"kubectl get pods -l app={deployment_name} -n {namespace} "
-                f"-o jsonpath='{{.items[*].metadata.name}}'",
-                check=False, capture_output=True
-            )
-            return pod_names.stdout.split() if pod_names and pod_names.stdout else []
+            pods = self.core_api.list_namespaced_pod(
+                namespace=namespace,
+                label_selector=self._deployment_label_selector(deployment_name, namespace),
+            ).items
+            return [pod.metadata.name for pod in pods]
         except Exception as e:
             print(f"❌ Failed to get pods for deployment {deployment_name}: {e}")
             return []
@@ -982,12 +1261,11 @@ class MLflowDeployer:
     def get_pods_with_label_selector(self, label_selector, namespace):
         """Get pod names for a given label selector"""
         try:
-            pod_names = self.run_command(
-                f"kubectl get pods -l {label_selector} -n {namespace} "
-                f"-o jsonpath='{{.items[*].metadata.name}}'",
-                check=False, capture_output=True
-            )
-            return pod_names.stdout.split() if pod_names and pod_names.stdout else []
+            pods = self.core_api.list_namespaced_pod(
+                namespace=namespace,
+                label_selector=label_selector,
+            ).items
+            return [pod.metadata.name for pod in pods]
         except Exception as e:
             print(f"❌ Failed to get pods with selector {label_selector}: {e}")
             return []
@@ -995,12 +1273,32 @@ class MLflowDeployer:
     def get_pod_events(self, pod_name, namespace):
         """Get events for a specific pod"""
         try:
-            events = self.run_command(
-                f"kubectl get events --field-selector involvedObject.name={pod_name} "
-                f"-n {namespace} --sort-by='.lastTimestamp'",
-                check=False, capture_output=True
+            events = self.core_api.list_namespaced_event(
+                namespace=namespace,
+                field_selector=f"involvedObject.name={pod_name}",
+            ).items
+            if not events:
+                return "No events found"
+            events.sort(
+                key=lambda event: (
+                    (
+                        event.last_timestamp
+                        or event.event_time
+                        or event.metadata.creation_timestamp
+                    ).timestamp()
+                    if (
+                        event.last_timestamp
+                        or event.event_time
+                        or event.metadata.creation_timestamp
+                    )
+                    else 0
+                )
             )
-            return events.stdout if events and events.stdout else "No events found"
+            return yaml.safe_dump(
+                [self._serialize_k8s_object(event) for event in events],
+                default_flow_style=False,
+                sort_keys=False,
+            )
         except Exception as e:
             print(f"❌ Failed to get events for pod {pod_name}: {e}")
             return None
@@ -1008,11 +1306,17 @@ class MLflowDeployer:
     def get_pod_logs(self, pod_name, namespace):
         """Get logs for a specific pod"""
         try:
-            logs = self.run_command(
-                f"kubectl logs {pod_name} -n {namespace} --tail=100",
-                check=False, capture_output=True
+            logs = self.core_api.read_namespaced_pod_log(
+                name=pod_name,
+                namespace=namespace,
+                tail_lines=100,
             )
-            return logs.stdout if logs and logs.stdout else "No logs available"
+            return logs or "No logs available"
+        except ApiException as exc:
+            if exc.status in {400, 404}:
+                return None
+            print(f"❌ Failed to get logs for pod {pod_name}: {exc}")
+            return None
         except Exception as e:
             print(f"❌ Failed to get logs for pod {pod_name}: {e}")
             return None
@@ -1020,13 +1324,8 @@ class MLflowDeployer:
     def is_pod_ready_for_logs(self, pod_name, namespace):
         """Check if pod is in a state where logs can be retrieved"""
         try:
-            pod_status = self.run_command(
-                f"kubectl get pod {pod_name} -n {namespace} "
-                f"-o jsonpath='{{.status.phase}}'",
-                check=False, capture_output=True
-            )
             # Pods in Running, Succeeded, or Failed phases can have logs
-            status_value = pod_status.stdout if pod_status and pod_status.stdout else ""
+            status_value = self._read_pod_phase(pod_name, namespace)
             return status_value in ["Running", "Succeeded", "Failed"]
         except Exception as e:
             print(f"❌ Failed to check pod status for {pod_name}: {e}")
@@ -1038,17 +1337,14 @@ class MLflowDeployer:
         elapsed_time = 0
 
         while elapsed_time < timeout:
-            try:
-                # Check if deployment exists
-                result = self.run_command(
-                    f"kubectl get deployment {deployment_name} -n {namespace}",
-                    check=False, capture_output=True
-                )
-                if result and result.returncode == 0:  # Deployment exists
-                    print(f"✅ {deployment_name} deployment created successfully")
-                    return True
-            except Exception:
-                pass
+            result = self._read_optional(
+                self.apps_api.read_namespaced_deployment,
+                deployment_name,
+                namespace,
+            )
+            if result:
+                print(f"✅ {deployment_name} deployment created successfully")
+                return True
 
             print(f"⏳ Waiting for {deployment_name} deployment to be created... ({elapsed_time}/{timeout}s)")
             time.sleep(poll_interval)
@@ -1064,12 +1360,17 @@ class MLflowDeployer:
         # Check deployment status
         try:
             print(f"📋 Deployment {deployment_name} status:")
-            deployment_status = self.run_command(
-                f"kubectl describe deployment {deployment_name} -n {namespace}",
-                check=False, capture_output=True
+            deployment_status = self._read_optional(
+                self.apps_api.read_namespaced_deployment,
+                deployment_name,
+                namespace,
             )
-            if deployment_status and deployment_status.stdout:
-                print(deployment_status.stdout)
+            if deployment_status:
+                print(yaml.safe_dump(
+                    self._serialize_k8s_object(deployment_status),
+                    default_flow_style=False,
+                    sort_keys=False,
+                ))
             else:
                 print("No deployment status available")
         except Exception as e:
@@ -1090,25 +1391,24 @@ class MLflowDeployer:
 
             # Get pod description
             try:
-                pod_description = self.run_command(
-                    f"kubectl describe pod {pod_name} -n {namespace}",
-                    check=False, capture_output=True
+                pod_description = self._read_optional(
+                    self.core_api.read_namespaced_pod,
+                    pod_name,
+                    namespace,
                 )
-                if pod_description and pod_description.stdout:
+                if pod_description:
                     print(f"📋 Pod description for {pod_name}:")
-                    print(pod_description.stdout)
+                    print(yaml.safe_dump(
+                        self._serialize_k8s_object(pod_description),
+                        default_flow_style=False,
+                        sort_keys=False,
+                    ))
             except Exception as e:
                 print(f"❌ Failed to get pod description for {pod_name}: {e}")
 
             # Check if pod is failing by looking at its status
             try:
-                pod_status = self.run_command(
-                    f"kubectl get pod {pod_name} -n {namespace} "
-                    f"-o jsonpath='{{.status.phase}}'",
-                    check=False, capture_output=True
-                )
-
-                status_value = pod_status.stdout if pod_status and pod_status.stdout else ""
+                status_value = self._read_pod_phase(pod_name, namespace)
                 if status_value in ["Failed", "Pending"]:
                     print(f"⚠️  Pod {pod_name} is in {status_value} state - getting events")
                     events = self.get_pod_events(pod_name, namespace)

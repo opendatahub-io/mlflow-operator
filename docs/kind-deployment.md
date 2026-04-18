@@ -12,6 +12,7 @@ Before you begin, ensure you have the following tools installed:
 - [kustomize](https://kubectl.docs.kubernetes.io/installation/kustomize/) (for building Kubernetes manifests)
 - [envsubst](https://www.gnu.org/software/gettext/manual/html_node/envsubst-Invocation.html) (usually available in gettext package)
 - Python 3.x (for running the deployment script)
+- Python packages `kubernetes` and `PyYAML` (`python3 -m pip install kubernetes pyyaml`)
 
 ## Quick Start
 
@@ -88,6 +89,12 @@ make deploy-kind BACKEND_STORE=postgres REGISTRY_STORE=postgres ARTIFACT_STORAGE
 ### Using the Python Deployment Script Directly
 
 The deployment script `./.github/actions/deploy/deploy.py` provides more granular control:
+
+```bash
+python3 -m pip install kubernetes pyyaml
+```
+
+`deploy.py` loads Kubernetes credentials automatically, trying the pod service account first and then falling back to the active kubeconfig.
 
 ```bash
 # Basic deployment with custom namespace
