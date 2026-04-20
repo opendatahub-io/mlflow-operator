@@ -121,10 +121,8 @@ jobs:
           cluster_name: ${{ inputs.cluster_name || env.CLUSTER_NAME }}
           registry: 'true'
 
-      - name: Build and load MLflow operator image
-        id: build-operator
+      - name: Configure Docker for Kind registry
         run: |
-          # Configure Docker to use insecure registry
           sudo mkdir -p /etc/docker
           echo '{
             "insecure-registries": ["kind-registry:5000"]
@@ -132,19 +130,65 @@ jobs:
           sudo systemctl restart docker
           sleep 5
 
+      - name: Build and load MLflow operator image
+        id: build-operator
+        run: |
           # Build the operator image and push to Kind registry
           OPERATOR_IMG=kind-registry:5000/mlflow-operator:latest
           docker build -t "$OPERATOR_IMG" .
           docker push "$OPERATOR_IMG"
           echo "operator_image=$OPERATOR_IMG" >> "$GITHUB_OUTPUT"
 
+      - name: Resolve MLflow image
+        id: resolve-mlflow-image
+        shell: bash
+        env:
+          BRANCH: ${{ github.base_ref || github.ref_name }}
+          REPOSITORY_OWNER: ${{ github.repository_owner }}
+        run: |
+          {
+            if [[ "$REPOSITORY_OWNER" == "red-hat-data-services" && "$BRANCH" =~ ^rhoai- ]]; then
+              IMAGE_TAG="${BRANCH//\//-}"
+              echo "build=true"
+              echo "ref=$BRANCH"
+              echo "image=kind-registry:5000/mlflow:$IMAGE_TAG"
+            elif [[ "$REPOSITORY_OWNER" == "red-hat-data-services" && "$BRANCH" == "main" ]]; then
+              echo "build=false"
+              echo "image=quay.io/opendatahub/mlflow:odh-stable"
+            elif [[ "$BRANCH" == "main" || "$BRANCH" == "master" ]]; then
+              echo "build=false"
+              echo "image=quay.io/opendatahub/mlflow:odh-stable"
+            elif [[ "$REPOSITORY_OWNER" == "red-hat-data-services" ]]; then
+              echo "build=false"
+              echo "image=quay.io/rhoai/odh-mlflow-rhel9:$BRANCH"
+            else
+              echo "build=false"
+              echo "image=quay.io/opendatahub/mlflow:$BRANCH"
+            fi
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Checkout MLflow source
+        if: ${{ steps.resolve-mlflow-image.outputs.build == 'true' }}
+        uses: actions/checkout@v4
+        with:
+          repository: red-hat-data-services/mlflow
+          ref: ${{ steps.resolve-mlflow-image.outputs.ref }}
+          path: mlflow-upstream
+
+      - name: Build and load MLflow image
+        if: ${{ steps.resolve-mlflow-image.outputs.build == 'true' }}
+        run: |
+          MLFLOW_IMG="${{ steps.resolve-mlflow-image.outputs.image }}"
+
+          docker build -f mlflow-upstream/Dockerfile.konflux -t "$MLFLOW_IMG" mlflow-upstream
+          docker push "$MLFLOW_IMG"
       - name: Deploy MLflow
         id: deploy-mlflow
         uses: ./.github/actions/deploy
         with:
           python_version: ${{ matrix.python_version }}
           namespace: ${{ env.NAMESPACE }}
-          mlflow_image: quay.io/${{ github.repository_owner == 'red-hat-data-services' && 'rhoai' || 'opendatahub' }}/mlflow:${{ github.base_ref == 'main' && 'odh-stable' || github.base_ref || 'odh-stable' }}
+          mlflow_image: ${{ steps.resolve-mlflow-image.outputs.image }}
           mlflow_operator_image: ${{ steps.build-operator.outputs.operator_image }}
           backend_store: ${{ inputs.backend_store || matrix.backend_store }}
           artifact_storage: ${{ inputs.artifact_storage || matrix.artifact_storage }}

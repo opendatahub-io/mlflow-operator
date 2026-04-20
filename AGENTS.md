@@ -365,6 +365,7 @@ Validates sample CRs on every PR:
 - `verify-codegen.yml` - Validates generated code is up-to-date
 - `test.yml` - Runs unit tests
 - `lint.yml` - Runs golangci-lint
+- `integration-tests.yml` - Builds the operator image from this repo for all runs, but only builds the MLflow image from the aligned branch of `red-hat-data-services/mlflow` using `Dockerfile.konflux` for `red-hat-data-services` `rhoai-*` branches; other branches continue using the existing Quay image selection
 - `test-e2e.yml` - Runs end-to-end tests
 - `verify-kustomize.yml` - Validates kustomize overlays
 
