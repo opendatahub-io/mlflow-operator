@@ -754,15 +754,7 @@ class MLflowDeployer:
                 "image": {
                     "image": self.args.mlflow_image,
                     "imagePullPolicy": "Always"
-                },
-                "networkPolicyAdditionalEgressRules": [
-                    {
-                        "ports": [
-                            {"protocol": "UDP", "port": 5353},
-                            {"protocol": "TCP", "port": 5353},
-                        ]
-                    }
-                ]
+                }
             }
         }
 
