@@ -119,10 +119,12 @@ func injectMigrationInitContainer(objects []*unstructured.Unstructured) error {
 		}
 
 		// Copy relevant volume mounts from the main container:
+		// - tmp: needed because the mlflow CLI resolves its temp directory on import
 		// - mlflow-storage: needed for SQLite backends
 		// - combined-ca-bundle: needed for TLS connections
 		if volumeMounts, found, _ := unstructured.NestedSlice(mainContainer, "volumeMounts"); found {
 			relevantMounts := map[string]bool{
+				"tmp":                true,
 				"mlflow-storage":     true,
 				"combined-ca-bundle": true,
 			}

@@ -99,6 +99,19 @@ func TestInjectMigrationInitContainer_Basic(t *testing.T) {
 	if _, found, _ := unstructured.NestedMap(initContainer, "resources"); !found {
 		t.Error("resources not found on init container")
 	}
+
+	// Verify the init container gets the writable /tmp mount from the main container.
+	volumeMounts, _, _ := unstructured.NestedSlice(initContainer, "volumeMounts")
+	foundTmpMount := false
+	for _, vm := range volumeMounts {
+		vmMap := vm.(map[string]interface{})
+		if vmMap["name"].(string) == "tmp" {
+			foundTmpMount = true
+		}
+	}
+	if !foundTmpMount {
+		t.Error("tmp volume mount not found on db-migration init container")
+	}
 }
 
 func TestInjectMigrationInitContainer_WithCABundle(t *testing.T) {
@@ -157,14 +170,21 @@ func TestInjectMigrationInitContainer_WithCABundle(t *testing.T) {
 		}
 	}
 
-	// Verify db-migration has combined-ca-bundle volume mount
+	// Verify db-migration has required shared volume mounts
 	volumeMounts, _, _ := unstructured.NestedSlice(second, "volumeMounts")
+	foundTmpMount := false
 	foundCAMount := false
 	for _, vm := range volumeMounts {
 		vmMap := vm.(map[string]interface{})
+		if vmMap["name"].(string) == "tmp" {
+			foundTmpMount = true
+		}
 		if vmMap["name"].(string) == "combined-ca-bundle" {
 			foundCAMount = true
 		}
+	}
+	if !foundTmpMount {
+		t.Error("tmp volume mount not found on db-migration init container")
 	}
 	if !foundCAMount {
 		t.Error("combined-ca-bundle volume mount not found on db-migration init container")
