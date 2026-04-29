@@ -1220,10 +1220,14 @@ class MLflowDeployer:
                 print("⏭️  Skipping MLflow operator deployment (--skip-operator set)")
 
             # Step 4: Create MLflow CR
-            self.deploy_mlflow()
+            if not self.args.skip_mlflow_cr:
+                self.deploy_mlflow()
+            else:
+                print("⏭️  Skipping MLflow CR creation (--skip-mlflow-cr set)")
 
             # Step 5: Setup port forwarding info
-            self.setup_port_forward()
+            if not self.args.skip_mlflow_cr:
+                self.setup_port_forward()
 
             print("✅ MLflow deployment completed successfully!")
 
@@ -1261,6 +1265,8 @@ def main():
                        help="Full MLflow operator image name and tag")
     parser.add_argument("--skip-operator", action="store_true", default=False,
                        help="Skip deploying the MLflow operator (assume it is already installed)")
+    parser.add_argument("--skip-mlflow-cr", action="store_true", default=False,
+                       help="Skip creating the MLflow custom resource (provision infra/operator only)")
     parser.add_argument("--skip-infrastructure", action="store_true", default=False,
                        help="Skip deploying PostgreSQL and SeaweedFS (assume they are pre-existing); "
                             "credentials secrets are still created")

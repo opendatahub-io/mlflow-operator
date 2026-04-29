@@ -17,6 +17,7 @@ The MLflow Operator automates the deployment and lifecycle management of MLflow 
 - **OpenShift Integration**: Automatic TLS certificate provisioning via service-ca-operator
 - **Flexible Storage**: Support for local PVC, remote databases (PostgreSQL), and remote artifact storage (S3, etc.)
 - **Persistent Storage**: Automatic PVC creation with configurable size and storage class
+- **Operator-Managed Database Migrations**: The operator can scale MLflow down, run a one-shot migration Job, and restore replicas during upgrades
 
 ## Getting Started
 
@@ -156,6 +157,8 @@ helm install mlflow . -n opendatahub --create-namespace \
   --set storage.size=20Gi
 ```
 
+The standalone Helm chart does not orchestrate MLflow database migrations. Bootstrap or migrate the database yourself before rolling out a standalone Helm upgrade.
+
 ## Configuration
 
 ### Authentication and Security
@@ -230,6 +233,18 @@ kubectl create secret generic mlflow-db-credentials \
   --from-literal=registry-store-uri='postgresql://mlflow:password@postgres.example.com:5432/mlflow' \
   -n <namespace>
 ```
+
+### Database Migration
+
+Use `spec.migrate` to control operator-managed database migration orchestration:
+
+- `Automatic` (default) runs the migration Job on bootstrap and whenever `status.version` differs from the operator-supported MLflow version
+- `Always` runs the migration Job for each new desired generation before replicas are restored
+
+To trigger a manual one-shot rerun, add the presence-based `mlflow.opendatahub.io/force-migrate` annotation to the MLflow resource. After a successful forced migration, the operator clears the annotation automatically.
+
+During the migration flow, the operator resolves the final MLflow image, scales the MLflow Deployment to zero, waits for ready pods to drain, runs a one-shot Job against the backend and registry stores, updates `status.version` after the Job succeeds, and then restores the requested replica count.
+For ODH/RHOAI MLflow images that ship `mlflow.store.db.migration_gap`, that Job also runs the backend-only RHOAI `3.3 -> 3.4` gap repair before the generic MLflow migration logic.
 
 ### CORS Configuration
 
@@ -307,6 +322,14 @@ See the [config/samples](./config/samples/) directory for complete examples:
 - `mlflow_v1_mlflow.yaml` - OpenShift deployment with local storage and service-ca TLS
 - `mlflow_v1_mlflow_remote_storage.yaml` - Remote PostgreSQL + S3 storage with horizontal scaling
 - `mlflow_v1_mlflowconfig.yaml` - Namespace-scoped artifact storage override using the upstream `MLflowConfig` CRD
+
+### Upgrade Test Coverage
+
+GitHub Actions includes a dedicated `Upgrade Tests` workflow that seeds a database using MLflow `3.9.0` and verifies the operator-managed upgrade path against the current supported MLflow version.
+That workflow exercises both SQLite and PostgreSQL upgrade paths. It provisions the namespace, operator, and optional PostgreSQL infrastructure via `.github/actions/deploy/deploy.py --skip-mlflow-cr`, then the upgrade Ginkgo test seeds the MLflow `3.9.0` schema and verifies the operator-managed migration flow against that pre-provisioned infrastructure.
+
+GitHub Actions also includes a dedicated `Verify MLflow Version Alignment` workflow that checks the floating default MLflow image against the supported operator version on pushes to `opendatahub-io/main` and a daily schedule.
+When intentionally bumping the supported MLflow version, run `python scripts/update_mlflow_version.py --version <x.y.z>` to update both the component metadata and the controller constant before rerunning the alignment check.
 
 ## Troubleshooting
 

@@ -11,6 +11,9 @@ spec:
   # Number of replicas
   replicas: 1
 
+  # Operator-managed database migration mode
+  migrate: Automatic
+
   # Compute resources
   resources:
     requests:

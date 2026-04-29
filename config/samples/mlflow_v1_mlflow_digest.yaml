@@ -16,6 +16,9 @@ spec:
   # Number of replicas
   replicas: 1
 
+  # Operator-managed database migration mode
+  migrate: Automatic
+
   # Compute resources
   resources:
     requests:
@@ -52,8 +55,8 @@ spec:
 # - Reproducibility - critical for production deployments and compliance
 #
 # To get the digest of an image:
-#   docker pull quay.io/opendatahub/mlflow:odh-stable
-#   docker inspect quay.io/opendatahub/mlflow:odh-stable | grep RepoDigests
+#   docker pull quay.io/opendatahub/mlflow:odh-stable-6ffc1a4ec351aacbc93583eb6760d32768451fe0
+#   docker inspect quay.io/opendatahub/mlflow:odh-stable-6ffc1a4ec351aacbc93583eb6760d32768451fe0 | grep RepoDigests
 #
 # Or using skopeo:
-#   skopeo inspect docker://quay.io/opendatahub/mlflow:odh-stable | grep Digest
+#   skopeo inspect docker://quay.io/opendatahub/mlflow:odh-stable-6ffc1a4ec351aacbc93583eb6760d32768451fe0 | grep Digest

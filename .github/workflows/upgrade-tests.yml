@@ -1,0 +1,93 @@
+name: Upgrade Tests
+
+on:
+  push:
+    branches:
+      - "main"
+  pull_request:
+    paths:
+      - ".github/**"
+      - "api/**"
+      - "cmd/**"
+      - "config/**"
+      - "internal/**"
+      - "test/**"
+      - "Dockerfile"
+      - "go.mod"
+      - "go.sum"
+      - "Makefile"
+
+env:
+  IMG: "localhost/mlflow-operator-upgrade:v0.0.1"
+  MLFLOW_SEED_IMAGE: "localhost/mlflow-seed:3.9.0"
+  CLUSTER_NAME: "mlflow-upgrade"
+  NAMESPACE: "opendatahub"
+
+jobs:
+  upgrade-tests:
+    name: Run upgrade path (${{ matrix.backend_store }})
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        backend_store:
+          - sqlite
+          - postgres
+    steps:
+      - name: Clone the code
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Setup Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+
+      - name: Set up Python
+        uses: actions/setup-python@7f4fc3e22c37d6ff65e88745f38bd3157c663f7c # v4
+        with:
+          python-version: "3.12"
+
+      - name: Create Kind cluster
+        uses: ./.github/actions/create-cluster
+        with:
+          cluster_name: ${{ env.CLUSTER_NAME }}
+          k8s_version: "v1.34.0"
+
+      - name: Build operator image
+        run: make docker-build IMG=${{ env.IMG }}
+
+      - name: Load operator image into Kind cluster
+        run: kind load docker-image ${{ env.IMG }} --name ${{ env.CLUSTER_NAME }}
+
+      - name: Build MLflow 3.9.0 seed image
+        run: docker build -f test/e2e/images/mlflow-3.9.0.Dockerfile -t ${{ env.MLFLOW_SEED_IMAGE }} .
+
+      - name: Load MLflow 3.9.0 seed image into Kind cluster
+        run: kind load docker-image ${{ env.MLFLOW_SEED_IMAGE }} --name ${{ env.CLUSTER_NAME }}
+
+      - name: Install deploy helper dependencies
+        run: python3 -m pip install pyyaml kubernetes
+
+      - name: Provision upgrade test infrastructure
+        shell: bash
+        run: |
+          DEPLOY_ARGS=(
+            --namespace "${{ env.NAMESPACE }}"
+            --mlflow-operator-image "${{ env.IMG }}"
+            --backend-store "${{ matrix.backend_store }}"
+            --registry-store "${{ matrix.backend_store }}"
+            --artifact-storage file
+            --serve-artifacts true
+            --skip-mlflow-cr
+          )
+
+          if [[ "${{ matrix.backend_store }}" == "postgres" ]]; then
+            DEPLOY_ARGS+=(
+              --postgres-backend-db mlflow_tracking
+              --postgres-registry-db mlflow_registry
+            )
+          fi
+
+          python3 .github/actions/deploy/deploy.py "${DEPLOY_ARGS[@]}"
+
+      - name: Run upgrade e2e tests
+        run: make test-e2e-upgrade E2E_IMG=${{ env.IMG }} MLFLOW_SEED_IMAGE=${{ env.MLFLOW_SEED_IMAGE }} UPGRADE_BACKEND_STORE=${{ matrix.backend_store }} UPGRADE_POSTGRES_ADMIN_URI=postgresql://postgres:mysecretpassword@postgres-service.${{ env.NAMESPACE }}.svc.cluster.local:5432/postgres

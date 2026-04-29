@@ -89,6 +89,9 @@ var _ = Describe("MLflow Controller", func() {
 				}
 				Expect(k8sClient.Create(ctx, mlflowResource)).To(Succeed())
 			}
+			Expect(k8sClient.Get(ctx, typeNamespacedName, mlflow)).To(Succeed())
+			mlflow.Status.Version = SupportedMLflowVersion
+			Expect(k8sClient.Status().Update(ctx, mlflow)).To(Succeed())
 		})
 
 		AfterEach(func() {

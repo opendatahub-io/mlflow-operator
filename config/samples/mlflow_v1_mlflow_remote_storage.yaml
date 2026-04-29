@@ -21,6 +21,9 @@ spec:
   # Number of replicas - can scale horizontally with remote storage
   replicas: 2
 
+  # Operator-managed database migration mode
+  migrate: Automatic
+
   # Compute resources
   resources:
     requests:

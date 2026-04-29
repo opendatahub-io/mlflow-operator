@@ -1,0 +1,28 @@
+name: Verify MLflow Version Alignment
+
+on:
+  schedule:
+    - cron: "0 10 * * *"
+  push:
+    branches:
+      - "main"
+    paths:
+      - ".github/workflows/verify-mlflow-version-alignment.yml"
+      - "config/base/params.env"
+      - "config/component_metadata.yaml"
+      - "internal/controller/migration.go"
+      - "test/scripts/verify_mlflow_version_alignment.py"
+
+jobs:
+  verify-mlflow-version-alignment:
+    if: github.repository == 'opendatahub-io/mlflow-operator' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Verify default MLflow image version alignment
+        shell: bash
+        run: |
+          MLFLOW_IMAGE="$(sed -n 's/^MLFLOW_IMAGE=//p' config/base/params.env)"
+          python3 test/scripts/verify_mlflow_version_alignment.py --mlflow-image "$MLFLOW_IMAGE"
