@@ -5,6 +5,7 @@ This chart deploys MLflow with Kubernetes authentication enabled. TLS is termina
 - Authorization mode defaults to `self_subject_access_review` handled directly by MLflow.
 - MLflow listens on port 8443 with TLS.
 - Health probes and traffic use HTTPS end-to-end.
+- This standalone chart does not orchestrate MLflow database migrations.
 
 Set `mlflow.backendStoreUri` (or `mlflow.backendStoreUriFrom`) explicitly; it is required and should not rely on implicit defaults.
 

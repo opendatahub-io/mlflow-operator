@@ -19,6 +19,7 @@ package v1
 import (
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -29,6 +30,8 @@ import (
 // +kubebuilder:validation:XValidation:rule="!(has(self.backendStoreUri) && has(self.backendStoreUriFrom))",message="backendStoreUri and backendStoreUriFrom are mutually exclusive"
 // +kubebuilder:validation:XValidation:rule="!(has(self.registryStoreUri) && has(self.registryStoreUriFrom))",message="registryStoreUri and registryStoreUriFrom are mutually exclusive"
 // +kubebuilder:validation:XValidation:rule="!has(self.registryStoreUriFrom) || (size(self.registryStoreUriFrom.name) > 0 && size(self.registryStoreUriFrom.key) > 0)",message="registryStoreUriFrom.name and registryStoreUriFrom.key must be non-empty when registryStoreUriFrom is set"
+// +kubebuilder:validation:XValidation:rule="!has(self.backendStoreUri) || self.backendStoreUri.startsWith('sqlite://') || self.backendStoreUri.startsWith('sqlite+') || self.backendStoreUri.startsWith('postgresql://') || self.backendStoreUri.startsWith('postgresql+') || self.backendStoreUri.startsWith('mysql://') || self.backendStoreUri.startsWith('mysql+')",message="backendStoreUri must use a supported SQL metadata store URI scheme"
+// +kubebuilder:validation:XValidation:rule="!has(self.registryStoreUri) || self.registryStoreUri.startsWith('sqlite://') || self.registryStoreUri.startsWith('sqlite+') || self.registryStoreUri.startsWith('postgresql://') || self.registryStoreUri.startsWith('postgresql+') || self.registryStoreUri.startsWith('mysql://') || self.registryStoreUri.startsWith('mysql+')",message="registryStoreUri must use a supported SQL metadata store URI scheme"
 // +kubebuilder:validation:XValidation:rule="!has(self.backendStoreUri) || (!self.backendStoreUri.startsWith('sqlite://') && !self.backendStoreUri.startsWith('file://')) || has(self.storage)",message="storage must be configured when using file-based backend store (sqlite:// or file:// prefix)"
 // +kubebuilder:validation:XValidation:rule="!has(self.registryStoreUri) || (!self.registryStoreUri.startsWith('sqlite://') && !self.registryStoreUri.startsWith('file://')) || has(self.storage)",message="storage must be configured when using file-based registry store (sqlite:// or file:// prefix)"
 // +kubebuilder:validation:XValidation:rule="!has(self.artifactsDestination) || !self.artifactsDestination.startsWith('file://') || has(self.storage)",message="storage must be configured when artifactsDestination uses file-based storage (file:// prefix)"
@@ -47,6 +50,15 @@ type MLflowSpec struct {
 	// +kubebuilder:validation:Minimum=1
 	// +optional
 	Replicas *int32 `json:"replicas,omitempty"`
+
+	// Migration controls operator-managed database migration orchestration.
+	// Add the presence-based mlflow.opendatahub.io/force-migrate annotation to
+	// trigger a one-shot rerun; the annotation value is ignored. If a finished
+	// Job already exists for the current desired generation, the operator deletes
+	// it before creating the replacement Job for that forced rerun.
+	// +kubebuilder:default:={mode:Automatic}
+	// +optional
+	Migration *MLflowMigrationConfig `json:"migration,omitempty"`
 
 	// Resources specifies the compute resources for the MLflow container
 	// +optional
@@ -74,9 +86,11 @@ type MLflowSpec struct {
 	Storage *corev1.PersistentVolumeClaimSpec `json:"storage,omitempty"`
 
 	// BackendStoreURI is the URI for the MLflow backend store (metadata).
-	// Supported schemes: file://, sqlite://, mysql://, postgresql://, etc.
+	// Inline backendStoreUri values intentionally support only sqlite:// and
+	// postgresql://.
 	// Examples:
 	//   - "sqlite:////mlflow/mlflow.db" (requires Storage to be configured)
+	// Operator-managed migration only supports SQL backend store URIs.
 	// Note: For URIs containing credentials, prefer using BackendStoreURIFrom for security.
 	// This must be set explicitly unless BackendStoreURIFrom is provided.
 	// +optional
@@ -89,10 +103,12 @@ type MLflowSpec struct {
 	BackendStoreURIFrom *corev1.SecretKeySelector `json:"backendStoreUriFrom,omitempty"`
 
 	// RegistryStoreURI is the URI for the MLflow registry store (model registry metadata).
-	// Supported schemes: file://, sqlite://, mysql://, postgresql://, etc.
+	// Inline registryStoreUri values intentionally support only sqlite:// and
+	// postgresql://.
 	// Examples:
 	//   - "sqlite:////mlflow/mlflow.db" (requires Storage to be configured)
 	// If omitted, defaults to the same value as backendStoreUri.
+	// Operator-managed migration only supports SQL registry store URIs.
 	// Note: For URIs containing credentials, prefer using RegistryStoreURIFrom for security.
 	// +optional
 	RegistryStoreURI *string `json:"registryStoreUri,omitempty"`
@@ -216,10 +232,11 @@ type MLflowSpec struct {
 	// NetworkPolicyAdditionalEgressRules specifies additional egress rules to append to the
 	// default NetworkPolicy. The default policy permits DNS (53 and 5353),
 	// in-cluster HTTPS (443 and 8443 to cluster-internal pods and Services),
-	// Kubernetes API (6443), PostgreSQL (5432), MySQL (3306), and S3-compatible
-	// storage (MinIO 9000, SeaweedFS 8333 and 8334). Use this field when
-	// connecting to external HTTPS endpoints, services on non-standard ports, or
-	// when destination restrictions are needed.
+	// Kubernetes API (6443 by default), PostgreSQL (5432), MySQL (3306), and
+	// S3-compatible storage (MinIO 9000, SeaweedFS 8333 and 8334). Use this
+	// field when connecting to services on non-standard ports, when a cluster
+	// exposes the Kubernetes API on 443, or when destination restrictions are
+	// needed.
 	// +optional
 	// +kubebuilder:validation:MaxItems=32
 	NetworkPolicyAdditionalEgressRules []networkingv1.NetworkPolicyEgressRule `json:"networkPolicyAdditionalEgressRules,omitempty"`
@@ -278,6 +295,41 @@ type ImageConfig struct {
 	ImagePullPolicy *corev1.PullPolicy `json:"imagePullPolicy,omitempty"`
 }
 
+// MLflowMigrationConfig controls operator-managed database migration behavior.
+type MLflowMigrationConfig struct {
+	// Mode controls how the operator runs database migration orchestration.
+	// Automatic runs the operator-managed migration flow when bootstrap or
+	// version detection indicates it is needed. Always forces the
+	// operator-managed migration flow for each new desired generation, meaning
+	// each new revision of the MLflow resource after the desired state changes,
+	// before the MLflow Deployment is scaled back up.
+	// +kubebuilder:default=Automatic
+	// +kubebuilder:validation:Enum=Automatic;Always
+	// +optional
+	Mode MLflowMigrateMode `json:"mode,omitempty"`
+
+	// TTLSecondsAfterFinished controls how long Kubernetes retains finished
+	// operator-managed migration Jobs before TTL cleanup may delete them. When
+	// omitted, the operator defaults this to 86400 seconds (24 hours) so admins
+	// have time to inspect migration logs after upgrades, including in shared
+	// namespaces such as redhat-ods-applications. Values below 3600 seconds are
+	// rejected so the controller has time to observe terminal Job state before
+	// TTL cleanup can remove the Job.
+	// +kubebuilder:validation:Minimum=3600
+	// +optional
+	TTLSecondsAfterFinished *int32 `json:"ttlSecondsAfterFinished,omitempty"`
+}
+
+// MLflowMigrateMode controls operator-managed database migration behavior.
+type MLflowMigrateMode string
+
+const (
+	// MLflowMigrateAutomatic runs the migration flow when the operator determines it is needed.
+	MLflowMigrateAutomatic MLflowMigrateMode = "Automatic"
+	// MLflowMigrateAlways forces the migration flow before replicas are restored.
+	MLflowMigrateAlways MLflowMigrateMode = "Always"
+)
+
 // MLflowAddressStatus holds an addressable endpoint for the managed MLflow deployment.
 type MLflowAddressStatus struct {
 	// url is the in-cluster HTTPS URL for the managed MLflow Service.
@@ -295,6 +347,7 @@ type MLflowStatus struct {
 	// - "Available": the resource is fully functional
 	// - "Progressing": the resource is being created or updated
 	// - "Degraded": the resource failed to reach or maintain its desired state
+	// - "Migration": the operator-managed migration state for the current observed generation
 	//
 	// The status of each condition is one of True, False, or Unknown.
 	// +listType=map
@@ -310,6 +363,11 @@ type MLflowStatus struct {
 	// address holds the internal addressable endpoint for the managed MLflow Service.
 	// +optional
 	Address *MLflowAddressStatus `json:"address,omitempty"`
+
+	// version records the installed MLflow version.
+	// +optional
+	// +kubebuilder:validation:MaxLength=64
+	Version string `json:"version,omitempty"`
 }
 
 // +kubebuilder:object:root=true
@@ -350,4 +408,78 @@ type MLflowList struct {
 
 func init() {
 	SchemeBuilder.Register(&MLflow{}, &MLflowList{})
+}
+
+// SetMigrationProgress records an in-progress migration state for the current
+// MLflow generation across the standard rollout conditions and the dedicated
+// Migration condition.
+func (m *MLflow) SetMigrationProgress(reason, message string) {
+	meta.SetStatusCondition(&m.Status.Conditions, metav1.Condition{
+		Type:    "Available",
+		Status:  metav1.ConditionFalse,
+		Reason:  reason,
+		Message: message,
+	})
+	meta.SetStatusCondition(&m.Status.Conditions, metav1.Condition{
+		Type:    "Progressing",
+		Status:  metav1.ConditionTrue,
+		Reason:  reason,
+		Message: message,
+	})
+	meta.SetStatusCondition(&m.Status.Conditions, metav1.Condition{
+		Type:               "Migration",
+		Status:             metav1.ConditionUnknown,
+		ObservedGeneration: m.Generation,
+		Reason:             reason,
+		Message:            message,
+	})
+}
+
+// SetMigrationFailure records a terminal migration failure for the current
+// MLflow generation.
+func (m *MLflow) SetMigrationFailure(reason, message string) {
+	meta.SetStatusCondition(&m.Status.Conditions, metav1.Condition{
+		Type:    "Available",
+		Status:  metav1.ConditionFalse,
+		Reason:  reason,
+		Message: message,
+	})
+	meta.SetStatusCondition(&m.Status.Conditions, metav1.Condition{
+		Type:    "Progressing",
+		Status:  metav1.ConditionFalse,
+		Reason:  reason,
+		Message: message,
+	})
+	meta.SetStatusCondition(&m.Status.Conditions, metav1.Condition{
+		Type:               "Migration",
+		Status:             metav1.ConditionFalse,
+		ObservedGeneration: m.Generation,
+		Reason:             reason,
+		Message:            message,
+	})
+}
+
+// SetMigrationError records a non-terminal controller-side migration error for
+// the current MLflow generation. The Migration condition remains Unknown so the
+// controller can continue normal retry behavior.
+func (m *MLflow) SetMigrationError(reason, message string) {
+	meta.SetStatusCondition(&m.Status.Conditions, metav1.Condition{
+		Type:    "Available",
+		Status:  metav1.ConditionFalse,
+		Reason:  reason,
+		Message: message,
+	})
+	meta.SetStatusCondition(&m.Status.Conditions, metav1.Condition{
+		Type:    "Progressing",
+		Status:  metav1.ConditionFalse,
+		Reason:  reason,
+		Message: message,
+	})
+	meta.SetStatusCondition(&m.Status.Conditions, metav1.Condition{
+		Type:               "Migration",
+		Status:             metav1.ConditionUnknown,
+		ObservedGeneration: m.Generation,
+		Reason:             reason,
+		Message:            message,
+	})
 }

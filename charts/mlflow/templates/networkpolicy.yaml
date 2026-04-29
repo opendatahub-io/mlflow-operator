@@ -41,8 +41,8 @@ spec:
           port: 5353
     # HTTPS to cluster-internal pods and Services. Allow both the common
     # Service port (443) and the common non-root container port (8443).
-    # External HTTPS egress must be explicitly added via
-    # networkPolicy.additionalEgressRules.
+    # Use networkPolicy.additionalEgressRules when you need external HTTPS
+    # egress or destination-specific restrictions.
     - ports:
         - protocol: TCP
           port: 443
@@ -52,6 +52,8 @@ spec:
         - namespaceSelector: {}
     # Kubernetes API. Leave this unrestricted by destination because the API
     # server is commonly reached on host-network IPs outside pod/service CIDRs.
+    # Clusters that expose the API on 443 must opt in explicitly with an
+    # additional egress rule.
     - ports:
         - protocol: TCP
           port: 6443

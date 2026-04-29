@@ -3,6 +3,7 @@ FROM registry.access.redhat.com/ubi9/go-toolset:1.24 AS builder
 ARG TARGETOS
 ARG TARGETARCH
 ARG CGO_ENABLED=1
+ARG SUPPORTED_MLFLOW_VERSION_OVERRIDE=""
 
 USER root
 
@@ -23,12 +24,15 @@ COPY . .
 # Build
 # CGO_ENABLED=1 (default): FIPS-compliant build with strictfipsruntime
 # CGO_ENABLED=0: Non-FIPS build for local development on Apple Silicon
-RUN if [ "${CGO_ENABLED}" = "1" ]; then \
+RUN SUPPORTED_MLFLOW_VERSION="$(SUPPORTED_MLFLOW_VERSION_OVERRIDE="${SUPPORTED_MLFLOW_VERSION_OVERRIDE}" make -s print-supported-mlflow-version)" && \
+    test -n "${SUPPORTED_MLFLOW_VERSION}" && \
+    GO_LDFLAGS="-X github.com/opendatahub-io/mlflow-operator/internal/controller.SupportedMLflowVersion=${SUPPORTED_MLFLOW_VERSION}" && \
+    if [ "${CGO_ENABLED}" = "1" ]; then \
       CGO_ENABLED=1 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} GO111MODULE=on \
-        GOEXPERIMENT=strictfipsruntime go build -tags strictfipsruntime -a -o manager cmd/main.go; \
+        GOEXPERIMENT=strictfipsruntime go build -ldflags "${GO_LDFLAGS}" -tags strictfipsruntime -a -o manager cmd/main.go; \
     else \
       CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} GO111MODULE=on \
-        go build -a -o manager cmd/main.go; \
+        go build -ldflags "${GO_LDFLAGS}" -a -o manager cmd/main.go; \
     fi
 
 FROM registry.access.redhat.com/ubi9/ubi-minimal:latest

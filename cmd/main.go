@@ -30,6 +30,7 @@ import (
 	consolev1 "github.com/openshift/api/console/v1"
 	monitoringv1 "github.com/prometheus-operator/prometheus-operator/pkg/apis/monitoring/v1"
 	appsv1 "k8s.io/api/apps/v1"
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	"k8s.io/apimachinery/pkg/labels"
@@ -100,6 +101,13 @@ func main() {
 		setupLog.Error(fmt.Errorf("namespace cannot be empty"), "namespace must be specified")
 		os.Exit(1)
 	}
+	if controller.SupportedMLflowVersion == "" {
+		setupLog.Error(
+			fmt.Errorf("supported MLflow version is empty"),
+			"SupportedMLflowVersion must be injected via build ldflags from config/component_metadata.yaml",
+		)
+		os.Exit(1)
+	}
 	setupLog.Info("Starting operator", "targetNamespace", namespace)
 
 	disableHTTP2 := func(c *tls.Config) {
@@ -145,6 +153,7 @@ func main() {
 
 	// Create label selector for MLflow-owned resources
 	labelSelector := labels.SelectorFromSet(labels.Set{"app": "mlflow"})
+	migrationJobLabelSelector := labels.SelectorFromSet(labels.Set{controller.MigrationJobLabelKey: "true"})
 
 	// Check ConsoleLink availability early to configure cache
 	cfg := ctrl.GetConfigOrDie()
@@ -157,6 +166,8 @@ func main() {
 	// Build the ByObject cache configuration
 	byObjectCache := map[client.Object]cache.ByObject{
 		&appsv1.Deployment{}:            {Label: labelSelector},
+		&batchv1.Job{}:                  {Label: migrationJobLabelSelector},
+		&corev1.Pod{}:                   {Label: migrationJobLabelSelector},
 		&corev1.Secret{}:                {Label: labelSelector},
 		&corev1.Service{}:               {Label: labelSelector},
 		&corev1.ServiceAccount{}:        {Label: labelSelector},

@@ -21,6 +21,13 @@ spec:
   # Number of replicas - can scale horizontally with remote storage
   replicas: 2
 
+  migration:
+    # Operator-managed database migration mode
+    mode: Automatic
+
+    # Retain finished migration Jobs for 24 hours for debugging/auditing
+    ttlSecondsAfterFinished: 86400
+
   # Compute resources
   resources:
     requests:
@@ -43,8 +50,8 @@ spec:
   # Remote S3 storage for artifacts
   artifactsDestination: "s3://my-mlflow-bucket/artifacts"
 
-  # Explicit admin opt-in for external HTTPS egress to the artifact store.
-  # Tighten this rule with `to` peers or CIDRs when your network layout allows it.
+  # Optional explicit rule for destination-specific control over artifact-store egress.
+  # Tighten this with `to` peers or CIDRs when your network layout allows it.
   networkPolicyAdditionalEgressRules:
     - ports:
         - protocol: TCP
@@ -91,4 +98,3 @@ spec:
   # For connecting to services with self-signed certificates or private CAs
   # caBundleConfigMap:
   #   name: mlflow-ca-bundle
-  #   key: ca-bundle.crt

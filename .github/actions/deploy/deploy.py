@@ -232,10 +232,21 @@ class MLflowDeployer:
                 f"--timeout=300s -n {self.args.namespace}",
                 "Waiting for operator deployment"
             )
+            self.run_command(
+                "kubectl rollout status deployment/mlflow-operator-controller-manager "
+                f"--timeout=300s -n {self.args.namespace}",
+                "Waiting for operator rollout to complete"
+            )
         except Exception as e:
             print(f"❌ MLflow operator deployment failed to become ready: {e}")
             self.debug_deployment("mlflow-operator-controller-manager", self.args.namespace)
             raise
+
+    def mlflow_image_pull_policy(self):
+        """Select an MLflow image pull policy that matches how the image is delivered."""
+        if self.args.mlflow_image and self.args.mlflow_image.startswith("localhost/"):
+            return "IfNotPresent"
+        return "Always"
 
     def create_postgres_secret(self):
         """Create PostgreSQL credentials secret"""
@@ -753,7 +764,7 @@ class MLflowDeployer:
             "spec": {
                 "image": {
                     "image": self.args.mlflow_image,
-                    "imagePullPolicy": "Always"
+                    "imagePullPolicy": self.mlflow_image_pull_policy()
                 }
             }
         }
@@ -894,11 +905,7 @@ class MLflowDeployer:
         # Then wait for MLflow to be available
         print("⏳ Waiting for MLflow to be available...")
         try:
-            self.run_command(
-                f"kubectl wait --for=condition=available deployment/mlflow "
-                f"--timeout=300s -n {self.args.namespace}",
-                "Waiting for MLflow deployment to be available"
-            )
+            self.wait_for_mlflow_ready()
         except Exception as e:
             print(f"❌ MLflow deployment failed to become available: {e}")
             self._debug_mlflow_deployment()
@@ -1074,6 +1081,59 @@ class MLflowDeployer:
         # Timeout reached
         raise Exception(f"Timeout waiting for {deployment_name} deployment to be created after {timeout}s")
 
+    def wait_for_mlflow_ready(self, timeout=300, poll_interval=10):
+        """Wait until the MLflow deployment has real serving replicas.
+
+        Deployment condition=Available is not sufficient here because a deployment
+        scaled to zero during operator-managed migration still reports Available=True.
+        """
+        print("⏳ Waiting for mlflow deployment to have available replicas...")
+        elapsed_time = 0
+
+        while elapsed_time < timeout:
+            result = self.run_command(
+                [
+                    "kubectl", "get", "deployment", "mlflow",
+                    "-n", self.args.namespace,
+                    "-o", "jsonpath={.spec.replicas} {.status.availableReplicas}",
+                ],
+                check=False,
+                capture_output=True,
+            )
+            if result.returncode != 0:
+                print(
+                    f"⏳ Waiting for mlflow deployment replicas... "
+                    f"({elapsed_time}/{timeout}s, deployment lookup pending)"
+                )
+                time.sleep(poll_interval)
+                elapsed_time += poll_interval
+                continue
+
+            values = result.stdout.strip().split()
+            try:
+                desired = int(values[0]) if len(values) > 0 and values[0] else 0
+                available = int(values[1]) if len(values) > 1 and values[1] else 0
+            except ValueError:
+                print(
+                    f"⏳ Waiting for mlflow deployment replicas... "
+                    f"({elapsed_time}/{timeout}s, deployment status not parseable yet)"
+                )
+                time.sleep(poll_interval)
+                elapsed_time += poll_interval
+                continue
+            if desired > 0 and available > 0:
+                print(f"✅ mlflow deployment is ready with {available}/{desired} available replicas")
+                return
+
+            print(
+                f"⏳ Waiting for mlflow deployment replicas... "
+                f"({elapsed_time}/{timeout}s, desired={desired}, available={available})"
+            )
+            time.sleep(poll_interval)
+            elapsed_time += poll_interval
+
+        raise Exception(f"Timeout waiting for mlflow deployment replicas after {timeout}s")
+
     def debug_deployment(self, deployment_name, namespace):
         """Debug a deployment by checking pods, events, and logs"""
         print(f"🔍 Debugging deployment '{deployment_name}' in namespace '{namespace}'...")
@@ -1189,7 +1249,8 @@ class MLflowDeployer:
         if os.getenv('GITHUB_OUTPUT'):
             with open(os.getenv('GITHUB_OUTPUT'), 'a') as f:
                 f.write(f"namespace={self.args.namespace}\n")
-                f.write("mlflow_url=http://localhost:8080\n")
+                if not self.args.skip_mlflow_cr:
+                    f.write("mlflow_url=http://localhost:8080\n")
                 f.write(f"s3_endpoint={self.args.s3_endpoint}\n")
 
         try:
@@ -1220,10 +1281,14 @@ class MLflowDeployer:
                 print("⏭️  Skipping MLflow operator deployment (--skip-operator set)")
 
             # Step 4: Create MLflow CR
-            self.deploy_mlflow()
+            if not self.args.skip_mlflow_cr:
+                self.deploy_mlflow()
+            else:
+                print("⏭️  Skipping MLflow CR creation (--skip-mlflow-cr set)")
 
             # Step 5: Setup port forwarding info
-            self.setup_port_forward()
+            if not self.args.skip_mlflow_cr:
+                self.setup_port_forward()
 
             print("✅ MLflow deployment completed successfully!")
 
@@ -1261,6 +1326,8 @@ def main():
                        help="Full MLflow operator image name and tag")
     parser.add_argument("--skip-operator", action="store_true", default=False,
                        help="Skip deploying the MLflow operator (assume it is already installed)")
+    parser.add_argument("--skip-mlflow-cr", action="store_true", default=False,
+                       help="Skip creating the MLflow custom resource (provision infra/operator only)")
     parser.add_argument("--skip-infrastructure", action="store_true", default=False,
                        help="Skip deploying PostgreSQL and SeaweedFS (assume they are pre-existing); "
                             "credentials secrets are still created")

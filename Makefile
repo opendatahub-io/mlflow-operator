@@ -25,6 +25,11 @@ CGO_ENABLED ?= 1
 SHELL = /usr/bin/env bash -o pipefail
 .SHELLFLAGS = -ec
 
+SUPPORTED_MLFLOW_VERSION := $(shell python3 -c 'from pathlib import Path; import re; text = Path("config/component_metadata.yaml").read_text(); match = re.search(r"(?ms)^[ \t]*-[ \t]*name:[ \t]*MLflow[ \t]*$$.*?^[ \t]*version:[ \t]*v?([^ \t\r\n]+)", text); print(match.group(1) if match else "")')
+SUPPORTED_MLFLOW_VERSION_OVERRIDE ?=
+EFFECTIVE_SUPPORTED_MLFLOW_VERSION = $(if $(strip $(SUPPORTED_MLFLOW_VERSION_OVERRIDE)),$(strip $(SUPPORTED_MLFLOW_VERSION_OVERRIDE)),$(strip $(SUPPORTED_MLFLOW_VERSION)))
+SUPPORTED_MLFLOW_VERSION_LDFLAG = -X github.com/opendatahub-io/mlflow-operator/internal/controller.SupportedMLflowVersion=$(EFFECTIVE_SUPPORTED_MLFLOW_VERSION)
+
 .PHONY: all
 all: build
 
@@ -44,6 +49,11 @@ all: build
 .PHONY: help
 help: ## Display this help.
 	@awk 'BEGIN {FS = ":.*##"; printf "\nUsage:\n  make \033[36m<target>\033[0m\n"} /^[a-zA-Z_0-9-]+:.*?##/ { printf "  \033[36m%-15s\033[0m %s\n", $$1, $$2 } /^##@/ { printf "\n\033[1m%s\033[0m\n", substr($$0, 5) } ' $(MAKEFILE_LIST)
+
+.PHONY: print-supported-mlflow-version
+print-supported-mlflow-version: ## Print the supported MLflow version from component metadata.
+	@test -n "$(EFFECTIVE_SUPPORTED_MLFLOW_VERSION)"
+	@printf '%s\n' "$(EFFECTIVE_SUPPORTED_MLFLOW_VERSION)"
 
 ##@ Development
 
@@ -65,11 +75,12 @@ vet: ## Run go vet against code.
 
 .PHONY: test
 test: manifests generate fmt vet setup-envtest ## Run tests.
-	KUBEBUILDER_ASSETS="$(shell "$(ENVTEST)" use $(ENVTEST_K8S_VERSION) --bin-dir "$(LOCALBIN)" -p path)" go test $$(go list ./... | grep -v /e2e) -coverprofile cover.out
+	KUBEBUILDER_ASSETS="$(shell "$(ENVTEST)" use $(ENVTEST_K8S_VERSION) --bin-dir "$(LOCALBIN)" -p path)" go test -ldflags "$(SUPPORTED_MLFLOW_VERSION_LDFLAG)" $$(go list ./... | grep -v /e2e) -coverprofile cover.out
 
 # E2E test configuration
 KIND_CLUSTER ?= mlflow
 E2E_IMG ?= localhost/mlflow-operator:v0.0.1
+MLFLOW_SEED_IMAGE ?= localhost/mlflow-seed:3.10.0
 
 .PHONY: setup-kind-cluster
 setup-kind-cluster: ## Create a Kind cluster for e2e tests if it doesn't exist
@@ -89,7 +100,11 @@ build-and-load-image: ## Build the operator image and load it into the Kind clus
 
 .PHONY: test-e2e
 test-e2e: manifests generate fmt vet ## Run the e2e tests against an existing Kubernetes cluster.
-	IMG=$(E2E_IMG) go test ./test/e2e/ -v -ginkgo.v
+	IMG=$(E2E_IMG) go test -ldflags "$(SUPPORTED_MLFLOW_VERSION_LDFLAG)" ./test/e2e/ -v -ginkgo.v -ginkgo.label-filter='!upgrade'
+
+.PHONY: test-e2e-upgrade
+test-e2e-upgrade: manifests generate fmt vet ## Run the upgrade-focused e2e tests against an existing Kubernetes cluster.
+	IMG=$(E2E_IMG) go test -ldflags "$(SUPPORTED_MLFLOW_VERSION_LDFLAG)" ./test/e2e/ -v -ginkgo.v -ginkgo.label-filter='upgrade' -args -upgrade-seed-image='$(MLFLOW_SEED_IMAGE)'
 
 .PHONY: test-e2e-full
 test-e2e-full: setup-kind-cluster build-and-load-image test-e2e ## Run the complete e2e workflow: setup cluster, build/load image, and run tests.
@@ -129,18 +144,18 @@ lint-config: golangci-lint ## Verify golangci-lint linter configuration
 
 .PHONY: build
 build: manifests generate fmt vet ## Build manager binary.
-	go build -o bin/manager cmd/main.go
+	go build -ldflags "$(SUPPORTED_MLFLOW_VERSION_LDFLAG)" -o bin/manager cmd/main.go
 
 .PHONY: run
 run: manifests generate fmt vet ## Run a controller from your host.
-	go run ./cmd/main.go
+	go run -ldflags "$(SUPPORTED_MLFLOW_VERSION_LDFLAG)" ./cmd/main.go
 
 # If you wish to build the manager image targeting other platforms you can use the --platform flag.
 # (i.e. docker build --platform linux/arm64). However, you must enable docker buildKit for it.
 # More info: https://docs.docker.com/develop/develop-images/build_enhancements/
 .PHONY: docker-build
 docker-build: ## Build docker image with the manager.
-	$(CONTAINER_TOOL) build -t ${IMG} .
+	$(CONTAINER_TOOL) build --build-arg SUPPORTED_MLFLOW_VERSION_OVERRIDE="$(SUPPORTED_MLFLOW_VERSION_OVERRIDE)" -t ${IMG} .
 
 .PHONY: docker-push
 docker-push: ## Push docker image with the manager.
@@ -159,7 +174,7 @@ docker-buildx: ## Build and push docker image for the manager for cross-platform
 	sed -e '1 s/\(^FROM\)/FROM --platform=\$$\{BUILDPLATFORM\}/; t' -e ' 1,// s//FROM --platform=\$$\{BUILDPLATFORM\}/' Dockerfile > Dockerfile.cross
 	- $(CONTAINER_TOOL) buildx create --name mlflow-operator-builder
 	$(CONTAINER_TOOL) buildx use mlflow-operator-builder
-	- $(CONTAINER_TOOL) buildx build --push --platform=$(PLATFORMS) --build-arg CGO_ENABLED=$(CGO_ENABLED) --tag ${IMG} -f Dockerfile.cross .
+	- $(CONTAINER_TOOL) buildx build --push --platform=$(PLATFORMS) --build-arg CGO_ENABLED=$(CGO_ENABLED) --build-arg SUPPORTED_MLFLOW_VERSION_OVERRIDE="$(SUPPORTED_MLFLOW_VERSION_OVERRIDE)" --tag ${IMG} -f Dockerfile.cross .
 	- $(CONTAINER_TOOL) buildx rm mlflow-operator-builder
 	rm Dockerfile.cross
 

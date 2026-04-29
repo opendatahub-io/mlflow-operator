@@ -203,11 +203,11 @@ metrics:
 networkPolicy:
   # Additional egress rules appended to the default NetworkPolicy.
   # The default policy permits DNS (53 and 5353), in-cluster HTTPS (443 and
-  # 8443 to cluster-internal pods and Services), Kubernetes API (6443),
-  # PostgreSQL (5432), MySQL (3306), and S3-compatible storage (MinIO 9000,
-  # SeaweedFS 8333 and 8334). Add rules here for external HTTPS endpoints,
-  # services running on non-standard ports, or when tighter destination
-  # restrictions are needed.
+  # 8443 to cluster-internal pods and Services), Kubernetes API (6443 by
+  # default), PostgreSQL (5432), MySQL (3306), and S3-compatible storage
+  # (MinIO 9000, SeaweedFS 8333 and 8334). Add rules here for services running
+  # on non-standard ports, for clusters that expose the Kubernetes API on 443,
+  # or when tighter destination restrictions are needed.
   additionalEgressRules: []
   # Example:
   # additionalEgressRules:

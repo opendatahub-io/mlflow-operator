@@ -17,6 +17,7 @@ The MLflow Operator automates the deployment and lifecycle management of MLflow 
 - **OpenShift Integration**: Automatic TLS certificate provisioning via service-ca-operator
 - **Flexible Storage**: Support for local PVC, remote databases (PostgreSQL), and remote artifact storage (S3, etc.)
 - **Persistent Storage**: Automatic PVC creation with configurable size and storage class
+- **Operator-Managed Database Migrations**: The operator can scale MLflow down, run a one-shot migration Job, and restore replicas during upgrades
 
 ## Getting Started
 
@@ -153,8 +154,11 @@ Customize values:
 ```sh
 helm install mlflow . -n opendatahub --create-namespace \
   --set image.tag=v2.0.0 \
+  --set storage.accessMode=ReadWriteOnce \
   --set storage.size=20Gi
 ```
+
+The standalone Helm chart does not orchestrate MLflow database migrations. Bootstrap or migrate the database yourself before rolling out a standalone Helm upgrade.
 
 ## Configuration
 
@@ -181,19 +185,22 @@ See the manifest files for detailed per-resource documentation.
 
 ### Storage Configuration
 
-`backendStoreUri` (or `backendStoreUriFrom`) is required on new creates and updates. To avoid breaking already-stored CRs created before this validation was introduced, the operator still falls back to the legacy implicit SQLite backend during reconciliation when both fields are unset.
+`backendStoreUri` (or `backendStoreUriFrom`) is required on new creates and updates. Inline `backendStoreUri` and `registryStoreUri` intentionally accept only the documented SQL schemes (`sqlite://` and `postgresql://`). To avoid breaking already-stored CRs created before this validation was introduced, the operator still falls back to the legacy implicit SQLite backend during reconciliation when both fields are unset.
 
 #### Local Storage (Development/Testing)
 ```yaml
 spec:
   storage:
-    size: 10Gi
+    accessModes:
+      - ReadWriteOnce
+    resources:
+      requests:
+        storage: 10Gi
     storageClassName: ""  # Use default storage class
-    accessMode: ReadWriteOnce
-
   backendStoreUri: "sqlite:////mlflow/mlflow.db"
   registryStoreUri: "sqlite:////mlflow/mlflow.db"
   artifactsDestination: "file:///mlflow/artifacts"
+  serveArtifacts: true
 ```
 
 #### Remote Storage (Production)
@@ -211,6 +218,8 @@ spec:
     key: registry-store-uri  # postgresql://user:password@host:5432/dbname
 
   artifactsDestination: "s3://my-mlflow-bucket/artifacts"
+  defaultArtifactRoot: "s3://my-mlflow-bucket/artifacts/runs"
+  serveArtifacts: true
 
   # S3 credentials via secret
   envFrom:
@@ -230,6 +239,29 @@ kubectl create secret generic mlflow-db-credentials \
   --from-literal=registry-store-uri='postgresql://mlflow:password@postgres.example.com:5432/mlflow' \
   -n <namespace>
 ```
+
+### Database Migration
+
+Use `spec.migration.mode` to control operator-managed database migration orchestration:
+
+- `Automatic` (default) runs the migration Job on bootstrap and whenever `status.version` differs from the operator-supported MLflow version
+- `Always` runs the migration Job for each new desired generation, meaning each new revision of the MLflow resource after its desired state changes, before the MLflow Deployment is scaled back up
+- `spec.migration.ttlSecondsAfterFinished` optionally overrides how long finished migration Jobs are retained before Kubernetes TTL cleanup may delete them; when omitted, the operator defaults to 86400 seconds (24 hours), and values below 3600 seconds (1 hour) are rejected
+
+`status.version` records the supported MLflow version that most recently completed the operator-managed migration flow. The `Migration` status condition records the per-generation migration state using `observedGeneration`: `Unknown` while migration is in progress or retrying after a transient failure, `True` after success, and `False` after a terminal failure.
+
+Operator-managed migration only supports documented SQL metadata store URIs for the backend and registry stores: `sqlite://` and `postgresql://`. Inline `file://` backend or registry metadata URIs are intentionally rejected, and `file://` metadata stores are not supported for operator-managed migration.
+
+If `spec.image.image` overrides the default image, the operator still uses that image for the migration Job. This supports hotfix and test images, but it also means the operator does not prevalidate the custom image's migration runtime contract before scale-down, so an incompatible custom image can still fail after the MLflow Deployment has been scaled down and cause downtime.
+
+The operator keeps Kubernetes Job retries finite, but it automatically recreates fresh migration Jobs after a short delay for retryable failures such as transient database connectivity issues. Terminal failures, such as version mismatches, unsupported metadata store URIs, or known Alembic revision-resolution errors, stop automatic retries and instruct the admin to use `mlflow.opendatahub.io/force-migrate` after fixing the issue.
+
+To trigger a manual one-shot rerun, add the presence-based `mlflow.opendatahub.io/force-migrate` annotation to the MLflow resource. After a successful forced migration, the operator clears the annotation automatically. If a finished Job already exists for the current desired generation, the operator deletes it first so it can create the replacement Job with the same generated name.
+
+By default, finished migration Jobs remain visible for 24 hours before TTL cleanup may remove them. This means upgrades can leave a completed migration Job behind briefly in shared namespaces such as `redhat-ods-applications`, which gives admins time to inspect logs when needed.
+
+During the migration flow, the operator resolves the final MLflow image, scales the MLflow Deployment to zero, waits for all MLflow replicas to disappear, runs a one-shot Job against the backend and registry stores, verifies that the migration image reports the supported MLflow version, restores the requested replica count, and updates `status.version` only after the post-migration rollout is ready.
+For ODH/RHOAI MLflow images that ship `mlflow.store.db.migration_gap`, that Job also runs the backend-only RHOAI `3.3 -> 3.4` gap repair before the generic MLflow migration logic.
 
 ### CORS Configuration
 
@@ -255,13 +287,13 @@ helm install mlflow . --set mlflow.corsAllowedOrigins="https://my-app.example.co
 
 The operator automatically creates a NetworkPolicy that:
 - **Ingress**: Allows traffic to the MLflow HTTPS port (8443) from any pod in the cluster
-- **Egress**: Allows DNS (ports 53 and 5353), in-cluster HTTPS (ports 443 and 8443 to cluster-internal pods and Services), Kubernetes API (port 6443), PostgreSQL (port 5432), MySQL (port 3306), and S3-compatible object storage (MinIO port 9000, SeaweedFS ports 8333 and 8334)
+- **Egress**: Allows DNS (ports 53 and 5353), in-cluster HTTPS (ports 443 and 8443 to cluster-internal pods and Services), Kubernetes API (port 6443 by default), PostgreSQL (port 5432), MySQL (port 3306), and S3-compatible object storage (MinIO port 9000, SeaweedFS ports 8333 and 8334)
 
-External HTTPS egress is not allowed by default. If your deployment needs external HTTPS access or non-standard ports, add additional egress rules:
+External egress on non-default ports is not allowed by default. Clusters that expose the Kubernetes API on port 443 need an explicit additional egress rule, so use `networkPolicyAdditionalEgressRules` when you need non-default ports or destination-specific restrictions:
 ```yaml
 spec:
   networkPolicyAdditionalEgressRules:
-    # Explicit admin opt-in for external HTTPS egress.
+    # Optional explicit rule for destination-specific control over artifact-store egress.
     # Add `to` peers or CIDRs when you can narrow the destination set.
     - ports:
         - protocol: TCP
@@ -330,13 +362,9 @@ See the [config/samples](./config/samples/) directory for complete examples:
 **Storage issues**:
 - Ensure the PVC is bound: `kubectl get pvc -n <namespace>`
 - For remote storage, verify database/S3 credentials are correct
-- Check MLflow logs:
+- Check MLflow logs (the MLflow resource name is fixed to `mlflow`):
   ```bash
-  # For CR named "mlflow":
   kubectl logs -n <namespace> deployment/mlflow -c mlflow
-
-  # For CR with custom name (e.g., "production"):
-  kubectl logs -n <namespace> deployment/mlflow-production -c mlflow
   ```
 
 ### To Uninstall

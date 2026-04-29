@@ -3,6 +3,7 @@
 # Scoped to the target deployment namespace.
 #
 # - configmaps, secrets, serviceaccounts, services, persistentvolumeclaims: managing MLflow deployment resources
+# - pods: reading migration Job pod status for failure reporting
 # - deployments: managing the MLflow Deployment
 # - cronjobs: managing the garbage collection CronJob
 # - networkpolicies: managing network access to MLflow pods
@@ -30,6 +31,14 @@ rules:
   - update
   - watch
 - apiGroups:
+  - ""
+  resources:
+  - pods
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
   - apps
   resources:
   - deployments
@@ -44,6 +53,7 @@ rules:
 - apiGroups:
   - batch
   resources:
+  - jobs
   - cronjobs
   verbs:
   - create

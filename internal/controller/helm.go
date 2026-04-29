@@ -29,9 +29,11 @@ import (
 	"helm.sh/helm/v3/pkg/chartutil"
 	"helm.sh/helm/v3/pkg/engine"
 	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/apimachinery/pkg/util/yaml"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
@@ -144,6 +146,13 @@ func (h *HelmRenderer) RenderChart(mlflow *mlflowv1.MLflow, namespace string, op
 	if err != nil {
 		return nil, fmt.Errorf("failed to render templates: %w", err)
 	}
+
+	migrationNetworkPolicy := buildMigrationNetworkPolicy(mlflow, namespace)
+	migrationNetworkPolicyMap, err := runtime.DefaultUnstructuredConverter.ToUnstructured(migrationNetworkPolicy)
+	if err != nil {
+		return nil, fmt.Errorf("failed to convert migration NetworkPolicy: %w", err)
+	}
+	rendered = append(rendered, &unstructured.Unstructured{Object: migrationNetworkPolicyMap})
 
 	return rendered, nil
 }
@@ -580,6 +589,62 @@ func (h *HelmRenderer) mlflowToHelmValues(mlflow *mlflowv1.MLflow, namespace str
 	values["garbageCollection"] = gcValues
 
 	return values, nil
+}
+
+func buildMigrationNetworkPolicy(mlflow *mlflowv1.MLflow, namespace string) *networkingv1.NetworkPolicy {
+	udp := corev1.ProtocolUDP
+	tcp := corev1.ProtocolTCP
+	port53 := intstr.FromInt32(53)
+	port5353 := intstr.FromInt32(5353)
+	port5432 := intstr.FromInt32(5432)
+	port3306 := intstr.FromInt32(3306)
+
+	egressRules := []networkingv1.NetworkPolicyEgressRule{
+		{
+			Ports: []networkingv1.NetworkPolicyPort{
+				{Protocol: &udp, Port: &port53},
+				{Protocol: &tcp, Port: &port53},
+				{Protocol: &udp, Port: &port5353},
+				{Protocol: &tcp, Port: &port5353},
+			},
+		},
+		{
+			Ports: []networkingv1.NetworkPolicyPort{
+				{Protocol: &tcp, Port: &port5432},
+				{Protocol: &tcp, Port: &port3306},
+			},
+		},
+	}
+	if len(mlflow.Spec.NetworkPolicyAdditionalEgressRules) > 0 {
+		egressRules = append(egressRules, mlflow.Spec.NetworkPolicyAdditionalEgressRules...)
+	}
+
+	return &networkingv1.NetworkPolicy{
+		TypeMeta: metav1.TypeMeta{
+			APIVersion: "networking.k8s.io/v1",
+			Kind:       "NetworkPolicy",
+		},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      fmt.Sprintf("%s%s-migration", ResourceName, getResourceSuffix(mlflow.Name)),
+			Namespace: namespace,
+			Labels: map[string]string{
+				"component": "mlflow-migration",
+			},
+		},
+		Spec: networkingv1.NetworkPolicySpec{
+			PodSelector: metav1.LabelSelector{
+				MatchLabels: map[string]string{
+					"component": "mlflow-migration",
+				},
+			},
+			PolicyTypes: []networkingv1.PolicyType{
+				networkingv1.PolicyTypeIngress,
+				networkingv1.PolicyTypeEgress,
+			},
+			Ingress: []networkingv1.NetworkPolicyIngressRule{},
+			Egress:  egressRules,
+		},
+	}
 }
 
 // renderTemplates renders the Helm templates with the given values
