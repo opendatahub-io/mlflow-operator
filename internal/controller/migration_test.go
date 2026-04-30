@@ -1,5 +1,5 @@
 /*
-Copyright 2025.
+Copyright 2026.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -17,237 +17,191 @@ limitations under the License.
 package controller
 
 import (
+	"os"
+	"strings"
 	"testing"
 
+	gomega "github.com/onsi/gomega"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	mlflowv1 "github.com/opendatahub-io/mlflow-operator/api/v1"
 )
 
-func TestInjectMigrationInitContainer_Basic(t *testing.T) {
-	renderer := NewHelmRenderer("../../charts/mlflow")
+func TestMigrationRequested(t *testing.T) {
+	t.Parallel()
 
-	mlflow := &mlflowv1.MLflow{
-		ObjectMeta: metav1.ObjectMeta{Name: "mlflow"},
-		Spec:       mlflowv1.MLflowSpec{},
-	}
-
-	objs, err := renderer.RenderChart(mlflow, "test-ns", RenderOptions{})
-	if err != nil {
-		t.Fatalf("RenderChart() error = %v", err)
-	}
-
-	// Inject the migration init container
-	if err := injectMigrationInitContainer(objs); err != nil {
-		t.Fatalf("injectMigrationInitContainer() error = %v", err)
-	}
-
-	deployment := findDeployment(t, objs)
-
-	initContainers, _, _ := unstructured.NestedSlice(deployment.Object, "spec", "template", "spec", "initContainers")
-	if len(initContainers) != 1 {
-		t.Fatalf("expected 1 init container, got %d", len(initContainers))
-	}
-
-	initContainer := initContainers[0].(map[string]interface{})
-
-	// Verify name
-	if initContainer["name"].(string) != "db-migration" {
-		t.Errorf("init container name = %v, want db-migration", initContainer["name"])
-	}
-
-	// Verify command
-	command, _ := initContainer["command"].([]interface{})
-	if len(command) != 1 || command[0].(string) != "mlflow" {
-		t.Errorf("init container command = %v, want [mlflow]", command)
-	}
-
-	// Verify args
-	args, _ := initContainer["args"].([]interface{})
-	if len(args) != 2 || args[0].(string) != "db" || args[1].(string) != "fix-migration-gap" {
-		t.Errorf("init container args = %v, want [db fix-migration-gap]", args)
-	}
-
-	// Verify it has MLFLOW_BACKEND_STORE_URI env var
-	envVars, _, _ := unstructured.NestedSlice(initContainer, "env")
-	foundBackendURI := false
-	for _, env := range envVars {
-		envMap := env.(map[string]interface{})
-		if envMap["name"].(string) == "MLFLOW_BACKEND_STORE_URI" {
-			foundBackendURI = true
-		}
-	}
-	if !foundBackendURI {
-		t.Error("MLFLOW_BACKEND_STORE_URI env var not found in init container")
-	}
-
-	// Verify it uses the same image as the main container
-	containers, _, _ := unstructured.NestedSlice(deployment.Object, "spec", "template", "spec", "containers")
-	mainContainer := containers[0].(map[string]interface{})
-	if initContainer["image"] != mainContainer["image"] {
-		t.Errorf("init container image = %v, want %v", initContainer["image"], mainContainer["image"])
-	}
-
-	// Verify security context is copied
-	if _, found, _ := unstructured.NestedMap(initContainer, "securityContext"); !found {
-		t.Error("security context not found on init container")
-	}
-
-	// Verify resources are set
-	if _, found, _ := unstructured.NestedMap(initContainer, "resources"); !found {
-		t.Error("resources not found on init container")
-	}
-
-	// Verify the init container gets the writable /tmp mount from the main container.
-	volumeMounts, _, _ := unstructured.NestedSlice(initContainer, "volumeMounts")
-	foundTmpMount := false
-	for _, vm := range volumeMounts {
-		vmMap := vm.(map[string]interface{})
-		if vmMap["name"].(string) == "tmp" {
-			foundTmpMount = true
-		}
-	}
-	if !foundTmpMount {
-		t.Error("tmp volume mount not found on db-migration init container")
-	}
-}
-
-func TestInjectMigrationInitContainer_WithCABundle(t *testing.T) {
-	renderer := NewHelmRenderer("../../charts/mlflow")
-
-	mlflow := &mlflowv1.MLflow{
-		ObjectMeta: metav1.ObjectMeta{Name: "mlflow"},
-		Spec: mlflowv1.MLflowSpec{
-			CABundleConfigMap: &mlflowv1.CABundleConfigMapSpec{
-				Name: "custom-ca",
+	tests := []struct {
+		name   string
+		mlflow *mlflowv1.MLflow
+		want   bool
+	}{
+		{
+			name: "automatic defaults to requested when status version empty",
+			mlflow: &mlflowv1.MLflow{
+				Spec: mlflowv1.MLflowSpec{},
 			},
+			want: true,
+		},
+		{
+			name: "automatic skips when supported version already recorded",
+			mlflow: &mlflowv1.MLflow{
+				Status: mlflowv1.MLflowStatus{Version: SupportedMLflowVersion},
+			},
+			want: false,
+		},
+		{
+			name: "automatic runs when status version differs",
+			mlflow: &mlflowv1.MLflow{
+				Status: mlflowv1.MLflowStatus{Version: "3.9.0"},
+			},
+			want: true,
+		},
+		{
+			name: "always runs even when supported version already recorded",
+			mlflow: &mlflowv1.MLflow{
+				Spec:   mlflowv1.MLflowSpec{Migrate: mlflowv1.MLflowMigrateAlways},
+				Status: mlflowv1.MLflowStatus{Version: SupportedMLflowVersion},
+			},
+			want: true,
+		},
+		{
+			name: "force annotation triggers migration",
+			mlflow: &mlflowv1.MLflow{
+				ObjectMeta: metav1.ObjectMeta{
+					Annotations: map[string]string{forceMigrateAnnotation: ""},
+				},
+				Status: mlflowv1.MLflowStatus{Version: SupportedMLflowVersion},
+			},
+			want: true,
 		},
 	}
 
-	objs, err := renderer.RenderChart(mlflow, "test-ns", RenderOptions{PlatformTrustedCABundleExists: true})
-	if err != nil {
-		t.Fatalf("RenderChart() error = %v", err)
-	}
-
-	if err := injectMigrationInitContainer(objs); err != nil {
-		t.Fatalf("injectMigrationInitContainer() error = %v", err)
-	}
-
-	deployment := findDeployment(t, objs)
-
-	initContainers, _, _ := unstructured.NestedSlice(deployment.Object, "spec", "template", "spec", "initContainers")
-
-	// Should have 2 init containers: combine-ca-bundles + db-migration
-	if len(initContainers) != 2 {
-		t.Fatalf("expected 2 init containers, got %d", len(initContainers))
-	}
-
-	// First should be combine-ca-bundles (from chart)
-	first := initContainers[0].(map[string]interface{})
-	if first["name"].(string) != "combine-ca-bundles" {
-		t.Errorf("first init container name = %v, want combine-ca-bundles", first["name"])
-	}
-
-	// Second should be db-migration (injected)
-	second := initContainers[1].(map[string]interface{})
-	if second["name"].(string) != "db-migration" {
-		t.Errorf("second init container name = %v, want db-migration", second["name"])
-	}
-
-	// Verify db-migration has CA bundle env vars
-	envVars, _, _ := unstructured.NestedSlice(second, "env")
-	foundEnvVars := make(map[string]bool)
-	for _, env := range envVars {
-		envMap := env.(map[string]interface{})
-		foundEnvVars[envMap["name"].(string)] = true
-	}
-
-	for _, required := range []string{"MLFLOW_BACKEND_STORE_URI", "SSL_CERT_FILE", "PGSSLROOTCERT", "PGSSLMODE"} {
-		if !foundEnvVars[required] {
-			t.Errorf("expected env var %s not found in db-migration init container", required)
-		}
-	}
-
-	// Verify db-migration has required shared volume mounts
-	volumeMounts, _, _ := unstructured.NestedSlice(second, "volumeMounts")
-	foundTmpMount := false
-	foundCAMount := false
-	for _, vm := range volumeMounts {
-		vmMap := vm.(map[string]interface{})
-		if vmMap["name"].(string) == "tmp" {
-			foundTmpMount = true
-		}
-		if vmMap["name"].(string) == "combined-ca-bundle" {
-			foundCAMount = true
-		}
-	}
-	if !foundTmpMount {
-		t.Error("tmp volume mount not found on db-migration init container")
-	}
-	if !foundCAMount {
-		t.Error("combined-ca-bundle volume mount not found on db-migration init container")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := migrationRequested(tt.mlflow); got != tt.want {
+				t.Fatalf("migrationRequested() = %v, want %v", got, tt.want)
+			}
+		})
 	}
 }
 
-func TestInjectMigrationInitContainer_WithSecretRef(t *testing.T) {
+func TestBuildMigrationJobFromDeployment(t *testing.T) {
+	g := gomega.NewWithT(t)
 	renderer := NewHelmRenderer("../../charts/mlflow")
 
-	optional := false
-	mlflow := &mlflowv1.MLflow{
+	objs, err := renderer.RenderChart(&mlflowv1.MLflow{
 		ObjectMeta: metav1.ObjectMeta{Name: "mlflow"},
 		Spec: mlflowv1.MLflowSpec{
 			BackendStoreURIFrom: &corev1.SecretKeySelector{
-				LocalObjectReference: corev1.LocalObjectReference{
-					Name: "db-credentials",
-				},
-				Key:      "uri",
-				Optional: &optional,
+				LocalObjectReference: corev1.LocalObjectReference{Name: "db-credentials"},
+				Key:                  "backend-store-uri",
 			},
+			RegistryStoreURIFrom: &corev1.SecretKeySelector{
+				LocalObjectReference: corev1.LocalObjectReference{Name: "registry-credentials"},
+				Key:                  "registry-store-uri",
+			},
+			Storage:           &corev1.PersistentVolumeClaimSpec{},
+			CABundleConfigMap: &mlflowv1.CABundleConfigMapSpec{Name: "custom-ca"},
 		},
+	}, "test-ns", RenderOptions{PlatformTrustedCABundleExists: true})
+	g.Expect(err).NotTo(gomega.HaveOccurred())
+
+	deployment, err := renderedDeployment(objs, "mlflow", "test-ns")
+	g.Expect(err).NotTo(gomega.HaveOccurred())
+
+	job, err := buildMigrationJobFromDeployment(&mlflowv1.MLflow{
+		ObjectMeta: metav1.ObjectMeta{Name: "mlflow"},
+	}, deployment, "test-ns")
+	g.Expect(err).NotTo(gomega.HaveOccurred())
+
+	g.Expect(job.Spec.Template.Spec.InitContainers).To(gomega.HaveLen(1))
+	g.Expect(job.Spec.Template.Spec.InitContainers[0].Name).To(gomega.Equal("combine-ca-bundles"))
+	g.Expect(job.Spec.Template.Spec.Containers).To(gomega.HaveLen(1))
+	g.Expect(job.Spec.TTLSecondsAfterFinished).To(gomega.BeNil())
+	g.Expect(job.Labels).To(gomega.HaveKeyWithValue("component", "mlflow-migration"))
+	g.Expect(job.Labels).To(gomega.HaveKeyWithValue(migrationJobLabelKey, "true"))
+	g.Expect(job.Labels).To(gomega.HaveKeyWithValue(migrationJobInstanceLabel, "mlflow"))
+	g.Expect(job.Spec.Template.Labels).To(gomega.HaveKeyWithValue("component", "mlflow-migration"))
+	g.Expect(job.Spec.Template.Labels).To(gomega.HaveKeyWithValue(migrationJobLabelKey, "true"))
+	g.Expect(job.Spec.Template.Labels).To(gomega.HaveKeyWithValue(migrationJobInstanceLabel, "mlflow"))
+
+	container := job.Spec.Template.Spec.Containers[0]
+	g.Expect(container.Name).To(gomega.Equal(migrationJobContainerName))
+	g.Expect(container.Command).To(gomega.Equal([]string{"/bin/sh", "-ec"}))
+	g.Expect(container.Args).To(gomega.HaveLen(1))
+	g.Expect(container.Args[0]).To(gomega.ContainSubstring("python3.12"))
+	g.Expect(container.Args[0]).To(gomega.ContainSubstring("MIGRATION_PYTHON_SCRIPT"))
+	g.Expect(job.Spec.BackoffLimit).NotTo(gomega.BeNil())
+	g.Expect(*job.Spec.BackoffLimit).To(gomega.Equal(int32(3)))
+
+	envByName := map[string]corev1.EnvVar{}
+	for _, env := range container.Env {
+		envByName[env.Name] = env
 	}
+	g.Expect(envByName).To(gomega.HaveKey("MIGRATION_PYTHON_SCRIPT"))
+	g.Expect(envByName["MIGRATION_PYTHON_SCRIPT"].Value).To(gomega.ContainSubstring("_initialize_tables"))
+	g.Expect(envByName["MIGRATION_PYTHON_SCRIPT"].Value).To(gomega.ContainSubstring("registry_uri != backend_uri"))
 
-	objs, err := renderer.RenderChart(mlflow, "test-ns", RenderOptions{})
-	if err != nil {
-		t.Fatalf("RenderChart() error = %v", err)
+	mountNames := make([]string, 0, len(container.VolumeMounts))
+	for _, mount := range container.VolumeMounts {
+		mountNames = append(mountNames, mount.Name)
 	}
+	g.Expect(mountNames).To(gomega.ConsistOf("tmp", "mlflow-storage", "combined-ca-bundle"))
 
-	if err := injectMigrationInitContainer(objs); err != nil {
-		t.Fatalf("injectMigrationInitContainer() error = %v", err)
+	volumeNames := make([]string, 0, len(job.Spec.Template.Spec.Volumes))
+	for _, volume := range job.Spec.Template.Spec.Volumes {
+		volumeNames = append(volumeNames, volume.Name)
 	}
-
-	deployment := findDeployment(t, objs)
-
-	initContainers, _, _ := unstructured.NestedSlice(deployment.Object, "spec", "template", "spec", "initContainers")
-	if len(initContainers) != 1 {
-		t.Fatalf("expected 1 init container, got %d", len(initContainers))
-	}
-
-	initContainer := initContainers[0].(map[string]interface{})
-
-	// Verify MLFLOW_BACKEND_STORE_URI uses valueFrom (secret reference)
-	envVars, _, _ := unstructured.NestedSlice(initContainer, "env")
-	for _, env := range envVars {
-		envMap := env.(map[string]interface{})
-		if envMap["name"].(string) == "MLFLOW_BACKEND_STORE_URI" {
-			if _, hasValueFrom := envMap["valueFrom"]; !hasValueFrom {
-				t.Error("MLFLOW_BACKEND_STORE_URI should use valueFrom (secret ref), not a direct value")
-			}
-			return
+	g.Expect(volumeNames).To(gomega.ContainElements("tmp", "mlflow-storage", "combined-ca-bundle"))
+	for _, name := range volumeNames {
+		if strings.HasPrefix(name, "ca-bundle-") {
+			continue
 		}
+		if name == "tmp" || name == "mlflow-storage" || name == "combined-ca-bundle" {
+			continue
+		}
+		t.Fatalf("unexpected volume %q in migration Job", name)
 	}
-	t.Error("MLFLOW_BACKEND_STORE_URI env var not found")
+
+	g.Expect(envByName).To(gomega.HaveKey("MLFLOW_BACKEND_STORE_URI"))
+	g.Expect(envByName["MLFLOW_BACKEND_STORE_URI"].ValueFrom.SecretKeyRef.Name).To(gomega.Equal("db-credentials"))
+	g.Expect(envByName).To(gomega.HaveKey("MLFLOW_REGISTRY_STORE_URI"))
+	g.Expect(envByName["MLFLOW_REGISTRY_STORE_URI"].ValueFrom.SecretKeyRef.Name).To(gomega.Equal("registry-credentials"))
+	g.Expect(envByName).To(gomega.HaveKeyWithValue("SSL_CERT_FILE", corev1.EnvVar{
+		Name:  "SSL_CERT_FILE",
+		Value: caCombinedBundle,
+	}))
 }
 
-// findDeployment finds the Deployment object in the rendered objects.
-func findDeployment(t *testing.T, objs []*unstructured.Unstructured) *unstructured.Unstructured {
-	t.Helper()
-	for _, obj := range objs {
-		if obj.GetKind() == deploymentKind {
-			return obj
-		}
+func TestNamespaceRoleIncludesJobs(t *testing.T) {
+	t.Parallel()
+
+	content, err := os.ReadFile("../../config/rbac/namespace_role.yaml")
+	if err != nil {
+		t.Fatalf("read namespace role: %v", err)
 	}
-	t.Fatal("Deployment not found in rendered objects")
-	return nil
+	if !strings.Contains(string(content), "- jobs") {
+		t.Fatal("namespace_role.yaml does not grant batch/jobs access")
+	}
+}
+
+func TestMigrationScriptSupportsDriverQualifiedSQLAlchemyURIs(t *testing.T) {
+	t.Parallel()
+
+	if !strings.Contains(migrationPythonScript, `split("+", 1)[0]`) {
+		t.Fatal("migrationPythonScript does not normalize SQLAlchemy driver-qualified URIs")
+	}
+}
+
+func TestMigrationScriptIncludesRHOAIBackendGapFixHook(t *testing.T) {
+	t.Parallel()
+
+	if !strings.Contains(migrationPythonScript, "fix_migration_gap_if_needed") {
+		t.Fatal("migrationPythonScript does not include the RHOAI 3.3 -> 3.4 gap fix hook")
+	}
+	if !strings.Contains(migrationPythonScript, `name != "backend"`) {
+		t.Fatal("migrationPythonScript does not scope the RHOAI 3.3 -> 3.4 gap fix to the backend store")
+	}
 }

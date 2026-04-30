@@ -1351,6 +1351,19 @@ spec:
                     - Never
                     type: string
                 type: object
+              migrate:
+                default: Automatic
+                description: |-
+                  Migrate controls how the operator runs database migration orchestration.
+                  Automatic runs the operator-managed migration flow when bootstrap or version
+                  detection indicates it is needed. Always forces the operator-managed
+                  migration flow for each new desired generation before replicas are restored.
+                  Add the presence-based mlflow.opendatahub.io/force-migrate annotation to
+                  trigger a one-shot rerun; the annotation value is ignored.
+                enum:
+                - Automatic
+                - Always
+                type: string
               networkPolicyAdditionalEgressRules:
                 description: |-
                   NetworkPolicyAdditionalEgressRules specifies additional egress rules to append to the
@@ -2547,6 +2560,10 @@ spec:
                 description: url is the externally reachable MLflow URL exposed through
                   the data science gateway.
                 maxLength: 2048
+                type: string
+              version:
+                description: version records the installed MLflow version.
+                maxLength: 64
                 type: string
             type: object
         required:

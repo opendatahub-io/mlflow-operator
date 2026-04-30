@@ -68,6 +68,8 @@ make generate
 
 **Note**: Always regenerate manifests and code after modifying API types. CI will verify that generated code is up-to-date.
 
+When bumping the supported MLflow version, use `python scripts/update_mlflow_version.py --version <x.y.z>` to update both `config/component_metadata.yaml` and `internal/controller/migration.go`, then rerun the version-alignment verification. Top-level `scripts/` is preferred for developer-maintenance helpers like this; `test/scripts/` is reserved for test validation helpers.
+
 ## Deployment Modes
 
 The MLflow operator supports two deployment modes, configured via the `--mode` flag:
@@ -101,6 +103,7 @@ kustomize build config/overlays/odh | kubectl apply -f -
 ## Helm Chart
 
 The operator uses Helm charts to manage MLflow resources. The chart is located in `charts/mlflow/` and can be used standalone or via the operator.
+Standalone Helm deployments must not orchestrate database migrations; migration orchestration is operator-only.
 
 ## Helm Chart and MLflowSpec parity
 
@@ -191,6 +194,16 @@ spec:
         name: aws-credentials
 ```
 
+### Operator-managed database migration
+
+- `spec.migrate` controls operator-managed migration behavior:
+  - `Automatic` (default) runs the migration Job on bootstrap and whenever `status.version` differs from the operator-supported MLflow version
+  - `Always` reruns the migration flow for each new desired generation before replicas are restored
+- `status.version` records the last supported MLflow version that successfully completed the operator-managed migration/deploy flow
+- For ODH/RHOAI MLflow images that ship `mlflow.store.db.migration_gap`, the operator-managed migration Job runs the backend-only RHOAI `3.3 -> 3.4` gap repair before the generic MLflow migration logic; this replaced the earlier Deployment init-container approach
+- The presence-based `mlflow.opendatahub.io/force-migrate` annotation forces a one-shot migration; the operator clears it after a successful forced run
+- When backend and registry store URIs differ, the migration Job must handle them independently and only advance `status.version` after both succeed
+
 ## Testing
 
 ### Unit Tests
@@ -211,6 +224,7 @@ make test-e2e-full
 
 `make test-e2e` expects an already-running Kubernetes cluster and does not create one.
 `make test-e2e-full` creates a Kind cluster (`KIND_CLUSTER`, default `mlflow`), builds/loads the image, and runs e2e tests.
+`make test-e2e-upgrade` runs the upgrade-focused e2e suite against an existing cluster and expects `MLFLOW_SEED_IMAGE` to point at an MLflow `3.9.0` seed image. Set `UPGRADE_BACKEND_STORE=postgres` to run the PostgreSQL upgrade variant; the default remains `sqlite`. The upgrade Ginkgo test now assumes the namespace/operator/optional PostgreSQL infrastructure already exist; the GitHub workflow provisions that shared setup via `.github/actions/deploy/deploy.py --skip-mlflow-cr` before invoking the test.
 Cluster cleanup is a separate step:
 
 ```bash
@@ -222,6 +236,9 @@ Quick workflow:
 ```bash
 # Full e2e run against Kind
 make test-e2e-full
+
+# Upgrade-focused e2e run against an existing cluster
+make test-e2e-upgrade MLFLOW_SEED_IMAGE=localhost/mlflow-seed:3.9.0
 
 # Cleanup when done
 make cleanup-kind-cluster
@@ -370,6 +387,8 @@ Validates sample CRs on every PR:
 - `test.yml` - Runs unit tests
 - `lint.yml` - Runs golangci-lint
 - `integration-tests.yml` - Builds the operator image from this repo for all runs, but only builds the MLflow image from the aligned branch of `red-hat-data-services/mlflow` using `Dockerfile.konflux` for `red-hat-data-services` `rhoai-*` branches; other branches continue using the existing Quay image selection
+- `upgrade-tests.yml` - Uses `.github/actions/deploy/deploy.py --skip-mlflow-cr` to provision the namespace/operator and SQLite or PostgreSQL backing infrastructure, then seeds a database with MLflow `3.9.0` and verifies the operator-managed upgrade flow against the current supported MLflow version
+- `verify-mlflow-version-alignment.yml` - Verifies the floating default MLflow image still matches the supported operator version on PRs, pushes to `main`, and a weekly schedule
 - `test-e2e.yml` - Runs end-to-end tests
 - `verify-kustomize.yml` - Validates kustomize overlays
 

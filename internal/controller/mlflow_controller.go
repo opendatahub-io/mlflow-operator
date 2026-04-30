@@ -30,6 +30,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/util/retry"
@@ -225,71 +226,35 @@ func (r *MLflowReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		return ctrl.Result{}, err
 	}
 
-	// Inject RHOAI-specific db-migration init container into the Deployment.
-	// Runs `mlflow db fix-migration-gap` before the server starts to handle
-	// the RHOAI 3.3 -> 3.4 Alembic migration gap. Safe and idempotent.
-	if err := injectMigrationInitContainer(objects); err != nil {
-		log.Error(err, "Failed to inject migration init container")
+	if result, handled, err := r.handleMigration(ctx, mlflow, targetNamespace, objects); err != nil {
+		log.Error(err, "Failed to reconcile migration")
+		setMigrationFailure(mlflow, "MigrationFailed", fmt.Sprintf("Failed to reconcile migration: %v", err))
+		if statusErr := r.updateStatus(ctx, mlflow); statusErr != nil {
+			log.Error(statusErr, "Failed to update MLflow status after retries")
+		}
+		return ctrl.Result{}, err
+	} else if handled {
+		return result, nil
+	}
+
+	if err := r.applyRenderedObjects(ctx, mlflow, objects); err != nil {
+		log.Error(err, "Failed to apply rendered objects")
 		meta.SetStatusCondition(&mlflow.Status.Conditions, metav1.Condition{
 			Type:    "Available",
 			Status:  metav1.ConditionFalse,
-			Reason:  "MigrationInitContainerFailed",
-			Message: fmt.Sprintf("Failed to inject db-migration init container: %v", err),
+			Reason:  "ApplyFailed",
+			Message: fmt.Sprintf("Failed to apply resources: %v", err),
 		})
 		meta.SetStatusCondition(&mlflow.Status.Conditions, metav1.Condition{
 			Type:    "Progressing",
 			Status:  metav1.ConditionFalse,
-			Reason:  "MigrationInitContainerFailed",
-			Message: fmt.Sprintf("Failed to inject db-migration init container: %v", err),
+			Reason:  "ApplyFailed",
+			Message: fmt.Sprintf("Failed to apply resources: %v", err),
 		})
 		if statusErr := r.updateStatus(ctx, mlflow); statusErr != nil {
 			log.Error(statusErr, "Failed to update MLflow status after retries")
 		}
 		return ctrl.Result{}, err
-	}
-
-	// Apply rendered manifests
-	for _, obj := range objects {
-		// MLflow CR is cluster-scoped so set owner reference for all resources
-		if obj.GetKind() != "Namespace" {
-			// For the shared "mlflow" ClusterRole, append owner references instead of using
-			// SetControllerReference which only allows one controller owner. This allows
-			// multiple MLflow instances to share the same ClusterRole.
-			if obj.GetKind() == "ClusterRole" && obj.GetName() == ClusterRoleName {
-				if err := r.appendOwnerReference(ctx, mlflow, obj); err != nil {
-					log.Error(err, "Failed to append owner reference", "object", obj.GetKind(), "name", obj.GetName())
-					// Continue with other objects
-					continue
-				}
-			} else {
-				if err := controllerutil.SetControllerReference(mlflow, obj, r.Scheme); err != nil {
-					log.Error(err, "Failed to set controller reference", "object", obj.GetKind(), "name", obj.GetName())
-					// Continue with other objects
-					continue
-				}
-			}
-		}
-
-		// Apply the object
-		if err := r.applyObject(ctx, obj); err != nil {
-			log.Error(err, "Failed to apply object", "kind", obj.GetKind(), "name", obj.GetName())
-			meta.SetStatusCondition(&mlflow.Status.Conditions, metav1.Condition{
-				Type:    "Available",
-				Status:  metav1.ConditionFalse,
-				Reason:  "ApplyFailed",
-				Message: fmt.Sprintf("Failed to apply %s/%s: %v", obj.GetKind(), obj.GetName(), err),
-			})
-			meta.SetStatusCondition(&mlflow.Status.Conditions, metav1.Condition{
-				Type:    "Progressing",
-				Status:  metav1.ConditionFalse,
-				Reason:  "ApplyFailed",
-				Message: fmt.Sprintf("Failed to apply resources: %v", err),
-			})
-			if statusErr := r.updateStatus(ctx, mlflow); statusErr != nil {
-				log.Error(statusErr, "Failed to update MLflow status after retries")
-			}
-			return ctrl.Result{}, err
-		}
 	}
 
 	// Reconcile ConsoleLink (if available in cluster)
@@ -430,6 +395,7 @@ func (r *MLflowReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	builder := ctrl.NewControllerManagedBy(mgr).
 		For(&mlflowv1.MLflow{}).
 		Owns(&appsv1.Deployment{}).
+		Owns(&batchv1.Job{}).
 		Owns(&batchv1.CronJob{}).
 		Owns(&corev1.Secret{}).
 		Owns(&corev1.Service{}).
@@ -477,6 +443,31 @@ func (r *MLflowReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	}
 
 	return builder.Complete(r)
+}
+
+func (r *MLflowReconciler) applyRenderedObjects(ctx context.Context, mlflow *mlflowv1.MLflow, objects []*unstructured.Unstructured) error {
+	log := logf.FromContext(ctx)
+	for _, obj := range objects {
+		if obj.GetKind() != "Namespace" {
+			if obj.GetKind() == "ClusterRole" && obj.GetName() == ClusterRoleName {
+				if err := r.appendOwnerReference(ctx, mlflow, obj); err != nil {
+					log.Error(err, "Failed to append owner reference", "object", obj.GetKind(), "name", obj.GetName())
+					continue
+				}
+			} else {
+				if err := controllerutil.SetControllerReference(mlflow, obj, r.Scheme); err != nil {
+					log.Error(err, "Failed to set controller reference", "object", obj.GetKind(), "name", obj.GetName())
+					continue
+				}
+			}
+		}
+
+		if err := r.applyObject(ctx, obj); err != nil {
+			log.Error(err, "Failed to apply object", "kind", obj.GetKind(), "name", obj.GetName())
+			return fmt.Errorf("apply %s/%s: %w", obj.GetKind(), obj.GetName(), err)
+		}
+	}
+	return nil
 }
 
 // clusterRoleToMLflowRequests maps ClusterRole events to MLflow reconcile requests.

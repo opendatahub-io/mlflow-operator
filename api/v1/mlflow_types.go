@@ -48,6 +48,17 @@ type MLflowSpec struct {
 	// +optional
 	Replicas *int32 `json:"replicas,omitempty"`
 
+	// Migrate controls how the operator runs database migration orchestration.
+	// Automatic runs the operator-managed migration flow when bootstrap or version
+	// detection indicates it is needed. Always forces the operator-managed
+	// migration flow for each new desired generation before replicas are restored.
+	// Add the presence-based mlflow.opendatahub.io/force-migrate annotation to
+	// trigger a one-shot rerun; the annotation value is ignored.
+	// +kubebuilder:default=Automatic
+	// +kubebuilder:validation:Enum=Automatic;Always
+	// +optional
+	Migrate MLflowMigrateMode `json:"migrate,omitempty"`
+
 	// Resources specifies the compute resources for the MLflow container
 	// +optional
 	Resources *corev1.ResourceRequirements `json:"resources,omitempty"`
@@ -276,6 +287,16 @@ type ImageConfig struct {
 	ImagePullPolicy *corev1.PullPolicy `json:"imagePullPolicy,omitempty"`
 }
 
+// MLflowMigrateMode controls operator-managed database migration behavior.
+type MLflowMigrateMode string
+
+const (
+	// MLflowMigrateAutomatic runs the migration flow when the operator determines it is needed.
+	MLflowMigrateAutomatic MLflowMigrateMode = "Automatic"
+	// MLflowMigrateAlways forces the migration flow before replicas are restored.
+	MLflowMigrateAlways MLflowMigrateMode = "Always"
+)
+
 // MLflowAddressStatus holds an addressable endpoint for the managed MLflow deployment.
 type MLflowAddressStatus struct {
 	// url is the in-cluster HTTPS URL for the managed MLflow Service.
@@ -308,6 +329,11 @@ type MLflowStatus struct {
 	// address holds the internal addressable endpoint for the managed MLflow Service.
 	// +optional
 	Address *MLflowAddressStatus `json:"address,omitempty"`
+
+	// version records the installed MLflow version.
+	// +optional
+	// +kubebuilder:validation:MaxLength=64
+	Version string `json:"version,omitempty"`
 }
 
 // +kubebuilder:object:root=true

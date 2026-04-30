@@ -182,6 +182,7 @@ jobs:
 
           docker build -f mlflow-upstream/Dockerfile.konflux -t "$MLFLOW_IMG" mlflow-upstream
           docker push "$MLFLOW_IMG"
+
       - name: Deploy MLflow
         id: deploy-mlflow
         uses: ./.github/actions/deploy
@@ -213,6 +214,18 @@ jobs:
       - name: Wait for MLflow to be ready and forward port
         run: |
           echo "⏳ Waiting for MLflow to be fully ready..."
+          kubectl wait --for=create deployment/mlflow --timeout=300s -n "${{ steps.deploy-mlflow.outputs.namespace }}"
+
+          mapfile -t MIGRATION_JOBS < <(kubectl get jobs \
+            -n "${{ steps.deploy-mlflow.outputs.namespace }}" \
+            -l mlflow.opendatahub.io/migration-job=true \
+            -o name 2>/dev/null || true)
+          if [ "${#MIGRATION_JOBS[@]}" -gt 0 ]; then
+            echo "⏳ Waiting for migration job(s) to complete..."
+            kubectl wait --for=condition=complete "${MIGRATION_JOBS[@]}" --timeout=300s -n "${{ steps.deploy-mlflow.outputs.namespace }}"
+          fi
+
+          kubectl wait --for=condition=available deployment/mlflow --timeout=300s -n "${{ steps.deploy-mlflow.outputs.namespace }}"
           kubectl wait --for=condition=ready pod -l app=mlflow --timeout=300s -n "${{ steps.deploy-mlflow.outputs.namespace }}"
 
           # Forward MLflow service port to localhost:8080

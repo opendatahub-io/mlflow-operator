@@ -70,6 +70,7 @@ test: manifests generate fmt vet setup-envtest ## Run tests.
 # E2E test configuration
 KIND_CLUSTER ?= mlflow
 E2E_IMG ?= localhost/mlflow-operator:v0.0.1
+MLFLOW_SEED_IMAGE ?= localhost/mlflow-seed:3.9.0
 
 .PHONY: setup-kind-cluster
 setup-kind-cluster: ## Create a Kind cluster for e2e tests if it doesn't exist
@@ -89,7 +90,11 @@ build-and-load-image: ## Build the operator image and load it into the Kind clus
 
 .PHONY: test-e2e
 test-e2e: manifests generate fmt vet ## Run the e2e tests against an existing Kubernetes cluster.
-	IMG=$(E2E_IMG) go test ./test/e2e/ -v -ginkgo.v
+	IMG=$(E2E_IMG) go test ./test/e2e/ -v -ginkgo.v -ginkgo.label-filter='!upgrade'
+
+.PHONY: test-e2e-upgrade
+test-e2e-upgrade: manifests generate fmt vet ## Run the upgrade-focused e2e tests against an existing Kubernetes cluster.
+	IMG=$(E2E_IMG) MLFLOW_SEED_IMAGE=$(MLFLOW_SEED_IMAGE) UPGRADE_BACKEND_STORE=$(UPGRADE_BACKEND_STORE) UPGRADE_POSTGRES_ADMIN_URI=$(UPGRADE_POSTGRES_ADMIN_URI) go test ./test/e2e/ -v -ginkgo.v -ginkgo.label-filter='upgrade'
 
 .PHONY: test-e2e-full
 test-e2e-full: setup-kind-cluster build-and-load-image test-e2e ## Run the complete e2e workflow: setup cluster, build/load image, and run tests.
