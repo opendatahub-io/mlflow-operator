@@ -251,14 +251,19 @@ func cleanupUpgradeResources(ctx context.Context, k8sClient client.Client) {
 		}
 	}
 
-	deleteIfExists(ctx, k8sClient, &batchv1.Job{ObjectMeta: metav1.ObjectMeta{Name: upgradeSeedJobName, Namespace: namespace}})
+	deleteIfExists(ctx, k8sClient, &batchv1.Job{
+		ObjectMeta: metav1.ObjectMeta{Name: upgradeSeedJobName, Namespace: namespace},
+	})
 	deleteIfExists(ctx, k8sClient, &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "mlflow", Namespace: namespace}})
 	deleteIfExists(ctx, k8sClient, &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "mlflow", Namespace: namespace}})
-	deleteIfExists(ctx, k8sClient, &corev1.PersistentVolumeClaim{ObjectMeta: metav1.ObjectMeta{Name: upgradePVCName, Namespace: namespace}})
+	deleteIfExists(ctx, k8sClient, &corev1.PersistentVolumeClaim{
+		ObjectMeta: metav1.ObjectMeta{Name: upgradePVCName, Namespace: namespace},
+	})
 }
 
 func deleteIfExists(ctx context.Context, k8sClient client.Client, obj client.Object) {
-	err := k8sClient.Delete(ctx, obj)
+	propagation := metav1.DeletePropagationBackground
+	err := k8sClient.Delete(ctx, obj, &client.DeleteOptions{PropagationPolicy: &propagation})
 	if apierrors.IsNotFound(err) {
 		return
 	}
@@ -270,7 +275,7 @@ func deleteIfExists(ctx context.Context, k8sClient client.Client, obj client.Obj
 		current := obj.DeepCopyObject().(client.Object)
 		err := k8sClient.Get(ctx, client.ObjectKeyFromObject(obj), current)
 		return apierrors.IsNotFound(err)
-	}, 30*time.Second, 250*time.Millisecond).Should(BeTrue())
+	}, 2*time.Minute, time.Second).Should(BeTrue())
 }
 
 func waitForDeploymentAvailable(ctx context.Context, k8sClient client.Client, name string) {
@@ -301,7 +306,11 @@ func jobFailed(job *batchv1.Job) bool {
 	return false
 }
 
-func watchDeploymentScaledToZero(ctx context.Context, clientset kubernetes.Interface, name string) (<-chan struct{}, <-chan error) {
+func watchDeploymentScaledToZero(
+	ctx context.Context,
+	clientset kubernetes.Interface,
+	name string,
+) (<-chan struct{}, <-chan error) {
 	observed := make(chan struct{})
 	errCh := make(chan error, 1)
 
@@ -362,7 +371,9 @@ func getPodLogs(ctx context.Context, clientset kubernetes.Interface, podName str
 	if err != nil {
 		return "", err
 	}
-	defer stream.Close()
+	defer func() {
+		_ = stream.Close()
+	}()
 
 	data, err := io.ReadAll(stream)
 	if err != nil {
@@ -372,7 +383,7 @@ func getPodLogs(ctx context.Context, clientset kubernetes.Interface, podName str
 }
 
 func seedJob(seedImage, backendStore string) *batchv1.Job {
-	backoffLimit := int32(0)
+	backoffLimit := int32(3)
 	job := &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{Name: upgradeSeedJobName, Namespace: namespace},
 		Spec: batchv1.JobSpec{
@@ -447,6 +458,7 @@ func seedScript(backendStore string) string {
 	if backendStore == "postgres" {
 		return strings.TrimSpace(`
 import os
+import time
 import mlflow.store.db.utils as db_utils
 import psycopg2
 from psycopg2 import sql
@@ -459,7 +471,20 @@ stores = [
 if os.environ["MLFLOW_REGISTRY_STORE_URI"] != os.environ["MLFLOW_BACKEND_STORE_URI"]:
     stores.append(("registry", os.environ["MLFLOW_REGISTRY_STORE_URI"]))
 
-with psycopg2.connect(os.environ["PG_ADMIN_URI"]) as conn:
+admin_conn = None
+last_error = None
+for _ in range(30):
+    try:
+        admin_conn = psycopg2.connect(os.environ["PG_ADMIN_URI"])
+        break
+    except psycopg2.OperationalError as err:
+        last_error = err
+        time.sleep(1)
+
+if admin_conn is None:
+    raise last_error
+
+with admin_conn as conn:
     conn.autocommit = True
     with conn.cursor() as cur:
         created = set()
