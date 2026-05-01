@@ -214,10 +214,12 @@ type MLflowSpec struct {
 	CABundleConfigMap *CABundleConfigMapSpec `json:"caBundleConfigMap,omitempty"`
 
 	// NetworkPolicyAdditionalEgressRules specifies additional egress rules to append to the
-	// default NetworkPolicy. The default policy permits DNS (53), HTTPS (443),
-	// Kubernetes API (6443), PostgreSQL (5432), MySQL (3306), and S3-compatible storage
-	// (MinIO 9000, SeaweedFS 8333). Use this field when connecting to services on
-	// non-standard ports or when destination restrictions are needed.
+	// default NetworkPolicy. The default policy permits DNS (53 and 5353),
+	// in-cluster HTTPS (443 and 8443 to cluster-internal pods and Services),
+	// Kubernetes API (6443), PostgreSQL (5432), MySQL (3306), and S3-compatible
+	// storage (MinIO 9000, SeaweedFS 8333 and 8334). Use this field when
+	// connecting to external HTTPS endpoints, services on non-standard ports, or
+	// when destination restrictions are needed.
 	// +optional
 	// +kubebuilder:validation:MaxItems=32
 	NetworkPolicyAdditionalEgressRules []networkingv1.NetworkPolicyEgressRule `json:"networkPolicyAdditionalEgressRules,omitempty"`

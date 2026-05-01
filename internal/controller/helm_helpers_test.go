@@ -16,7 +16,11 @@ limitations under the License.
 
 package controller
 
-import "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+import (
+	"strconv"
+
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+)
 
 const (
 	deploymentKind      = "Deployment"
@@ -39,19 +43,71 @@ func findObject(objs []*unstructured.Unstructured, kind, name string) *unstructu
 func collectEgressPorts(egressRules []interface{}) []int64 {
 	var ports []int64
 	for _, rule := range egressRules {
-		ruleMap := rule.(map[string]interface{})
+		ruleMap, ok := rule.(map[string]interface{})
+		if !ok {
+			continue
+		}
 		rulePorts, ok := ruleMap["ports"].([]interface{})
 		if !ok {
 			continue
 		}
 		for _, p := range rulePorts {
-			portMap := p.(map[string]interface{})
-			if port, ok := portMap["port"]; ok {
-				ports = append(ports, port.(int64))
+			portMap, ok := p.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			if port, ok := parsePortValue(portMap["port"]); ok {
+				ports = append(ports, port)
 			}
 		}
 	}
 	return ports
+}
+
+func findEgressRulesByPort(egressRules []interface{}, port int64) []map[string]interface{} {
+	var matches []map[string]interface{}
+	for _, rule := range egressRules {
+		ruleMap, ok := rule.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		rulePorts, ok := ruleMap["ports"].([]interface{})
+		if !ok {
+			continue
+		}
+		for _, p := range rulePorts {
+			portMap, ok := p.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			if rulePort, ok := parsePortValue(portMap["port"]); ok && rulePort == port {
+				matches = append(matches, ruleMap)
+				break
+			}
+		}
+	}
+	return matches
+}
+
+func parsePortValue(v interface{}) (int64, bool) {
+	switch port := v.(type) {
+	case int:
+		return int64(port), true
+	case int32:
+		return int64(port), true
+	case int64:
+		return port, true
+	case float64:
+		return int64(port), true
+	case string:
+		parsed, err := strconv.ParseInt(port, 10, 64)
+		if err != nil {
+			return 0, false
+		}
+		return parsed, true
+	default:
+		return 0, false
+	}
 }
 
 func ptr[T any](v T) *T {

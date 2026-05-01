@@ -186,6 +186,14 @@ spec:
   # No storage field needed
   backendStoreUri: "postgresql://user:pass@host:5432/mlflow"
   artifactsDestination: "s3://my-bucket/artifacts"
+  # External HTTPS egress is not allowed by default, even though in-cluster
+  # HTTPS on 443/8443 is permitted; add an explicit
+  # networkPolicyAdditionalEgressRules entry when the artifact store is outside
+  # the cluster.
+  networkPolicyAdditionalEgressRules:
+    - ports:
+        - protocol: TCP
+          port: 443
   envFrom:
     - secretRef:
         name: aws-credentials
