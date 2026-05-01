@@ -315,6 +315,10 @@ type MLflowStatus struct {
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
 // +kubebuilder:resource:scope=Cluster
+// +kubebuilder:printcolumn:name="Available",type="string",JSONPath=".status.conditions[?(@.type=='Available')].status"
+// +kubebuilder:printcolumn:name="Progressing",type="string",JSONPath=".status.conditions[?(@.type=='Progressing')].status"
+// +kubebuilder:printcolumn:name="Version",type="string",JSONPath=".status.version"
+// +kubebuilder:printcolumn:name="URL",type="string",priority=1,JSONPath=".status.url"
 // +kubebuilder:validation:XValidation:rule="self.metadata.name == 'mlflow'",message="MLflow resource name must be 'mlflow'"
 // +kubebuilder:validation:XValidation:rule="self.metadata.name.size() <= 40",message="MLflow resource name must be at most 40 characters to ensure generated resource names stay within Kubernetes 63-character limit"
 
