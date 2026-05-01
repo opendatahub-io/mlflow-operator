@@ -14,7 +14,21 @@ spec:
     singular: mlflow
   scope: Cluster
   versions:
-  - name: v1
+  - additionalPrinterColumns:
+    - jsonPath: .status.conditions[?(@.type=='Available')].status
+      name: Available
+      type: string
+    - jsonPath: .status.conditions[?(@.type=='Progressing')].status
+      name: Progressing
+      type: string
+    - jsonPath: .status.version
+      name: Version
+      type: string
+    - jsonPath: .status.url
+      name: URL
+      priority: 1
+      type: string
+    name: v1
     schema:
       openAPIV3Schema:
         description: MLflow is the Schema for the mlflows API
