@@ -7,7 +7,7 @@ class Config:
     ADMIN_USERNAME: str = os.getenv("admin_uname", "")
     ADMIN_PASSWORD: str = os.getenv("admin_pass", "")
     K8_API_TOKEN: str = os.getenv("kube_token", "")
-    MLFLOW_URI: str = os.getenv("MLFLOW_TRACKING_URI", "https://localhost:8080")
+    MLFLOW_URI: str = os.getenv("MLFLOW_TRACKING_URI", "https://localhost:8080/mlflow")
     DISABLE_TLS: str = os.getenv("DISABLE_TLS", "true")
     CA_BUNDLE: str = os.getenv("ca_bundle", "")
     REQUEST_TIMEOUT: int = int(os.getenv("MLFLOW_REQUEST_TIMEOUT", "30"))

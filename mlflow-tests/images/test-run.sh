@@ -465,14 +465,14 @@ run_suite() {
 
     # ── Tracking URI ────────────────────────────────────────────────────────────
     if [ "$IN_CLUSTER_MODE" = "true" ]; then
-        export MLFLOW_TRACKING_URI="$API_BASE"
+        export MLFLOW_TRACKING_URI="${API_BASE}/mlflow"
         local health_url="${API_BASE}/mlflow/health"
     else
         echo "  Port-forwarding MLflow service to localhost:8443..."
         kubectl port-forward "svc/${MLFLOW_NAME}" -n "$NAMESPACE" 8443:8443 &
         PF_PID=$!
         sleep 2
-        export MLFLOW_TRACKING_URI="https://localhost:8443"
+        export MLFLOW_TRACKING_URI="https://localhost:8443/mlflow"
         local health_url="https://localhost:8443/mlflow/health"
     fi
     echo "  MLFLOW_TRACKING_URI=$MLFLOW_TRACKING_URI"

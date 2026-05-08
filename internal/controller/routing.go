@@ -202,9 +202,7 @@ func (r *MLflowReconciler) reconcileHttpRoute(ctx context.Context, mlflow *mlflo
 	suffix := getResourceSuffix(mlflow.Name)
 	httpRouteName := ResourceName + suffix
 	pathPrefix := "/" + ResourceName + suffix
-	apiPathPrefix := pathPrefix + "/api"
 	v1PathPrefix := pathPrefix + "/v1"
-	replaceApiPrefix := "/api"
 	replaceV1Prefix := "/v1"
 	serviceName := ResourceName + suffix
 
@@ -236,38 +234,6 @@ func (r *MLflowReconciler) reconcileHttpRoute(ctx context.Context, mlflow *mlflo
 				},
 			},
 			Rules: []gatewayv1.HTTPRouteRule{
-				{
-					Matches: []gatewayv1.HTTPRouteMatch{
-						{
-							Path: &gatewayv1.HTTPPathMatch{
-								Type:  &pathMatchType,
-								Value: &apiPathPrefix,
-							},
-						},
-					},
-					Filters: []gatewayv1.HTTPRouteFilter{
-						{
-							Type: gatewayv1.HTTPRouteFilterURLRewrite,
-							URLRewrite: &gatewayv1.HTTPURLRewriteFilter{
-								Path: &gatewayv1.HTTPPathModifier{
-									Type:               gatewayv1.PrefixMatchHTTPPathModifier,
-									ReplacePrefixMatch: &replaceApiPrefix,
-								},
-							},
-						},
-					},
-					BackendRefs: []gatewayv1.HTTPBackendRef{
-						{
-							BackendRef: gatewayv1.BackendRef{
-								BackendObjectReference: gatewayv1.BackendObjectReference{
-									Name: gatewayv1.ObjectName(serviceName),
-									Port: &servicePort,
-								},
-								Weight: &weight,
-							},
-						},
-					},
-				},
 				{
 					Matches: []gatewayv1.HTTPRouteMatch{
 						{

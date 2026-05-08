@@ -62,7 +62,7 @@ The framework supports configuration via environment variables:
 | `admin_uname` | MLflow admin username | Required | Local |
 | `admin_pass` | MLflow admin password | Required | Local |
 | `kube_token` | Kubernetes bearer token | Required | K8s |
-| `MLFLOW_TRACKING_URI` | MLflow tracking server URI | `https://localhost:8080` | Both |
+| `MLFLOW_TRACKING_URI` | MLflow tracking server URI | `https://localhost:8080/mlflow` | Both |
 | `workspaces` | Comma-separated workspace list | `workspace1,workspace2` | Both |
 | `DISABLE_TLS` | Disable TLS verification | `true` | Both |
 | `artifact_storage` | Artifact storage type (`s3` or `file`) | `file` | Both |

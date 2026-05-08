@@ -161,11 +161,6 @@ DB_TYPE=postgres DB_HOST=... DB_PASSWORD=... bash images/test-run.sh
   embedded in the MLflow server checks RBAC in the workspace namespace on every request, so these
   role bindings are required for the tests to pass.
 
-- **Tracking URI vs. static prefix**: the MLflow server is deployed with `--static-prefix=/mlflow`,
-  which prefixes UI, health, and ajax-api routes. The Python client uses REST API routes
-  (`/api/2.0/mlflow/...`) which are **not** affected by the static prefix. `MLFLOW_TRACKING_URI`
-  must therefore point at the service root without `/mlflow`.
-
 - **Client/server version alignment**: the test client is installed from
   `opendatahub-io/mlflow@master` (pinned in `uv.lock`). The MLflow server image must be built from
   the same commit for the workspace feature probe endpoint to match. Use `MLFLOW_IMAGE` to supply

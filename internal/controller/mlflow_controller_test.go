@@ -122,7 +122,7 @@ var _ = Describe("MLflow Controller", func() {
 			Expect(k8sClient.Get(ctx, typeNamespacedName, mlflow)).To(Succeed())
 			Expect(mlflow.Status.URL).To(BeEmpty())
 			Expect(mlflow.Status.Address).NotTo(BeNil())
-			Expect(mlflow.Status.Address.URL).To(Equal("https://mlflow.opendatahub.svc:8443"))
+			Expect(mlflow.Status.Address.URL).To(Equal("https://mlflow.opendatahub.svc:8443/mlflow"))
 		})
 
 		It("should delete GC CronJob when garbageCollection is removed from spec", func() {
@@ -191,7 +191,7 @@ var _ = Describe("MLflow Controller", func() {
 			Expect(errors.IsNotFound(err)).To(BeTrue())
 		})
 
-		It("should create an HTTPRoute with API rewrite when available", func() {
+		It("should create an HTTPRoute with v1 rewrite when available", func() {
 			By("Reconciling the created resource with HTTPRoute enabled")
 
 			controllerReconciler := &MLflowReconciler{
@@ -214,31 +214,9 @@ var _ = Describe("MLflow Controller", func() {
 				Namespace: controllerReconciler.Namespace,
 			}, httpRoute)).To(Succeed())
 
-			Expect(httpRoute.Spec.Rules).To(HaveLen(3))
+			Expect(httpRoute.Spec.Rules).To(HaveLen(2))
 
-			apiRule := httpRoute.Spec.Rules[0]
-			Expect(apiRule.Matches).To(HaveLen(1))
-			Expect(apiRule.Matches[0].Path).NotTo(BeNil())
-			Expect(apiRule.Matches[0].Path.Value).NotTo(BeNil())
-			Expect(*apiRule.Matches[0].Path.Value).To(Equal("/" + ResourceName + "/api"))
-
-			Expect(apiRule.Filters).To(HaveLen(1))
-			Expect(apiRule.Filters[0].Type).To(Equal(gatewayv1.HTTPRouteFilterURLRewrite))
-			Expect(apiRule.Filters[0].URLRewrite).NotTo(BeNil())
-			Expect(apiRule.Filters[0].URLRewrite.Path).NotTo(BeNil())
-			Expect(apiRule.Filters[0].URLRewrite.Path.Type).To(Equal(gatewayv1.PrefixMatchHTTPPathModifier))
-			Expect(apiRule.Filters[0].URLRewrite.Path.ReplacePrefixMatch).NotTo(BeNil())
-			Expect(*apiRule.Filters[0].URLRewrite.Path.ReplacePrefixMatch).To(Equal("/api"))
-
-			Expect(apiRule.BackendRefs).To(HaveLen(1))
-			apiBackend := apiRule.BackendRefs[0]
-			Expect(apiBackend.BackendRef.BackendObjectReference.Name).To(Equal(gatewayv1.ObjectName(ResourceName)))
-			Expect(apiBackend.BackendRef.Port).NotTo(BeNil())
-			Expect(int(*apiBackend.BackendRef.Port)).To(Equal(8443))
-			Expect(apiBackend.BackendRef.Weight).NotTo(BeNil())
-			Expect(*apiBackend.BackendRef.Weight).To(Equal(int32(1)))
-
-			v1Rule := httpRoute.Spec.Rules[1]
+			v1Rule := httpRoute.Spec.Rules[0]
 			Expect(v1Rule.Matches).To(HaveLen(1))
 			Expect(v1Rule.Matches[0].Path).NotTo(BeNil())
 			Expect(v1Rule.Matches[0].Path.Value).NotTo(BeNil())
@@ -260,7 +238,7 @@ var _ = Describe("MLflow Controller", func() {
 			Expect(v1Backend.BackendRef.Weight).NotTo(BeNil())
 			Expect(*v1Backend.BackendRef.Weight).To(Equal(int32(1)))
 
-			rootRule := httpRoute.Spec.Rules[2]
+			rootRule := httpRoute.Spec.Rules[1]
 			Expect(rootRule.Matches).To(HaveLen(1))
 			Expect(rootRule.Matches[0].Path).NotTo(BeNil())
 			Expect(rootRule.Matches[0].Path.Value).NotTo(BeNil())

@@ -20,7 +20,7 @@ def _extract_names(payload: dict) -> set[str]:
 
 def action_list_workspaces(test_context: TestContext) -> None:
     """Call the workspaces endpoint and store parsed names in context."""
-    url = f"{get_mlflow_base_uri()}/mlflow/ajax-api/3.0/mlflow/workspaces"
+    url = f"{get_mlflow_base_uri()}/ajax-api/3.0/mlflow/workspaces"
     headers = {"Authorization": f"Bearer {Config.K8_API_TOKEN}"}
 
     logger.info(f"Listing workspaces via {url}")

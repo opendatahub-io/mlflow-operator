@@ -90,13 +90,13 @@ func TestBuildStatusAddress(t *testing.T) {
 			name:       "default CR name",
 			mlflowName: "mlflow",
 			namespace:  "opendatahub",
-			wantURL:    "https://mlflow.opendatahub.svc:8443",
+			wantURL:    "https://mlflow.opendatahub.svc:8443/mlflow",
 		},
 		{
 			name:       "custom CR name",
 			mlflowName: "dev",
 			namespace:  "test-ns",
-			wantURL:    "https://mlflow-dev.test-ns.svc:8443",
+			wantURL:    "https://mlflow-dev.test-ns.svc:8443/mlflow",
 		},
 		{
 			name:       "empty namespace returns nil",
@@ -139,7 +139,7 @@ func TestSetObservedURLs(t *testing.T) {
 		if mlflow.Status.URL != "" {
 			t.Fatalf("status.URL = %q, want empty when public route is unavailable", mlflow.Status.URL)
 		}
-		if mlflow.Status.Address == nil || mlflow.Status.Address.URL != "https://mlflow.opendatahub.svc:8443" {
+		if mlflow.Status.Address == nil || mlflow.Status.Address.URL != "https://mlflow.opendatahub.svc:8443/mlflow" {
 			t.Fatalf("status.Address = %#v, want internal service URL", mlflow.Status.Address)
 		}
 	})
@@ -157,7 +157,7 @@ func TestSetObservedURLs(t *testing.T) {
 		if mlflow.Status.URL != "https://gateway.example.com/mlflow" {
 			t.Fatalf("status.URL = %q, want public status URL", mlflow.Status.URL)
 		}
-		if mlflow.Status.Address == nil || mlflow.Status.Address.URL != "https://mlflow.opendatahub.svc:8443" {
+		if mlflow.Status.Address == nil || mlflow.Status.Address.URL != "https://mlflow.opendatahub.svc:8443/mlflow" {
 			t.Fatalf("status.Address = %#v, want internal service URL", mlflow.Status.Address)
 		}
 	})

@@ -26,7 +26,7 @@ func buildStatusAddress(mlflowName, namespace string) *mlflowv1.MLflowAddressSta
 
 	serviceName := ResourceName + getResourceSuffix(mlflowName)
 	return &mlflowv1.MLflowAddressStatus{
-		URL: fmt.Sprintf("https://%s.%s.svc:%d", serviceName, namespace, mlflowServicePort),
+		URL: fmt.Sprintf("https://%s.%s.svc:%d%s", serviceName, namespace, mlflowServicePort, StaticPrefix),
 	}
 }
 
