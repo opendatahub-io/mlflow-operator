@@ -18,6 +18,19 @@ env:
   OPERATOR_RUNTIME_IMAGE: 'localhost/mlflow-operator:ci'
 
 on:
+  workflow_call:
+    inputs:
+      mlflow_repository:
+        description: 'Repository to build MLflow image from (e.g., opendatahub-io/mlflow)'
+        type: string
+        required: false
+        default: ''
+      mlflow_ref:
+        description: 'Git ref to checkout for MLflow build (e.g., refs/pull/42/merge)'
+        type: string
+        required: false
+        default: ''
+
   push:
     branches:
       - main
@@ -40,23 +53,31 @@ jobs:
         env:
           REPOSITORY_OWNER: ${{ github.repository_owner }}
           TARGET_REF: ${{ github.base_ref || github.ref_name }}
+          MLFLOW_REPOSITORY: ${{ inputs.mlflow_repository }}
+          MLFLOW_REF: ${{ inputs.mlflow_ref }}
         run: |
-          if [[ "$REPOSITORY_OWNER" == "red-hat-data-services" ]]; then
-            SOURCE_REPOSITORY="red-hat-data-services/mlflow"
+          # Build from source when called with explicit MLflow inputs
+          if [[ -n "$MLFLOW_REPOSITORY" && -n "$MLFLOW_REF" ]]; then
+            SOURCE_REPOSITORY="$MLFLOW_REPOSITORY"
+            SOURCE_REF="$MLFLOW_REF"
           else
-            SOURCE_REPOSITORY="opendatahub-io/mlflow"
-          fi
+            if [[ "$REPOSITORY_OWNER" == "red-hat-data-services" ]]; then
+              SOURCE_REPOSITORY="red-hat-data-services/mlflow"
+            else
+              SOURCE_REPOSITORY="opendatahub-io/mlflow"
+            fi
 
-          # Build the MLflow branch that corresponds to the operator branch under test.
-          # Examples:
-          # - ODH PR to operator main -> opendatahub-io/mlflow master
-          # - ODH PR to operator release-3.4 -> opendatahub-io/mlflow release-3.4
-          # - RHDS PR to operator main -> red-hat-data-services/mlflow main
-          # - RHDS PR to operator rhoai-3.4 -> red-hat-data-services/mlflow rhoai-3.4
-          if [[ "$REPOSITORY_OWNER" == "opendatahub-io" && "$TARGET_REF" == "main" ]]; then
-            SOURCE_REF="master"
-          else
-            SOURCE_REF="$TARGET_REF"
+            # Build the MLflow branch that corresponds to the operator branch under test.
+            # Examples:
+            # - ODH PR to operator main -> opendatahub-io/mlflow master
+            # - ODH PR to operator release-3.4 -> opendatahub-io/mlflow release-3.4
+            # - RHDS PR to operator main -> red-hat-data-services/mlflow main
+            # - RHDS PR to operator rhoai-3.4 -> red-hat-data-services/mlflow rhoai-3.4
+            if [[ "$REPOSITORY_OWNER" == "opendatahub-io" && "$TARGET_REF" == "main" ]]; then
+              SOURCE_REF="master"
+            else
+              SOURCE_REF="$TARGET_REF"
+            fi
           fi
 
           echo "source_repository=$SOURCE_REPOSITORY" >> "$GITHUB_OUTPUT"
@@ -100,9 +121,11 @@ jobs:
     name: Build MLflow operator image
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout repository
+      - name: Checkout operator repository
         uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
         with:
+          # Override to the operator repo when called from another repo
+          repository: ${{ inputs.mlflow_repository && format('{0}/mlflow-operator', github.repository_owner) || github.repository }}
           persist-credentials: false
 
       - name: Resolve operator Dockerfile
@@ -135,9 +158,11 @@ jobs:
     name: Build MLflow tests image
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout repository
+      - name: Checkout operator repository
         uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
         with:
+          # Override to the operator repo when called from another repo
+          repository: ${{ inputs.mlflow_repository && format('{0}/mlflow-operator', github.repository_owner) || github.repository }}
           persist-credentials: false
 
       - name: Build MLflow tests image archive
@@ -200,9 +225,11 @@ jobs:
     name: MLflow Integration tests - K8sVersion=${{ matrix.k8s_version }} serve_artifacts=${{ matrix.serve_artifacts }} artifact_backends=${{ matrix.artifact_backends }} backend_store=${{ matrix.backend_store }} registry_store=${{ matrix.registry_store }} postgres_tls=${{ matrix.postgres_tls || 'false' }} seaweedfs_tls=${{ matrix.seaweedfs_tls || 'false' }}
 
     steps:
-      - name: Checkout repository
+      - name: Checkout operator repository
         uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
         with:
+          # Override to the operator repo when called from another repo
+          repository: ${{ inputs.mlflow_repository && format('{0}/mlflow-operator', github.repository_owner) || github.repository }}
           persist-credentials: false
 
       - name: Free up disk space
@@ -337,7 +364,7 @@ jobs:
         run: exit 1
 
   verify-built-mlflow-version-alignment:
-    if: ${{ github.repository_owner == 'red-hat-data-services' }}
+    if: ${{ !inputs.mlflow_repository && github.event_name != 'workflow_dispatch' && github.repository_owner == 'red-hat-data-services' }}
     needs: build-mlflow-runtime-image
     permissions:
       contents: read
@@ -365,7 +392,7 @@ jobs:
             --mlflow-image "${{ env.MLFLOW_RUNTIME_IMAGE }}"
 
   verify-default-mlflow-version-alignment:
-    if: ${{ github.repository_owner == 'opendatahub-io' && (github.ref_name == 'main' || github.base_ref == 'main') }}
+    if: ${{ !inputs.mlflow_repository && github.event_name != 'workflow_dispatch' && github.repository_owner == 'opendatahub-io' && (github.ref_name == 'main' || github.base_ref == 'main') }}
     permissions:
       contents: read
     runs-on: ubuntu-latest
