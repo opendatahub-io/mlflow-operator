@@ -39,24 +39,17 @@ spec:
           port: 5353
         - protocol: TCP
           port: 5353
-    # HTTPS to cluster-internal pods and Services. Allow both the common
-    # Service port (443) and the common non-root container port (8443).
-    # Use networkPolicy.additionalEgressRules when you need external HTTPS
-    # egress or destination-specific restrictions.
+    # HTTPS (443, 6443, 8443). Left unrestricted by destination because
+    # MLflow commonly reaches services outside pod/service CIDRs: the
+    # Kubernetes API server (host-network), external object stores
+    # (S3, GCS, Azure Blob), and external databases over TLS.
     - ports:
         - protocol: TCP
           port: 443
         - protocol: TCP
-          port: 8443
-      to:
-        - namespaceSelector: {}
-    # Kubernetes API. Leave this unrestricted by destination because the API
-    # server is commonly reached on host-network IPs outside pod/service CIDRs.
-    # Clusters that expose the API on 443 must opt in explicitly with an
-    # additional egress rule.
-    - ports:
-        - protocol: TCP
           port: 6443
+        - protocol: TCP
+          port: 8443
     # PostgreSQL
     - ports:
         - protocol: TCP

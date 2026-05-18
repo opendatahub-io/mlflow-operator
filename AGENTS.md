@@ -197,12 +197,6 @@ spec:
   artifactsDestination: "s3://my-bucket/artifacts"
   defaultArtifactRoot: "s3://my-bucket/artifacts/runs"
   serveArtifacts: true
-  # Add an explicit networkPolicyAdditionalEgressRules entry when the artifact
-  # store needs non-default ports or destination-specific restrictions.
-  networkPolicyAdditionalEgressRules:
-    - ports:
-        - protocol: TCP
-          port: 443
   envFrom:
     - secretRef:
         name: aws-credentials

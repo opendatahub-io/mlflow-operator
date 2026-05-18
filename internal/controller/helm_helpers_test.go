@@ -89,6 +89,24 @@ func findEgressRulesByPort(egressRules []interface{}, port int64) []map[string]i
 	return matches
 }
 
+func collectRulePorts(rule map[string]interface{}) []int64 {
+	var ports []int64
+	rulePorts, ok := rule["ports"].([]interface{})
+	if !ok {
+		return ports
+	}
+	for _, p := range rulePorts {
+		portMap, ok := p.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		if port, ok := parsePortValue(portMap["port"]); ok {
+			ports = append(ports, port)
+		}
+	}
+	return ports
+}
+
 func parsePortValue(v interface{}) (int64, bool) {
 	switch port := v.(type) {
 	case int:
