@@ -201,24 +201,39 @@ metrics:
 
 # NetworkPolicy configuration
 networkPolicy:
-  # Additional egress rules appended to the default NetworkPolicy.
-  # The default policy permits DNS (53 and 5353), HTTPS (443, 6443, and
-  # 8443 to any destination), PostgreSQL (5432), MySQL (3306), and
-  # S3-compatible storage (MinIO 9000, SeaweedFS 8333 and 8334).
-  # Add rules here for services running on non-standard ports.
+  # When non-empty, replaces the entire default egress block. The caller
+  # is responsible for including DNS, HTTPS, database, and storage rules.
+  # When empty (default), the operator renders sensible defaults: DNS (53
+  # and 5353), HTTPS (443, 6443, 8443), PostgreSQL (5432), MySQL (3306),
+  # and S3-compatible storage (9000, 8333, 8334).
+  # additionalEgressRules are still appended after this list.
+  egressRules: []
+  # Example (restrict HTTPS to a specific CIDR):
+  # egressRules:
+  #   - ports:
+  #       - protocol: UDP
+  #         port: 53
+  #       - protocol: TCP
+  #         port: 53
+  #       - protocol: UDP
+  #         port: 5353
+  #       - protocol: TCP
+  #         port: 5353
+  #   - ports:
+  #       - protocol: TCP
+  #         port: 443
+  #     to:
+  #       - ipBlock:
+  #           cidr: 10.0.0.0/8
+
+  # Additional egress rules appended after the base rules (either the
+  # defaults or custom egressRules above).
   additionalEgressRules: []
   # Example:
   # additionalEgressRules:
   #   - ports:
   #       - protocol: TCP
   #         port: 15432
-  #   - ports:
-  #       - protocol: TCP
-  #         port: 27017
-  #     to:
-  #       - podSelector:
-  #           matchLabels:
-  #             app: mongodb
 
 # Node selector, tolerations, and affinity
 nodeSelector: {}

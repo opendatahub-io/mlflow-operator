@@ -553,6 +553,14 @@ func (h *HelmRenderer) mlflowToHelmValues(mlflow *mlflowv1.MLflow, namespace str
 		values["affinity"] = map[string]interface{}{}
 	}
 
+	egressRules := make([]interface{}, 0, len(mlflow.Spec.NetworkPolicyEgressRules))
+	for i, rule := range mlflow.Spec.NetworkPolicyEgressRules {
+		ruleMap, err := runtime.DefaultUnstructuredConverter.ToUnstructured(&rule)
+		if err != nil {
+			return nil, fmt.Errorf("failed to convert networkPolicyEgressRules[%d]: %w", i, err)
+		}
+		egressRules = append(egressRules, ruleMap)
+	}
 	additionalEgressRules := make([]interface{}, 0, len(mlflow.Spec.NetworkPolicyAdditionalEgressRules))
 	for i, rule := range mlflow.Spec.NetworkPolicyAdditionalEgressRules {
 		ruleMap, err := runtime.DefaultUnstructuredConverter.ToUnstructured(&rule)
@@ -562,6 +570,7 @@ func (h *HelmRenderer) mlflowToHelmValues(mlflow *mlflowv1.MLflow, namespace str
 		additionalEgressRules = append(additionalEgressRules, ruleMap)
 	}
 	values["networkPolicy"] = map[string]interface{}{
+		"egressRules":           egressRules,
 		"additionalEgressRules": additionalEgressRules,
 	}
 

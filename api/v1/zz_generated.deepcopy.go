@@ -331,6 +331,13 @@ func (in *MLflowSpec) DeepCopyInto(out *MLflowSpec) {
 		*out = new(CABundleConfigMapSpec)
 		**out = **in
 	}
+	if in.NetworkPolicyEgressRules != nil {
+		in, out := &in.NetworkPolicyEgressRules, &out.NetworkPolicyEgressRules
+		*out = make([]networkingv1.NetworkPolicyEgressRule, len(*in))
+		for i := range *in {
+			(*in)[i].DeepCopyInto(&(*out)[i])
+		}
+	}
 	if in.NetworkPolicyAdditionalEgressRules != nil {
 		in, out := &in.NetworkPolicyAdditionalEgressRules, &out.NetworkPolicyAdditionalEgressRules
 		*out = make([]networkingv1.NetworkPolicyEgressRule, len(*in))

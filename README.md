@@ -289,13 +289,34 @@ The operator automatically creates a NetworkPolicy that:
 - **Ingress**: Allows traffic to the MLflow HTTPS port (8443) from any pod in the cluster
 - **Egress**: Allows DNS (ports 53 and 5353), HTTPS (ports 443, 6443, and 8443 to any destination), PostgreSQL (port 5432), MySQL (port 3306), and S3-compatible object storage (MinIO port 9000, SeaweedFS ports 8333 and 8334)
 
-Use `networkPolicyAdditionalEgressRules` when you need egress on non-default ports or destination-specific restrictions:
+Use `networkPolicyAdditionalEgressRules` to append rules for non-default ports:
 ```yaml
 spec:
   networkPolicyAdditionalEgressRules:
     - ports:
         - protocol: TCP
           port: 15432
+```
+
+To replace the entire default egress block (for example, to restrict HTTPS to a specific CIDR), use `networkPolicyEgressRules`. The caller is responsible for including DNS and any other required rules:
+```yaml
+spec:
+  networkPolicyEgressRules:
+    - ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+        - protocol: UDP
+          port: 5353
+        - protocol: TCP
+          port: 5353
+    - ports:
+        - protocol: TCP
+          port: 443
+      to:
+        - ipBlock:
+            cidr: 10.0.0.0/8
 ```
 
 ### Namespace Overrides (MLflowConfig)

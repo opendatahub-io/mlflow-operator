@@ -37,6 +37,7 @@ import (
 // +kubebuilder:validation:XValidation:rule="!has(self.artifactsDestination) || !self.artifactsDestination.startsWith('file://') || has(self.storage)",message="storage must be configured when artifactsDestination uses file-based storage (file:// prefix)"
 // +kubebuilder:validation:XValidation:rule="!has(self.artifactsDestination) || !self.artifactsDestination.startsWith('file://') || (has(self.serveArtifacts) && self.serveArtifacts)",message="serveArtifacts must be enabled when artifactsDestination uses file-based storage (file:// prefix)"
 // +kubebuilder:validation:XValidation:rule="!has(self.env) || self.env.all(e, e.name != 'MLFLOW_SERVER_DISABLE_SECURITY_MIDDLEWARE')",message="setting the MLFLOW_SERVER_DISABLE_SECURITY_MIDDLEWARE environment variable is not allowed"
+// +kubebuilder:validation:XValidation:rule="!has(self.networkPolicyEgressRules) || self.networkPolicyEgressRules.all(r, (has(r.ports) && size(r.ports) > 0) || (has(r.to) && size(r.to) > 0))",message="each networkPolicyEgressRules entry must specify at least one port or one destination"
 // +kubebuilder:validation:XValidation:rule="!has(self.networkPolicyAdditionalEgressRules) || self.networkPolicyAdditionalEgressRules.all(r, (has(r.ports) && size(r.ports) > 0) || (has(r.to) && size(r.to) > 0))",message="each networkPolicyAdditionalEgressRules entry must specify at least one port or one destination"
 type MLflowSpec struct {
 	// Image specifies the MLflow container image.
@@ -229,12 +230,21 @@ type MLflowSpec struct {
 	// +optional
 	CABundleConfigMap *CABundleConfigMapSpec `json:"caBundleConfigMap,omitempty"`
 
-	// NetworkPolicyAdditionalEgressRules specifies additional egress rules to append to the
-	// default NetworkPolicy. The default policy permits DNS (53 and 5353),
-	// HTTPS (443, 6443, and 8443 to any destination), PostgreSQL (5432),
-	// MySQL (3306), and S3-compatible storage (MinIO 9000, SeaweedFS 8333
-	// and 8334). Use this field when connecting to services on non-standard
-	// ports.
+	// NetworkPolicyEgressRules, when non-empty, replaces the entire default
+	// egress block of the MLflow NetworkPolicy. The caller is responsible
+	// for including DNS, HTTPS, database, and storage rules as needed.
+	// When empty or omitted, the operator renders sensible defaults (DNS,
+	// HTTPS, PostgreSQL, MySQL, and S3-compatible storage ports).
+	// Rules from NetworkPolicyAdditionalEgressRules are still appended
+	// after this list.
+	// +optional
+	// +kubebuilder:validation:MaxItems=32
+	NetworkPolicyEgressRules []networkingv1.NetworkPolicyEgressRule `json:"networkPolicyEgressRules,omitempty"`
+
+	// NetworkPolicyAdditionalEgressRules specifies additional egress rules
+	// appended after the base egress rules (either the defaults or the
+	// custom rules from NetworkPolicyEgressRules). Use this field when
+	// connecting to services on non-standard ports.
 	// +optional
 	// +kubebuilder:validation:MaxItems=32
 	NetworkPolicyAdditionalEgressRules []networkingv1.NetworkPolicyEgressRule `json:"networkPolicyAdditionalEgressRules,omitempty"`

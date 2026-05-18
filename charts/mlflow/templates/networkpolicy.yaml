@@ -27,6 +27,9 @@ spec:
         # so cluster-internal reachability on this port is acceptable.
         - namespaceSelector: {}
   egress:
+    {{- if .Values.networkPolicy.egressRules }}
+    {{- toYaml .Values.networkPolicy.egressRules | nindent 4 }}
+    {{- else }}
     # DNS resolution (port 53 is the Service port; 5353 is the CoreDNS
     # target port used by OpenShift — OVN-Kubernetes evaluates egress rules
     # after DNAT, so both ports must be allowed)
@@ -66,6 +69,7 @@ spec:
           port: 8333
         - protocol: TCP
           port: 8334
+    {{- end }}
     {{- with .Values.networkPolicy.additionalEgressRules }}
     {{- toYaml . | nindent 4 }}
     {{- end }}

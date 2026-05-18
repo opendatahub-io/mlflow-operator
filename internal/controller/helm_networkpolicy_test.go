@@ -118,4 +118,95 @@ func TestRenderChart_NetworkPolicy(t *testing.T) {
 	g.Expect(found).To(gomega.BeTrue())
 	g.Expect(migrationEgress).To(gomega.HaveLen(3), "migration NetworkPolicy should have 2 default + 1 additional egress rule")
 	g.Expect(collectEgressPorts(migrationEgress)).To(gomega.ContainElement(int64(443)))
+
+	// Full egress override replaces all default rules
+	objs, err = renderer.RenderChart(&mlflowv1.MLflow{
+		ObjectMeta: metav1.ObjectMeta{Name: "mlflow"},
+		Spec: mlflowv1.MLflowSpec{
+			BackendStoreURI: ptr(testBackendStoreURI),
+			NetworkPolicyEgressRules: []networkingv1.NetworkPolicyEgressRule{
+				{
+					Ports: []networkingv1.NetworkPolicyPort{
+						{
+							Protocol: ptr(corev1.ProtocolUDP),
+							Port:     ptr(intstr.FromInt32(53)),
+						},
+					},
+				},
+				{
+					Ports: []networkingv1.NetworkPolicyPort{
+						{
+							Protocol: ptr(corev1.ProtocolTCP),
+							Port:     ptr(intstr.FromInt32(443)),
+						},
+					},
+					To: []networkingv1.NetworkPolicyPeer{
+						{
+							IPBlock: &networkingv1.IPBlock{
+								CIDR: "10.0.0.0/8",
+							},
+						},
+					},
+				},
+			},
+		},
+	}, "test-ns", RenderOptions{})
+	g.Expect(err).NotTo(gomega.HaveOccurred())
+
+	np = findObject(objs, "NetworkPolicy", "mlflow")
+	g.Expect(np).NotTo(gomega.BeNil())
+
+	egress, found, err = unstructured.NestedSlice(np.Object, "spec", "egress")
+	g.Expect(err).NotTo(gomega.HaveOccurred())
+	g.Expect(found).To(gomega.BeTrue())
+	g.Expect(egress).To(gomega.HaveLen(2), "custom egressRules should replace all defaults")
+
+	overridePorts := collectEgressPorts(egress)
+	g.Expect(overridePorts).To(gomega.ConsistOf(int64(53), int64(443)), "only the custom ports should be present")
+	for _, absent := range []int64{6443, 8443, 5432, 3306, 9000} {
+		g.Expect(overridePorts).NotTo(gomega.ContainElement(absent), "default port %d should be absent when egressRules overrides", absent)
+	}
+
+	// Override + append: custom base with additional rules appended
+	objs, err = renderer.RenderChart(&mlflowv1.MLflow{
+		ObjectMeta: metav1.ObjectMeta{Name: "mlflow"},
+		Spec: mlflowv1.MLflowSpec{
+			BackendStoreURI: ptr(testBackendStoreURI),
+			NetworkPolicyEgressRules: []networkingv1.NetworkPolicyEgressRule{
+				{
+					Ports: []networkingv1.NetworkPolicyPort{
+						{
+							Protocol: ptr(corev1.ProtocolUDP),
+							Port:     ptr(intstr.FromInt32(53)),
+						},
+					},
+				},
+			},
+			NetworkPolicyAdditionalEgressRules: []networkingv1.NetworkPolicyEgressRule{
+				{
+					Ports: []networkingv1.NetworkPolicyPort{
+						{
+							Protocol: ptr(corev1.ProtocolTCP),
+							Port:     ptr(intstr.FromInt32(9999)),
+						},
+					},
+				},
+			},
+		},
+	}, "test-ns", RenderOptions{})
+	g.Expect(err).NotTo(gomega.HaveOccurred())
+
+	np = findObject(objs, "NetworkPolicy", "mlflow")
+	g.Expect(np).NotTo(gomega.BeNil())
+
+	egress, found, err = unstructured.NestedSlice(np.Object, "spec", "egress")
+	g.Expect(err).NotTo(gomega.HaveOccurred())
+	g.Expect(found).To(gomega.BeTrue())
+	g.Expect(egress).To(gomega.HaveLen(2), "should have 1 custom base + 1 appended additional rule")
+
+	combinedPorts := collectEgressPorts(egress)
+	g.Expect(combinedPorts).To(gomega.ConsistOf(int64(53), int64(9999)), "should contain custom base port and appended additional port")
+	for _, absent := range []int64{443, 6443, 8443, 5432, 3306, 9000} {
+		g.Expect(combinedPorts).NotTo(gomega.ContainElement(absent), "default port %d should not reappear when egressRules overrides", absent)
+	}
 }
