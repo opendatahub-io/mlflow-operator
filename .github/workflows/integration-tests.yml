@@ -1,8 +1,9 @@
-name: Integration Tests
+name: MLflow Runtime Tests
 
 env:
   NAMESPACE: 'opendatahub'
-  CLUSTER_NAME: 'mlflow'
+  INTEGRATION_CLUSTER_NAME: 'mlflow'
+  UPGRADE_CLUSTER_NAME: 'mlflow-upgrade'
   JUNIT_XML: 'integration-tests.xml'
   HTML_REPORT: 'integration-tests.html'
   PYTEST_ARGS: '-v --tb=short --strict-markers --disable-warnings'
@@ -12,6 +13,11 @@ env:
   MLFLOW_TRACKING_URI: "https://localhost:8080/mlflow"
   MLFLOW_TRACKING_INSECURE_TLS: "true"
   TESTS_LOG_LEVEL: "DEBUG"
+  RHDS_RUNTIME_ARTIFACT: 'mlflow-runtime-image'
+  RHDS_RUNTIME_IMAGE: 'localhost/mlflow-runtime:ci'
+  RHDS_INTEGRATION_IMAGE: 'kind-registry:5000/mlflow:ci'
+  MLFLOW_SEED_IMAGE: 'localhost/mlflow-seed:3.10.0'
+  MLFLOW_SEED_BASE_IMAGE: 'quay.io/opendatahub/mlflow:odh-stable'
 
 on:
   workflow_dispatch:
@@ -61,17 +67,63 @@ on:
   pull_request:
 
 jobs:
+  build-rhds-mlflow-image:
+    name: Build RHDS MLflow image
+    runs-on: ubuntu-latest
+    outputs:
+      built: ${{ steps.configure.outputs.built }}
+      source_ref: ${{ steps.configure.outputs.source_ref }}
+    steps:
+      - name: Resolve MLflow source build settings
+        id: configure
+        shell: bash
+        env:
+          REPOSITORY_OWNER: ${{ github.repository_owner }}
+          SOURCE_REF: ${{ github.base_ref || github.ref_name }}
+        run: |
+          echo "source_ref=$SOURCE_REF" >> "$GITHUB_OUTPUT"
+          if [[ "$REPOSITORY_OWNER" == "red-hat-data-services" ]]; then
+            echo "built=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "built=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Checkout MLflow source
+        if: ${{ steps.configure.outputs.built == 'true' }}
+        uses: actions/checkout@v5
+        with:
+          repository: red-hat-data-services/mlflow
+          ref: ${{ steps.configure.outputs.source_ref }}
+          path: mlflow-upstream
+
+      - name: Build MLflow image archive
+        if: ${{ steps.configure.outputs.built == 'true' }}
+        shell: bash
+        run: |
+          mkdir -p runtime-image
+          docker build -f mlflow-upstream/Dockerfile.konflux -t "${{ env.RHDS_RUNTIME_IMAGE }}" mlflow-upstream
+          docker save -o "runtime-image/${{ env.RHDS_RUNTIME_ARTIFACT }}.tar" "${{ env.RHDS_RUNTIME_IMAGE }}"
+
+      - name: Upload MLflow image artifact
+        if: ${{ steps.configure.outputs.built == 'true' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.RHDS_RUNTIME_ARTIFACT }}
+          path: runtime-image/${{ env.RHDS_RUNTIME_ARTIFACT }}.tar
+          retention-days: 1
+
   integration-tests:
+    needs: build-rhds-mlflow-image
     runs-on: ubuntu-latest
     timeout-minutes: 45
     strategy:
       matrix:
-        k8s_version: [ "v1.34.0" ]
-        serve_artifacts: [ "true", "false" ]
-        artifact_storage: [ "file", "s3" ]
-        backend_store: [ "sqlite", "postgres" ]
-        registry_store: [ "sqlite", "postgres" ]
-        python_version: [ "3.13" ]
+        k8s_version: ["v1.34.0"]
+        serve_artifacts: ["true", "false"]
+        artifact_storage: ["file", "s3"]
+        backend_store: ["sqlite", "postgres"]
+        registry_store: ["sqlite", "postgres"]
+        python_version: ["3.13"]
         include:
           - k8s_version: "v1.29.0"
             backend_store: "sqlite"
@@ -97,12 +149,12 @@ jobs:
             python_version: "3.13"
             postgres_tls: "true"
             seaweedfs_tls: "true"
-      fail-fast: false # So that failure in 1 type of parameterized job does not cause other jobs to terminate prematurely
+      fail-fast: false
     name: MLflow Integration tests - K8sVersion=${{ matrix.k8s_version }} serve_artifacts=${{ matrix.serve_artifacts }} artifact_storage=${{ matrix.artifact_storage }} backend_store=${{ matrix.backend_store }} registry_store=${{ matrix.registry_store }} python_version=${{ matrix.python_version }} postgres_tls=${{ matrix.postgres_tls || 'false' }} seaweedfs_tls=${{ matrix.seaweedfs_tls || 'false' }}
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up Python ${{ matrix.python_version }}
         uses: actions/setup-python@v5
@@ -118,7 +170,7 @@ jobs:
         with:
           version: v0.29.0
           node_image: kindest/node:${{ matrix.k8s_version }}
-          cluster_name: ${{ inputs.cluster_name || env.CLUSTER_NAME }}
+          cluster_name: ${{ inputs.cluster_name || env.INTEGRATION_CLUSTER_NAME }}
           registry: 'true'
 
       - name: Configure Docker for Kind registry
@@ -133,7 +185,6 @@ jobs:
       - name: Build and load MLflow operator image
         id: build-operator
         run: |
-          # Build the operator image and push to Kind registry
           OPERATOR_IMG=kind-registry:5000/mlflow-operator:latest
           docker build -t "$OPERATOR_IMG" .
           docker push "$OPERATOR_IMG"
@@ -146,42 +197,29 @@ jobs:
           BRANCH: ${{ github.base_ref || github.ref_name }}
           REPOSITORY_OWNER: ${{ github.repository_owner }}
         run: |
-          {
-            if [[ "$REPOSITORY_OWNER" == "red-hat-data-services" && "$BRANCH" =~ ^rhoai- ]]; then
-              IMAGE_TAG="${BRANCH//\//-}"
-              echo "build=true"
-              echo "ref=$BRANCH"
-              echo "image=kind-registry:5000/mlflow:$IMAGE_TAG"
-            elif [[ "$REPOSITORY_OWNER" == "red-hat-data-services" && "$BRANCH" == "main" ]]; then
-              echo "build=false"
-              echo "image=quay.io/opendatahub/mlflow:odh-stable"
-            elif [[ "$BRANCH" == "main" || "$BRANCH" == "master" ]]; then
-              echo "build=false"
-              echo "image=quay.io/opendatahub/mlflow:odh-stable"
-            elif [[ "$REPOSITORY_OWNER" == "red-hat-data-services" ]]; then
-              echo "build=false"
-              echo "image=quay.io/rhoai/odh-mlflow-rhel9:$BRANCH"
-            else
-              echo "build=false"
-              echo "image=quay.io/opendatahub/mlflow:$BRANCH"
-            fi
-          } >> "$GITHUB_OUTPUT"
+          if [[ "$REPOSITORY_OWNER" == "red-hat-data-services" ]]; then
+            echo "image=${{ env.RHDS_INTEGRATION_IMAGE }}" >> "$GITHUB_OUTPUT"
+          elif [[ "$BRANCH" == "main" || "$BRANCH" == "master" ]]; then
+            echo "image=quay.io/opendatahub/mlflow:odh-stable" >> "$GITHUB_OUTPUT"
+          else
+            echo "image=quay.io/opendatahub/mlflow:$BRANCH" >> "$GITHUB_OUTPUT"
+          fi
 
-      - name: Checkout MLflow source
-        if: ${{ steps.resolve-mlflow-image.outputs.build == 'true' }}
-        uses: actions/checkout@v4
+      - name: Download RHDS MLflow image artifact
+        if: ${{ github.repository_owner == 'red-hat-data-services' }}
+        uses: actions/download-artifact@v4
         with:
-          repository: red-hat-data-services/mlflow
-          ref: ${{ steps.resolve-mlflow-image.outputs.ref }}
-          path: mlflow-upstream
+          name: ${{ env.RHDS_RUNTIME_ARTIFACT }}
+          path: runtime-image
 
-      - name: Build and load MLflow image
-        if: ${{ steps.resolve-mlflow-image.outputs.build == 'true' }}
+      - name: Load RHDS MLflow image into Kind registry
+        if: ${{ github.repository_owner == 'red-hat-data-services' }}
+        shell: bash
         run: |
-          MLFLOW_IMG="${{ steps.resolve-mlflow-image.outputs.image }}"
+          docker load -i "runtime-image/${{ env.RHDS_RUNTIME_ARTIFACT }}.tar"
+          docker tag "${{ env.RHDS_RUNTIME_IMAGE }}" "${{ env.RHDS_INTEGRATION_IMAGE }}"
+          docker push "${{ env.RHDS_INTEGRATION_IMAGE }}"
 
-          docker build -f mlflow-upstream/Dockerfile.konflux -t "$MLFLOW_IMG" mlflow-upstream
-          docker push "$MLFLOW_IMG"
       - name: Deploy MLflow
         id: deploy-mlflow
         uses: ./.github/actions/deploy
@@ -405,11 +443,152 @@ jobs:
         uses: actions/upload-artifact@v4
         if: ${{ steps.collect-logs.outcome == 'success' && !cancelled() }}
         with:
-          name: debug-logs-${{ matrix.k8s_version }}-${{ matrix.backend_store }}-${{ matrix.registry_store }}-${{ matrix.artifact_storage }}-${{ matrix.serve_artifacts }}-${{ matrix.python_version }}-postgres_tls_${{ matrix.postgres_tls || 'false' }}-seaweedfs_tls_${{ matrix.seaweedfs_tls || 'false' }} 
+          name: debug-logs-${{ matrix.k8s_version }}-${{ matrix.backend_store }}-${{ matrix.registry_store }}-${{ matrix.artifact_storage }}-${{ matrix.serve_artifacts }}-${{ matrix.python_version }}-postgres_tls_${{ matrix.postgres_tls || 'false' }}-seaweedfs_tls_${{ matrix.seaweedfs_tls || 'false' }}
           path: debug-logs/
           retention-days: 7
 
-      - name: Mark Workflow failure if test step failed
+      - name: Mark workflow failure if test step failed
         if: steps.run-tests.outcome != 'success' && !cancelled()
         shell: bash
         run: exit 1
+
+  verify-mlflow-version-alignment:
+    if: ${{ github.event_name != 'workflow_dispatch' && (github.repository_owner == 'red-hat-data-services' || (github.repository_owner == 'opendatahub-io' && (github.ref_name == 'main' || github.base_ref == 'main'))) }}
+    needs: build-rhds-mlflow-image
+    permissions:
+      contents: read
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Download RHDS MLflow image artifact
+        if: ${{ github.repository_owner == 'red-hat-data-services' }}
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ env.RHDS_RUNTIME_ARTIFACT }}
+          path: runtime-image
+
+      - name: Load RHDS MLflow image
+        if: ${{ github.repository_owner == 'red-hat-data-services' }}
+        shell: bash
+        run: docker load -i "runtime-image/${{ env.RHDS_RUNTIME_ARTIFACT }}.tar"
+
+      - name: Verify RHDS built MLflow image version alignment
+        if: ${{ github.repository_owner == 'red-hat-data-services' }}
+        shell: bash
+        run: |
+          python3 test/scripts/verify_mlflow_version_alignment.py \
+            --mlflow-image "${{ env.RHDS_RUNTIME_IMAGE }}"
+
+      - name: Verify default MLflow image version alignment
+        if: ${{ github.repository_owner == 'opendatahub-io' }}
+        shell: bash
+        run: |
+          python3 test/scripts/verify_mlflow_version_alignment.py \
+            --params-env config/base/params.env \
+            --params-env config/overlays/kind/params.env
+
+  upgrade-tests:
+    if: ${{ github.event_name != 'workflow_dispatch' }}
+    needs: build-rhds-mlflow-image
+    name: Run upgrade path (${{ matrix.backend_store }})
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    strategy:
+      matrix:
+        backend_store:
+          - sqlite
+          - postgres
+    steps:
+      - name: Clone the code
+        uses: actions/checkout@v5
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Create Kind cluster
+        uses: ./.github/actions/create-cluster
+        with:
+          cluster_name: ${{ env.UPGRADE_CLUSTER_NAME }}
+          k8s_version: "v1.34.0"
+
+      - name: Build operator image
+        run: make docker-build IMG=localhost/mlflow-operator-upgrade:v0.0.1
+
+      - name: Load operator image into Kind cluster
+        run: kind load docker-image localhost/mlflow-operator-upgrade:v0.0.1 --name ${{ env.UPGRADE_CLUSTER_NAME }}
+
+      - name: Download RHDS MLflow image artifact
+        if: ${{ github.repository_owner == 'red-hat-data-services' }}
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ env.RHDS_RUNTIME_ARTIFACT }}
+          path: runtime-image
+
+      - name: Load RHDS current MLflow image into Kind cluster
+        if: ${{ github.repository_owner == 'red-hat-data-services' }}
+        shell: bash
+        run: |
+          docker load -i "runtime-image/${{ env.RHDS_RUNTIME_ARTIFACT }}.tar"
+          kind load docker-image "${{ env.RHDS_RUNTIME_IMAGE }}" --name ${{ env.UPGRADE_CLUSTER_NAME }}
+
+      - name: Point RHDS operator defaults at the built MLflow image
+        if: ${{ github.repository_owner == 'red-hat-data-services' }}
+        shell: bash
+        run: |
+          sed -i "s#^MLFLOW_IMAGE=.*#MLFLOW_IMAGE=${{ env.RHDS_RUNTIME_IMAGE }}#" config/overlays/kind/params.env
+          grep "^MLFLOW_IMAGE=" config/overlays/kind/params.env
+
+      - name: Build MLflow 3.10.0-compatible seed operator image
+        env:
+          SEED_OPERATOR_IMG: "localhost/mlflow-operator-upgrade-seed:v0.0.1"
+        run: |
+          make docker-build IMG="${SEED_OPERATOR_IMG}" SUPPORTED_MLFLOW_VERSION_OVERRIDE=3.10.0
+
+      - name: Load seed operator image into Kind cluster
+        env:
+          SEED_OPERATOR_IMG: "localhost/mlflow-operator-upgrade-seed:v0.0.1"
+        run: kind load docker-image "${SEED_OPERATOR_IMG}" --name ${{ env.UPGRADE_CLUSTER_NAME }}
+
+      - name: Build MLflow 3.10.0 seed image
+        run: docker build --pull --build-arg BASE_IMAGE=${{ env.MLFLOW_SEED_BASE_IMAGE }} -f test/e2e/images/mlflow-3.10.0.Dockerfile -t ${{ env.MLFLOW_SEED_IMAGE }} .
+
+      - name: Load MLflow 3.10.0 seed image into Kind cluster
+        run: kind load docker-image ${{ env.MLFLOW_SEED_IMAGE }} --name ${{ env.UPGRADE_CLUSTER_NAME }}
+
+      - name: Install deploy helper dependencies
+        run: python3 -m pip install pyyaml kubernetes
+
+      - name: Deploy seeded MLflow 3.10.0 instance
+        shell: bash
+        env:
+          SEED_OPERATOR_IMG: "localhost/mlflow-operator-upgrade-seed:v0.0.1"
+        run: |
+          DEPLOY_ARGS=(
+            --namespace "${{ env.NAMESPACE }}"
+            --mlflow-operator-image "${SEED_OPERATOR_IMG}"
+            --mlflow-image "${{ env.MLFLOW_SEED_IMAGE }}"
+            --backend-store "${{ matrix.backend_store }}"
+            --registry-store "${{ matrix.backend_store }}"
+            --artifact-storage file
+            --serve-artifacts true
+          )
+
+          python3 .github/actions/deploy/deploy.py "${DEPLOY_ARGS[@]}"
+
+      - name: Wait for seeded MLflow 3.10.0 migration to complete
+        shell: bash
+        run: |
+          kubectl wait --for=jsonpath='{.status.version}'=3.10.0 mlflow/mlflow --timeout=300s
+
+      - name: Run upgrade e2e tests
+        run: make test-e2e-upgrade E2E_IMG=localhost/mlflow-operator-upgrade:v0.0.1 MLFLOW_SEED_IMAGE=${{ env.MLFLOW_SEED_IMAGE }}

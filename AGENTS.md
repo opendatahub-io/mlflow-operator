@@ -401,9 +401,7 @@ Validates sample CRs on every PR:
 - `verify-codegen.yml` - Validates generated code is up-to-date
 - `test.yml` - Runs unit tests
 - `lint.yml` - Runs golangci-lint
-- `integration-tests.yml` - Builds the operator image from this repo for all runs, but only builds the MLflow image from the aligned branch of `red-hat-data-services/mlflow` using `Dockerfile.konflux` for `red-hat-data-services` `rhoai-*` branches; other branches continue using the existing Quay image selection
-- `upgrade-tests.yml` - Deploys a `3.10.0`-compatible operator image and a running MLflow `3.10.0` instance; the upgrade Ginkgo test then performs the operator image upgrade and verifies the operator-managed upgrade flow against the current supported MLflow version
-- `verify-mlflow-version-alignment.yml` - Verifies the floating default MLflow image still matches the supported operator version on PRs targeting `main`, pushes to `main`, and a daily schedule in `opendatahub-io/mlflow-operator`
+- `integration-tests.yml` - Unified MLflow runtime workflow. In `red-hat-data-services`, it builds one MLflow image artifact from the aligned branch of `red-hat-data-services/mlflow` using `Dockerfile.konflux`, then reuses that same artifact for integration tests, version-alignment checks, and upgrade tests. In `opendatahub-io`, the same shared workflow file keeps the existing `odh-stable` behavior for those checks on push and PR events.
 - `test-e2e.yml` - Runs end-to-end tests
 - `verify-kustomize.yml` - Validates kustomize overlays
 
