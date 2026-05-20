@@ -16,6 +16,10 @@ env:
   RHDS_RUNTIME_ARTIFACT: 'mlflow-runtime-image'
   RHDS_RUNTIME_IMAGE: 'localhost/mlflow-runtime:ci'
   RHDS_INTEGRATION_IMAGE: 'kind-registry:5000/mlflow:ci'
+  OPERATOR_RUNTIME_ARTIFACT: 'mlflow-operator-image'
+  OPERATOR_RUNTIME_IMAGE: 'localhost/mlflow-operator:ci'
+  INTEGRATION_OPERATOR_IMAGE: 'kind-registry:5000/mlflow-operator:latest'
+  UPGRADE_OPERATOR_IMAGE: 'localhost/mlflow-operator-upgrade:v0.0.1'
   MLFLOW_SEED_IMAGE: 'localhost/mlflow-seed:3.10.0'
   MLFLOW_SEED_BASE_IMAGE: 'quay.io/opendatahub/mlflow:odh-stable'
 
@@ -118,8 +122,34 @@ jobs:
           path: runtime-image/${{ env.RHDS_RUNTIME_ARTIFACT }}.tar
           retention-days: 1
 
+  build-mlflow-operator-image:
+    if: ${{ github.event_name != 'schedule' }}
+    permissions:
+      contents: read
+    name: Build MLflow operator image
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          persist-credentials: false
+
+      - name: Build MLflow operator image archive
+        shell: bash
+        run: |
+          mkdir -p operator-image
+          docker build -t "${{ env.OPERATOR_RUNTIME_IMAGE }}" .
+          docker save -o "operator-image/${{ env.OPERATOR_RUNTIME_ARTIFACT }}.tar" "${{ env.OPERATOR_RUNTIME_IMAGE }}"
+
+      - name: Upload MLflow operator image artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ${{ env.OPERATOR_RUNTIME_ARTIFACT }}
+          path: operator-image/${{ env.OPERATOR_RUNTIME_ARTIFACT }}.tar
+          retention-days: 1
+
   integration-tests:
-    needs: build-rhds-mlflow-image
+    needs: [build-rhds-mlflow-image, build-mlflow-operator-image]
     if: ${{ github.event_name != 'schedule' }}
     permissions:
       contents: read
@@ -193,13 +223,18 @@ jobs:
           sudo systemctl restart docker
           sleep 5
 
-      - name: Build and load MLflow operator image
-        id: build-operator
+      - name: Download MLflow operator image artifact
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: ${{ env.OPERATOR_RUNTIME_ARTIFACT }}
+          path: operator-image
+
+      - name: Load MLflow operator image into Kind registry
+        shell: bash
         run: |
-          OPERATOR_IMG=kind-registry:5000/mlflow-operator:latest
-          docker build -t "$OPERATOR_IMG" .
-          docker push "$OPERATOR_IMG"
-          echo "operator_image=$OPERATOR_IMG" >> "$GITHUB_OUTPUT"
+          docker load -i "operator-image/${{ env.OPERATOR_RUNTIME_ARTIFACT }}.tar"
+          docker tag "${{ env.OPERATOR_RUNTIME_IMAGE }}" "${{ env.INTEGRATION_OPERATOR_IMAGE }}"
+          docker push "${{ env.INTEGRATION_OPERATOR_IMAGE }}"
 
       - name: Resolve MLflow image
         id: resolve-mlflow-image
@@ -242,7 +277,7 @@ jobs:
           python_version: ${{ matrix.python_version }}
           namespace: ${{ env.NAMESPACE }}
           mlflow_image: ${{ steps.resolve-mlflow-image.outputs.image }}
-          mlflow_operator_image: ${{ steps.build-operator.outputs.operator_image }}
+          mlflow_operator_image: ${{ env.INTEGRATION_OPERATOR_IMAGE }}
           backend_store: ${{ inputs.backend_store || matrix.backend_store }}
           artifact_storage: ${{ inputs.artifact_storage || matrix.artifact_storage }}
           registry_store: ${{ inputs.registry_store || matrix.registry_store }}
@@ -508,7 +543,7 @@ jobs:
 
   upgrade-tests:
     if: ${{ github.event_name != 'workflow_dispatch' && github.event_name != 'schedule' }}
-    needs: build-rhds-mlflow-image
+    needs: [build-rhds-mlflow-image, build-mlflow-operator-image]
     name: Run upgrade path (${{ matrix.backend_store }})
     runs-on: ubuntu-latest
     permissions:
@@ -540,11 +575,17 @@ jobs:
           cluster_name: ${{ env.UPGRADE_CLUSTER_NAME }}
           k8s_version: "v1.34.0"
 
-      - name: Build operator image
-        run: make docker-build IMG=localhost/mlflow-operator-upgrade:v0.0.1
+      - name: Download MLflow operator image artifact
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: ${{ env.OPERATOR_RUNTIME_ARTIFACT }}
+          path: operator-image
 
       - name: Load operator image into Kind cluster
-        run: kind load docker-image localhost/mlflow-operator-upgrade:v0.0.1 --name ${{ env.UPGRADE_CLUSTER_NAME }}
+        run: |
+          docker load -i "operator-image/${{ env.OPERATOR_RUNTIME_ARTIFACT }}.tar"
+          docker tag "${{ env.OPERATOR_RUNTIME_IMAGE }}" "${{ env.UPGRADE_OPERATOR_IMAGE }}"
+          kind load docker-image "${{ env.UPGRADE_OPERATOR_IMAGE }}" --name ${{ env.UPGRADE_CLUSTER_NAME }}
 
       - name: Download RHDS MLflow image artifact
         if: ${{ github.repository_owner == 'red-hat-data-services' }}
@@ -610,4 +651,4 @@ jobs:
           kubectl wait --for=jsonpath='{.status.version}'=3.10.0 mlflow/mlflow --timeout=300s
 
       - name: Run upgrade e2e tests
-        run: make test-e2e-upgrade E2E_IMG=localhost/mlflow-operator-upgrade:v0.0.1 MLFLOW_SEED_IMAGE=${{ env.MLFLOW_SEED_IMAGE }}
+        run: make test-e2e-upgrade E2E_IMG=${{ env.UPGRADE_OPERATOR_IMAGE }} MLFLOW_SEED_IMAGE=${{ env.MLFLOW_SEED_IMAGE }}
