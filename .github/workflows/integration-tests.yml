@@ -13,9 +13,9 @@ env:
   MLFLOW_TRACKING_URI: "https://localhost:8080/mlflow"
   MLFLOW_TRACKING_INSECURE_TLS: "true"
   TESTS_LOG_LEVEL: "DEBUG"
-  RHDS_RUNTIME_ARTIFACT: 'mlflow-runtime-image'
-  RHDS_RUNTIME_IMAGE: 'localhost/mlflow-runtime:ci'
-  RHDS_INTEGRATION_IMAGE: 'kind-registry:5000/mlflow:ci'
+  MLFLOW_RUNTIME_ARTIFACT: 'mlflow-runtime-image'
+  MLFLOW_RUNTIME_IMAGE: 'localhost/mlflow-runtime:ci'
+  INTEGRATION_MLFLOW_IMAGE: 'kind-registry:5000/mlflow:ci'
   OPERATOR_RUNTIME_ARTIFACT: 'mlflow-operator-image'
   OPERATOR_RUNTIME_IMAGE: 'localhost/mlflow-operator:ci'
   INTEGRATION_OPERATOR_IMAGE: 'kind-registry:5000/mlflow-operator:latest'
@@ -74,13 +74,14 @@ on:
   pull_request:
 
 jobs:
-  build-rhds-mlflow-image:
+  build-mlflow-runtime-image:
     permissions:
       contents: read
-    name: Build RHDS MLflow image
+    name: Build MLflow runtime image
     runs-on: ubuntu-latest
     outputs:
       built: ${{ steps.configure.outputs.built }}
+      source_repository: ${{ steps.configure.outputs.source_repository }}
       source_ref: ${{ steps.configure.outputs.source_ref }}
     steps:
       - name: Resolve MLflow source build settings
@@ -88,10 +89,25 @@ jobs:
         shell: bash
         env:
           REPOSITORY_OWNER: ${{ github.repository_owner }}
-          SOURCE_REF: ${{ github.head_ref || github.ref_name }}
+          REQUESTED_REF: ${{ github.head_ref || github.ref_name }}
+          EVENT_NAME: ${{ github.event_name }}
         run: |
-          echo "source_ref=$SOURCE_REF" >> "$GITHUB_OUTPUT"
           if [[ "$REPOSITORY_OWNER" == "red-hat-data-services" ]]; then
+            SOURCE_REPOSITORY="red-hat-data-services/mlflow"
+            DEFAULT_REF="main"
+          else
+            SOURCE_REPOSITORY="opendatahub-io/mlflow"
+            DEFAULT_REF="master"
+          fi
+
+          SOURCE_REF="$DEFAULT_REF"
+          if [[ -n "$REQUESTED_REF" ]] && git ls-remote --exit-code --heads "https://github.com/${SOURCE_REPOSITORY}.git" "$REQUESTED_REF" >/dev/null 2>&1; then
+            SOURCE_REF="$REQUESTED_REF"
+          fi
+
+          echo "source_repository=$SOURCE_REPOSITORY" >> "$GITHUB_OUTPUT"
+          echo "source_ref=$SOURCE_REF" >> "$GITHUB_OUTPUT"
+          if [[ "$EVENT_NAME" != "schedule" ]]; then
             echo "built=true" >> "$GITHUB_OUTPUT"
           else
             echo "built=false" >> "$GITHUB_OUTPUT"
@@ -101,25 +117,36 @@ jobs:
         if: ${{ steps.configure.outputs.built == 'true' }}
         uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
         with:
-          repository: red-hat-data-services/mlflow
+          repository: ${{ steps.configure.outputs.source_repository }}
           ref: ${{ steps.configure.outputs.source_ref }}
           path: mlflow-upstream
           persist-credentials: false
+
+      - name: Resolve MLflow Dockerfile
+        if: ${{ steps.configure.outputs.built == 'true' }}
+        id: resolve-mlflow-dockerfile
+        shell: bash
+        run: |
+          if [[ -f mlflow-upstream/Dockerfile.konflux ]]; then
+            echo "path=mlflow-upstream/Dockerfile.konflux" >> "$GITHUB_OUTPUT"
+          else
+            echo "path=mlflow-upstream/Dockerfile" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Build MLflow image archive
         if: ${{ steps.configure.outputs.built == 'true' }}
         shell: bash
         run: |
           mkdir -p runtime-image
-          docker build -f mlflow-upstream/Dockerfile.konflux -t "${{ env.RHDS_RUNTIME_IMAGE }}" mlflow-upstream
-          docker save -o "runtime-image/${{ env.RHDS_RUNTIME_ARTIFACT }}.tar" "${{ env.RHDS_RUNTIME_IMAGE }}"
+          docker build -f "${{ steps.resolve-mlflow-dockerfile.outputs.path }}" -t "${{ env.MLFLOW_RUNTIME_IMAGE }}" mlflow-upstream
+          docker save -o "runtime-image/${{ env.MLFLOW_RUNTIME_ARTIFACT }}.tar" "${{ env.MLFLOW_RUNTIME_IMAGE }}"
 
       - name: Upload MLflow image artifact
         if: ${{ steps.configure.outputs.built == 'true' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: ${{ env.RHDS_RUNTIME_ARTIFACT }}
-          path: runtime-image/${{ env.RHDS_RUNTIME_ARTIFACT }}.tar
+          name: ${{ env.MLFLOW_RUNTIME_ARTIFACT }}
+          path: runtime-image/${{ env.MLFLOW_RUNTIME_ARTIFACT }}.tar
           retention-days: 1
 
   build-mlflow-operator-image:
@@ -159,7 +186,7 @@ jobs:
           retention-days: 1
 
   integration-tests:
-    needs: [build-rhds-mlflow-image, build-mlflow-operator-image]
+    needs: [build-mlflow-runtime-image, build-mlflow-operator-image]
     if: ${{ github.event_name != 'schedule' }}
     permissions:
       contents: read
@@ -246,39 +273,18 @@ jobs:
           docker tag "${{ env.OPERATOR_RUNTIME_IMAGE }}" "${{ env.INTEGRATION_OPERATOR_IMAGE }}"
           docker push "${{ env.INTEGRATION_OPERATOR_IMAGE }}"
 
-      - name: Resolve MLflow image
-        id: resolve-mlflow-image
-        shell: bash
-        env:
-          BRANCH: ${{ github.base_ref || github.ref_name }}
-          REPOSITORY_OWNER: ${{ github.repository_owner }}
-        run: |
-          if [[ "$REPOSITORY_OWNER" == "red-hat-data-services" ]]; then
-            echo "image=${{ env.RHDS_INTEGRATION_IMAGE }}" >> "$GITHUB_OUTPUT"
-          elif [[ "$BRANCH" == "main" || "$BRANCH" == "master" ]]; then
-            echo "image=quay.io/opendatahub/mlflow:odh-stable" >> "$GITHUB_OUTPUT"
-          else
-            SANITIZED_BRANCH=$(printf '%s' "$BRANCH" | tr '[:upper:]' '[:lower:]' | sed -E 's#[/]+#-#g; s#[^a-z0-9._-]#-#g; s#^[.-]+##' | cut -c1-128)
-            if [[ -z "$SANITIZED_BRANCH" ]]; then
-              SANITIZED_BRANCH='branch'
-            fi
-            echo "image=quay.io/opendatahub/mlflow:${SANITIZED_BRANCH}" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Download RHDS MLflow image artifact
-        if: ${{ github.repository_owner == 'red-hat-data-services' }}
+      - name: Download MLflow runtime image artifact
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
-          name: ${{ env.RHDS_RUNTIME_ARTIFACT }}
+          name: ${{ env.MLFLOW_RUNTIME_ARTIFACT }}
           path: runtime-image
 
-      - name: Load RHDS MLflow image into Kind registry
-        if: ${{ github.repository_owner == 'red-hat-data-services' }}
+      - name: Load MLflow runtime image into Kind registry
         shell: bash
         run: |
-          docker load -i "runtime-image/${{ env.RHDS_RUNTIME_ARTIFACT }}.tar"
-          docker tag "${{ env.RHDS_RUNTIME_IMAGE }}" "${{ env.RHDS_INTEGRATION_IMAGE }}"
-          docker push "${{ env.RHDS_INTEGRATION_IMAGE }}"
+          docker load -i "runtime-image/${{ env.MLFLOW_RUNTIME_ARTIFACT }}.tar"
+          docker tag "${{ env.MLFLOW_RUNTIME_IMAGE }}" "${{ env.INTEGRATION_MLFLOW_IMAGE }}"
+          docker push "${{ env.INTEGRATION_MLFLOW_IMAGE }}"
 
       - name: Deploy MLflow
         id: deploy-mlflow
@@ -286,7 +292,7 @@ jobs:
         with:
           python_version: ${{ matrix.python_version }}
           namespace: ${{ env.NAMESPACE }}
-          mlflow_image: ${{ steps.resolve-mlflow-image.outputs.image }}
+          mlflow_image: ${{ env.INTEGRATION_MLFLOW_IMAGE }}
           mlflow_operator_image: ${{ env.INTEGRATION_OPERATOR_IMAGE }}
           backend_store: ${{ inputs.backend_store || matrix.backend_store }}
           artifact_storage: ${{ inputs.artifact_storage || matrix.artifact_storage }}
@@ -514,7 +520,7 @@ jobs:
 
   verify-mlflow-version-alignment:
     if: ${{ github.event_name != 'workflow_dispatch' && ((github.repository_owner == 'red-hat-data-services' && github.event_name != 'schedule') || (github.repository_owner == 'opendatahub-io' && (github.event_name == 'schedule' || github.ref_name == 'main' || github.base_ref == 'main'))) }}
-    needs: build-rhds-mlflow-image
+    needs: build-mlflow-runtime-image
     permissions:
       contents: read
     runs-on: ubuntu-latest
@@ -524,24 +530,24 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Download RHDS MLflow image artifact
+      - name: Download MLflow runtime image artifact
         if: ${{ github.repository_owner == 'red-hat-data-services' }}
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
-          name: ${{ env.RHDS_RUNTIME_ARTIFACT }}
+          name: ${{ env.MLFLOW_RUNTIME_ARTIFACT }}
           path: runtime-image
 
-      - name: Load RHDS MLflow image
+      - name: Load built MLflow image
         if: ${{ github.repository_owner == 'red-hat-data-services' }}
         shell: bash
-        run: docker load -i "runtime-image/${{ env.RHDS_RUNTIME_ARTIFACT }}.tar"
+        run: docker load -i "runtime-image/${{ env.MLFLOW_RUNTIME_ARTIFACT }}.tar"
 
-      - name: Verify RHDS built MLflow image version alignment
+      - name: Verify built MLflow image version alignment
         if: ${{ github.repository_owner == 'red-hat-data-services' }}
         shell: bash
         run: |
           python3 test/scripts/verify_mlflow_version_alignment.py \
-            --mlflow-image "${{ env.RHDS_RUNTIME_IMAGE }}"
+            --mlflow-image "${{ env.MLFLOW_RUNTIME_IMAGE }}"
 
       - name: Verify default MLflow image version alignment
         if: ${{ github.repository_owner == 'opendatahub-io' }}
@@ -553,7 +559,7 @@ jobs:
 
   upgrade-tests:
     if: ${{ github.event_name != 'workflow_dispatch' && github.event_name != 'schedule' }}
-    needs: [build-rhds-mlflow-image, build-mlflow-operator-image]
+    needs: [build-mlflow-runtime-image, build-mlflow-operator-image]
     name: Run upgrade path (${{ matrix.backend_store }})
     runs-on: ubuntu-latest
     permissions:
@@ -607,25 +613,22 @@ jobs:
           docker tag "${{ env.OPERATOR_RUNTIME_IMAGE }}" "${{ env.UPGRADE_OPERATOR_IMAGE }}"
           kind load docker-image "${{ env.UPGRADE_OPERATOR_IMAGE }}" --name ${{ env.UPGRADE_CLUSTER_NAME }}
 
-      - name: Download RHDS MLflow image artifact
-        if: ${{ github.repository_owner == 'red-hat-data-services' }}
+      - name: Download MLflow runtime image artifact
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
-          name: ${{ env.RHDS_RUNTIME_ARTIFACT }}
+          name: ${{ env.MLFLOW_RUNTIME_ARTIFACT }}
           path: runtime-image
 
-      - name: Load RHDS current MLflow image into Kind cluster
-        if: ${{ github.repository_owner == 'red-hat-data-services' }}
+      - name: Load built MLflow image into Kind cluster
         shell: bash
         run: |
-          docker load -i "runtime-image/${{ env.RHDS_RUNTIME_ARTIFACT }}.tar"
-          kind load docker-image "${{ env.RHDS_RUNTIME_IMAGE }}" --name ${{ env.UPGRADE_CLUSTER_NAME }}
+          docker load -i "runtime-image/${{ env.MLFLOW_RUNTIME_ARTIFACT }}.tar"
+          kind load docker-image "${{ env.MLFLOW_RUNTIME_IMAGE }}" --name ${{ env.UPGRADE_CLUSTER_NAME }}
 
-      - name: Point RHDS operator defaults at the built MLflow image
-        if: ${{ github.repository_owner == 'red-hat-data-services' }}
+      - name: Point operator defaults at the built MLflow image
         shell: bash
         run: |
-          sed -i "s#^MLFLOW_IMAGE=.*#MLFLOW_IMAGE=${{ env.RHDS_RUNTIME_IMAGE }}#" config/overlays/kind/params.env
+          sed -i "s#^MLFLOW_IMAGE=.*#MLFLOW_IMAGE=${{ env.MLFLOW_RUNTIME_IMAGE }}#" config/overlays/kind/params.env
           grep "^MLFLOW_IMAGE=" config/overlays/kind/params.env
 
       - name: Build MLflow 3.10.0-compatible seed operator image
