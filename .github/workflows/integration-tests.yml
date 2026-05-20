@@ -138,6 +138,25 @@ jobs:
             echo "path=mlflow-upstream/Dockerfile" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Patch ODH Konflux runtime base image
+        if: ${{ steps.configure.outputs.built == 'true' && steps.configure.outputs.source_repository == 'opendatahub-io/mlflow' && steps.resolve-mlflow-dockerfile.outputs.path == 'mlflow-upstream/Dockerfile.konflux' }}
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("mlflow-upstream/Dockerfile.konflux")
+          before = "FROM registry.access.redhat.com/ubi9/ubi-minimal:9.7"
+          after = "FROM registry.access.redhat.com/ubi9/ubi-minimal:9.8"
+
+          text = path.read_text()
+          if before not in text:
+              raise SystemExit(f"expected to find {before!r} in {path}")
+
+          path.write_text(text.replace(before, after, 1))
+          print(f"patched {path}: {before} -> {after}")
+          PY
+
       - name: Build MLflow image archive
         if: ${{ steps.configure.outputs.built == 'true' }}
         shell: bash
