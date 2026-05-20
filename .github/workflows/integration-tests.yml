@@ -134,11 +134,21 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Resolve operator Dockerfile
+        id: resolve-operator-dockerfile
+        shell: bash
+        run: |
+          if [[ -f Dockerfile.konflux ]]; then
+            echo "path=Dockerfile.konflux" >> "$GITHUB_OUTPUT"
+          else
+            echo "path=Dockerfile" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Build MLflow operator image archive
         shell: bash
         run: |
           mkdir -p operator-image
-          docker build -t "${{ env.OPERATOR_RUNTIME_IMAGE }}" .
+          docker build -f "${{ steps.resolve-operator-dockerfile.outputs.path }}" -t "${{ env.OPERATOR_RUNTIME_IMAGE }}" .
           docker save -o "operator-image/${{ env.OPERATOR_RUNTIME_ARTIFACT }}.tar" "${{ env.OPERATOR_RUNTIME_IMAGE }}"
 
       - name: Upload MLflow operator image artifact
@@ -559,6 +569,16 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Resolve operator Dockerfile
+        id: resolve-operator-dockerfile
+        shell: bash
+        run: |
+          if [[ -f Dockerfile.konflux ]]; then
+            echo "path=Dockerfile.konflux" >> "$GITHUB_OUTPUT"
+          else
+            echo "path=Dockerfile" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Setup Go
         uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
@@ -612,7 +632,11 @@ jobs:
         env:
           SEED_OPERATOR_IMG: "localhost/mlflow-operator-upgrade-seed:v0.0.1"
         run: |
-          make docker-build IMG="${SEED_OPERATOR_IMG}" SUPPORTED_MLFLOW_VERSION_OVERRIDE=3.10.0
+          docker build \
+            --build-arg SUPPORTED_MLFLOW_VERSION_OVERRIDE=3.10.0 \
+            -f "${{ steps.resolve-operator-dockerfile.outputs.path }}" \
+            -t "${SEED_OPERATOR_IMG}" \
+            .
 
       - name: Load seed operator image into Kind cluster
         env:
