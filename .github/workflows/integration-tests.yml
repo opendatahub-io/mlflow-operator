@@ -1,4 +1,4 @@
-name: MLflow Runtime Tests
+name: MLflow Runtime Integration Tests
 
 env:
   NAMESPACE: 'opendatahub'
@@ -21,7 +21,8 @@ env:
   INTEGRATION_OPERATOR_IMAGE: 'kind-registry:5000/mlflow-operator:latest'
   UPGRADE_OPERATOR_IMAGE: 'localhost/mlflow-operator-upgrade:v0.0.1'
   # MLflow ODH release 1.1 image with MLflow v3.10.1+rhaiv.3.
-  MLFLOW_SEED_IMAGE: 'quay.io/opendatahub/mlflow@sha256:ad51bbd7f770491da88dc1db3b3c84f7471d25c48026ecb385180b63b18f4c64'
+  MLFLOW_SEED_SOURCE_IMAGE: 'quay.io/opendatahub/mlflow@sha256:ad51bbd7f770491da88dc1db3b3c84f7471d25c48026ecb385180b63b18f4c64'
+  MLFLOW_SEED_IMAGE: 'localhost/mlflow-seed:3.10.1'
 
 on:
   workflow_dispatch:
@@ -671,7 +672,11 @@ jobs:
         run: kind load docker-image "${SEED_OPERATOR_IMG}" --name ${{ env.UPGRADE_CLUSTER_NAME }}
 
       - name: Pull MLflow 3.10.1 seed image
-        run: docker pull "${{ env.MLFLOW_SEED_IMAGE }}"
+        run: docker pull "${{ env.MLFLOW_SEED_SOURCE_IMAGE }}"
+
+      - name: Retag MLflow 3.10.1 seed image locally
+        # kind load + containerd are more reliable with a local tag than a digest-only ref.
+        run: docker tag "${{ env.MLFLOW_SEED_SOURCE_IMAGE }}" "${{ env.MLFLOW_SEED_IMAGE }}"
 
       - name: Load MLflow 3.10.1 seed image into Kind cluster
         run: kind load docker-image "${{ env.MLFLOW_SEED_IMAGE }}" --name ${{ env.UPGRADE_CLUSTER_NAME }}
