@@ -80,7 +80,8 @@ test: manifests generate fmt vet setup-envtest ## Run tests.
 # E2E test configuration
 KIND_CLUSTER ?= mlflow
 E2E_IMG ?= localhost/mlflow-operator:v0.0.1
-MLFLOW_SEED_IMAGE ?= localhost/mlflow-seed:3.10.0
+# MLflow ODH release 1.1 image with MLflow v3.10.1+rhaiv.3.
+MLFLOW_SEED_IMAGE ?= quay.io/opendatahub/mlflow@sha256:ad51bbd7f770491da88dc1db3b3c84f7471d25c48026ecb385180b63b18f4c64
 
 .PHONY: setup-kind-cluster
 setup-kind-cluster: ## Create a Kind cluster for e2e tests if it doesn't exist

@@ -46,7 +46,11 @@ import (
 )
 
 const (
-	upgradeSeedVersion       = "3.10.0"
+	// The pinned ODH release 1.1 seed image reports MLflow 3.10.1+rhaiv.3,
+	// while the upgrade flow normalizes status.version to upstream 3.10.1.
+	upgradeSeedImage = "quay.io/opendatahub/mlflow@" +
+		"sha256:ad51bbd7f770491da88dc1db3b3c84f7471d25c48026ecb385180b63b18f4c64"
+	upgradeSeedVersion       = "3.10.1"
 	upgradeVerifyJob         = "mlflow-upgrade-verify"
 	upgradePVCName           = "mlflow-pvc"
 	controllerDeploymentName = "mlflow-operator-controller-manager"
@@ -57,7 +61,7 @@ const (
 var (
 	upgradeSeedImageFlag = flag.String(
 		"upgrade-seed-image",
-		"localhost/mlflow-seed:3.10.0",
+		upgradeSeedImage,
 		"MLflow image used to seed the upgrade test database",
 	)
 )
@@ -94,12 +98,12 @@ var _ = Describe("Upgrade", Ordered, Label("upgrade"), func() {
 		}
 	})
 
-	It("should upgrade a running MLflow 3.10.0 deployment to the current supported version", func() {
+	It("should upgrade a running MLflow 3.10.1 deployment to the current supported version", func() {
 		seedImage := *upgradeSeedImageFlag
 		if seedImage == "" {
-			seedImage = "localhost/mlflow-seed:3.10.0"
+			seedImage = upgradeSeedImage
 		}
-		By("verifying the seeded 3.10.0 deployment is running before the upgrade starts")
+		By("verifying the seeded 3.10.1 deployment is running before the upgrade starts")
 		mlflow := &mlflowv1.MLflow{}
 		Eventually(func(g Gomega) {
 			err := k8sClient.Get(ctx, types.NamespacedName{Name: "mlflow"}, mlflow)
@@ -129,7 +133,7 @@ var _ = Describe("Upgrade", Ordered, Label("upgrade"), func() {
 		scaledToZeroCh, scaledToZeroErrCh := watchDeploymentScaledToZero(watchCtx, clientset, "mlflow")
 		upgradeStartedAt := time.Now()
 
-		By("removing the explicit 3.10.0 image override while the operator is stopped")
+		By("removing the explicit 3.10.1 image override while the operator is stopped")
 		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: "mlflow"}, mlflow)).To(Succeed())
 		before := mlflow.DeepCopy()
 		mlflow.Spec.Image = nil

@@ -20,8 +20,8 @@ env:
   OPERATOR_RUNTIME_IMAGE: 'localhost/mlflow-operator:ci'
   INTEGRATION_OPERATOR_IMAGE: 'kind-registry:5000/mlflow-operator:latest'
   UPGRADE_OPERATOR_IMAGE: 'localhost/mlflow-operator-upgrade:v0.0.1'
-  MLFLOW_SEED_IMAGE: 'localhost/mlflow-seed:3.10.0'
-  MLFLOW_SEED_BASE_IMAGE: 'quay.io/opendatahub/mlflow:odh-stable'
+  # MLflow ODH release 1.1 image with MLflow v3.10.1+rhaiv.3.
+  MLFLOW_SEED_IMAGE: 'quay.io/opendatahub/mlflow@sha256:ad51bbd7f770491da88dc1db3b3c84f7471d25c48026ecb385180b63b18f4c64'
 
 on:
   workflow_dispatch:
@@ -137,25 +137,6 @@ jobs:
           else
             echo "path=mlflow-upstream/Dockerfile" >> "$GITHUB_OUTPUT"
           fi
-
-      - name: Patch ODH Konflux runtime base image
-        if: ${{ steps.configure.outputs.built == 'true' && steps.configure.outputs.source_repository == 'opendatahub-io/mlflow' && steps.resolve-mlflow-dockerfile.outputs.path == 'mlflow-upstream/Dockerfile.konflux' }}
-        shell: bash
-        run: |
-          python3 - <<'PY'
-          from pathlib import Path
-
-          path = Path("mlflow-upstream/Dockerfile.konflux")
-          before = "FROM registry.access.redhat.com/ubi9/ubi-minimal:9.7"
-          after = "FROM registry.access.redhat.com/ubi9/ubi-minimal:9.8"
-
-          text = path.read_text()
-          if before not in text:
-              raise SystemExit(f"expected to find {before!r} in {path}")
-
-          path.write_text(text.replace(before, after, 1))
-          print(f"patched {path}: {before} -> {after}")
-          PY
 
       - name: Build MLflow image archive
         if: ${{ steps.configure.outputs.built == 'true' }}
@@ -666,12 +647,12 @@ jobs:
           sed -i "s#^MLFLOW_IMAGE=.*#MLFLOW_IMAGE=${{ env.MLFLOW_RUNTIME_IMAGE }}#" config/overlays/kind/params.env
           grep "^MLFLOW_IMAGE=" config/overlays/kind/params.env
 
-      - name: Build MLflow 3.10.0-compatible seed operator image
+      - name: Build MLflow 3.10.1-compatible seed operator image
         env:
           SEED_OPERATOR_IMG: "localhost/mlflow-operator-upgrade-seed:v0.0.1"
         run: |
           docker build \
-            --build-arg SUPPORTED_MLFLOW_VERSION_OVERRIDE=3.10.0 \
+            --build-arg SUPPORTED_MLFLOW_VERSION_OVERRIDE=3.10.1 \
             -f "${{ steps.resolve-operator-dockerfile.outputs.path }}" \
             -t "${SEED_OPERATOR_IMG}" \
             .
@@ -681,16 +662,16 @@ jobs:
           SEED_OPERATOR_IMG: "localhost/mlflow-operator-upgrade-seed:v0.0.1"
         run: kind load docker-image "${SEED_OPERATOR_IMG}" --name ${{ env.UPGRADE_CLUSTER_NAME }}
 
-      - name: Build MLflow 3.10.0 seed image
-        run: docker build --pull --build-arg BASE_IMAGE=${{ env.MLFLOW_SEED_BASE_IMAGE }} -f test/e2e/images/mlflow-3.10.0.Dockerfile -t ${{ env.MLFLOW_SEED_IMAGE }} .
+      - name: Pull MLflow 3.10.1 seed image
+        run: docker pull "${{ env.MLFLOW_SEED_IMAGE }}"
 
-      - name: Load MLflow 3.10.0 seed image into Kind cluster
-        run: kind load docker-image ${{ env.MLFLOW_SEED_IMAGE }} --name ${{ env.UPGRADE_CLUSTER_NAME }}
+      - name: Load MLflow 3.10.1 seed image into Kind cluster
+        run: kind load docker-image "${{ env.MLFLOW_SEED_IMAGE }}" --name ${{ env.UPGRADE_CLUSTER_NAME }}
 
       - name: Install deploy helper dependencies
         run: python3 -m pip install pyyaml kubernetes
 
-      - name: Deploy seeded MLflow 3.10.0 instance
+      - name: Deploy seeded MLflow 3.10.1 instance
         shell: bash
         env:
           SEED_OPERATOR_IMG: "localhost/mlflow-operator-upgrade-seed:v0.0.1"
@@ -707,10 +688,10 @@ jobs:
 
           python3 .github/actions/deploy/deploy.py "${DEPLOY_ARGS[@]}"
 
-      - name: Wait for seeded MLflow 3.10.0 migration to complete
+      - name: Wait for seeded MLflow 3.10.1 migration to complete
         shell: bash
         run: |
-          kubectl wait --for=jsonpath='{.status.version}'=3.10.0 mlflow/mlflow --timeout=300s
+          kubectl wait --for=jsonpath='{.status.version}'=3.10.1 mlflow/mlflow --timeout=300s
 
       - name: Run upgrade e2e tests
         run: make test-e2e-upgrade E2E_IMG=${{ env.UPGRADE_OPERATOR_IMAGE }} MLFLOW_SEED_IMAGE=${{ env.MLFLOW_SEED_IMAGE }}
