@@ -75,6 +75,7 @@ on:
 
 jobs:
   build-mlflow-runtime-image:
+    if: ${{ github.event_name != 'schedule' }}
     permissions:
       contents: read
     name: Build MLflow runtime image
@@ -534,8 +535,8 @@ jobs:
         shell: bash
         run: exit 1
 
-  verify-mlflow-version-alignment:
-    if: ${{ github.event_name != 'workflow_dispatch' && ((github.repository_owner == 'red-hat-data-services' && github.event_name != 'schedule') || (github.repository_owner == 'opendatahub-io' && (github.event_name == 'schedule' || github.ref_name == 'main' || github.base_ref == 'main'))) }}
+  verify-built-mlflow-version-alignment:
+    if: ${{ github.event_name != 'workflow_dispatch' && github.repository_owner == 'red-hat-data-services' && github.event_name != 'schedule' }}
     needs: build-mlflow-runtime-image
     permissions:
       contents: read
@@ -547,26 +548,33 @@ jobs:
           persist-credentials: false
 
       - name: Download MLflow runtime image artifact
-        if: ${{ github.repository_owner == 'red-hat-data-services' }}
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: ${{ env.MLFLOW_RUNTIME_ARTIFACT }}
           path: runtime-image
 
       - name: Load built MLflow image
-        if: ${{ github.repository_owner == 'red-hat-data-services' }}
         shell: bash
         run: docker load -i "runtime-image/${{ env.MLFLOW_RUNTIME_ARTIFACT }}.tar"
 
       - name: Verify built MLflow image version alignment
-        if: ${{ github.repository_owner == 'red-hat-data-services' }}
         shell: bash
         run: |
           python3 test/scripts/verify_mlflow_version_alignment.py \
             --mlflow-image "${{ env.MLFLOW_RUNTIME_IMAGE }}"
 
+  verify-default-mlflow-version-alignment:
+    if: ${{ github.event_name != 'workflow_dispatch' && github.repository_owner == 'opendatahub-io' && (github.event_name == 'schedule' || github.ref_name == 'main' || github.base_ref == 'main') }}
+    permissions:
+      contents: read
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          persist-credentials: false
+
       - name: Verify default MLflow image version alignment
-        if: ${{ github.repository_owner == 'opendatahub-io' }}
         shell: bash
         run: |
           python3 test/scripts/verify_mlflow_version_alignment.py \
