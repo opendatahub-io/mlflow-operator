@@ -361,6 +361,14 @@ See the [config/samples](./config/samples/) directory for complete examples:
 - `mlflow_v1_mlflow_remote_storage.yaml` - Remote PostgreSQL + S3 storage with horizontal scaling
 - `mlflow_v1_mlflowconfig.yaml` - Namespace-scoped artifact storage override using the upstream `MLflowConfig` CRD
 
+## Shift-left Upgrade Validation
+
+This repository keeps a repo-local operator-chaos knowledge model at `chaos/knowledge/mlflow.yaml`. The accompanying `.github/workflows/operator-chaos.yml` pull request workflow validates that knowledge file, runs `operator-chaos preflight --local`, diffs the base and PR knowledge models, compares the checked-in MLflow CRD schema with `operator-chaos diff-crds`, and previews upgrade scenarios with `operator-chaos simulate-upgrade --dry-run`.
+
+This workflow is intentionally offline and asset-focused. It writes a job summary for fast feedback on the PR branch, and the trusted `.github/workflows/operator-chaos-pr-comment.yml` workflow recomputes the same offline analysis from the PR head and base SHAs before updating a sticky PR comment so findings are visible without opening the raw Actions logs. Update `chaos/knowledge/mlflow.yaml` whenever the stable RHOAI controller topology, default chart-managed MLflow resources, or checked-in MLflow CRD shape changes in ways that should affect upgrade modeling.
+
+This does not replace the existing runtime upgrade coverage. Continue to use `make test-e2e-upgrade` and the `upgrade-tests` job in `.github/workflows/integration-tests.yml` for live migration validation.
+
 ## Troubleshooting
 
 ### Common Issues

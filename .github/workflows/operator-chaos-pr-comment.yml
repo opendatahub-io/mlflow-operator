@@ -1,0 +1,154 @@
+name: Operator Chaos PR Comment
+
+on:
+  workflow_run:
+    workflows:
+      - Operator Chaos
+    types:
+      - completed
+
+# This follow-up workflow exists because fork-based pull_request runs use a
+# read-only token and cannot update PR comments in the base repository.
+# Running on workflow_run lets us comment with base-repo permissions while
+# recomputing the analysis from the PR head/base SHAs in trusted workflow code.
+permissions:
+  contents: read
+  issues: write
+  pull-requests: read
+
+jobs:
+  update-pr-comment:
+    name: Update PR Comment
+    if: ${{ github.event.workflow_run.event == 'pull_request' }}
+    runs-on: ubuntu-latest
+    concurrency:
+      group: operator-chaos-pr-comment-${{ github.event.workflow_run.pull_requests[0].number }}
+      cancel-in-progress: true
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          persist-credentials: false
+
+      - name: Resolve PR metadata
+        id: pr_meta
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.workflow_run.pull_requests[0].number }}
+        run: |
+          set -euo pipefail
+          # shellcheck disable=SC2016
+          response=$(gh api graphql \
+            -f owner="${GITHUB_REPOSITORY_OWNER}" \
+            -f repo="${GITHUB_REPOSITORY#*/}" \
+            -F pr="${PR_NUMBER}" \
+            -f query='query($owner: String!, $repo: String!, $pr: Int!) {
+              repository(owner: $owner, name: $repo) {
+                pullRequest(number: $pr) {
+                  baseRefOid
+                  headRefOid
+                  headRepository {
+                    name
+                    owner {
+                      login
+                    }
+                  }
+                }
+              }
+            }')
+
+          head_sha=$(jq -r '.data.repository.pullRequest.headRefOid' <<<"${response}")
+          base_sha=$(jq -r '.data.repository.pullRequest.baseRefOid' <<<"${response}")
+          head_owner=$(jq -r '.data.repository.pullRequest.headRepository.owner.login' <<<"${response}")
+          head_repo=$(jq -r '.data.repository.pullRequest.headRepository.name' <<<"${response}")
+
+          {
+            printf 'head_sha=%s\n' "${head_sha}"
+            printf 'base_sha=%s\n' "${base_sha}"
+            printf 'head_repository=%s/%s\n' "${head_owner}" "${head_repo}"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Checkout PR head contents
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          repository: ${{ steps.pr_meta.outputs.head_repository }}
+          ref: ${{ steps.pr_meta.outputs.head_sha }}
+          path: pr-head
+          persist-credentials: false
+
+      - name: Checkout base branch assets
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          ref: ${{ steps.pr_meta.outputs.base_sha }}
+          path: base-branch
+          persist-credentials: false
+          sparse-checkout: |
+            chaos/knowledge
+            config/crd/bases/mlflow.opendatahub.io_mlflows.yaml
+          sparse-checkout-cone-mode: false
+
+      - name: Set up Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+
+      - name: Install operator-chaos
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "${RUNNER_TEMP}/bin"
+          GOBIN="${RUNNER_TEMP}/bin" go install "github.com/opendatahub-io/operator-chaos/cmd/operator-chaos@9e6ac9668b9aaca2f0f2ddf169867862b7925b80"
+          echo "${RUNNER_TEMP}/bin" >> "${GITHUB_PATH}"
+
+      - name: Run trusted operator-chaos checks
+        id: checks
+        env:
+          OPERATOR_CHAOS_OUTPUT_MODE: compact
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash .github/scripts/operator-chaos-run-checks.sh \
+            "${RUNNER_TEMP}/operator-chaos" \
+            "base-branch/chaos/knowledge" \
+            "pr-head/chaos/knowledge" \
+            "base-branch/config/crd/bases/mlflow.opendatahub.io_mlflows.yaml" \
+            "pr-head/config/crd/bases/mlflow.opendatahub.io_mlflows.yaml"
+
+      - name: Write operator-chaos summary
+        if: always()
+        shell: bash
+        env:
+          OPERATOR_CHAOS_SUMMARY_INCLUDE_DETAILS: "false"
+        run: |
+          set -euo pipefail
+          source "${RUNNER_TEMP}/operator-chaos/outcomes.env"
+          export VALIDATE_OUTCOME PREFLIGHT_OUTCOME KNOWLEDGE_DIFF_OUTCOME CRD_DIFF_OUTCOME SIMULATE_OUTCOME
+          bash .github/scripts/operator-chaos-summary.sh "${RUNNER_TEMP}/operator-chaos" > "${RUNNER_TEMP}/operator-chaos-summary.md"
+          tee -a "${GITHUB_STEP_SUMMARY}" < "${RUNNER_TEMP}/operator-chaos-summary.md"
+
+      - name: Update PR comment
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.workflow_run.pull_requests[0].number }}
+        run: |
+          set -euo pipefail
+          bash .github/scripts/operator-chaos-pr-comment.sh \
+            "${RUNNER_TEMP}/operator-chaos-summary.md"
+
+      - name: Fail on operator-chaos errors
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          source "${RUNNER_TEMP}/operator-chaos/outcomes.env"
+          for outcome in \
+            "${VALIDATE_OUTCOME}" \
+            "${PREFLIGHT_OUTCOME}" \
+            "${KNOWLEDGE_DIFF_OUTCOME}" \
+            "${CRD_DIFF_OUTCOME}" \
+            "${SIMULATE_OUTCOME}"; do
+            if [[ "${outcome}" == "failure" ]]; then
+              echo "operator-chaos trusted comment workflow encountered a command error."
+              exit 1
+            fi
+          done
