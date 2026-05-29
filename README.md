@@ -361,6 +361,22 @@ See the [config/samples](./config/samples/) directory for complete examples:
 - `mlflow_v1_mlflow_remote_storage.yaml` - Remote PostgreSQL + S3 storage with horizontal scaling
 - `mlflow_v1_mlflowconfig.yaml` - Namespace-scoped artifact storage override using the upstream `MLflowConfig` CRD
 
+## Testing
+
+The repository has two main MLflow test layers:
+
+- Go end-to-end coverage in `test/e2e/`, including the operator-managed upgrade flow
+- Python integration coverage in `mlflow-tests/`
+
+The `mlflow-tests` suite now also includes opt-in upgrade-phase pytest modules under:
+
+- `mlflow-tests/tests/pre_upgrade/`
+- `mlflow-tests/tests/post_upgrade/`
+
+These versioned files are named by minimum supported MLflow `x.y`. For example, `test_3_10.py` runs only when the selected version threshold is at least `3.10`: pre-upgrade selection compares against the supported MLflow version derived from repo metadata, while post-upgrade selection compares against the pre-upgrade version stored in the namespace-scoped ConfigMap `mlflow-upgrade-test-version` in the static upgrade workspace namespace.
+
+For local harness-driven runs, `bash mlflow-tests/images/test-run.sh` derives `MLFLOW_TEST_SUPPORTED_VERSION` automatically when it is not already set. GitHub Actions also includes a dedicated marker-coverage job inside `.github/workflows/integration-tests.yml` that exercises the `pre_upgrade` and `post_upgrade` markers sequentially against the same deployment without invoking the real upgrade flow.
+
 ## Troubleshooting
 
 ### Common Issues

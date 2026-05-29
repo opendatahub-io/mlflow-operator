@@ -35,6 +35,22 @@ from .trace_actions import (
 from .workspace_actions import (
     action_list_workspaces,
 )
+from .upgrade_actions import (
+    make_upgrade_state_action,
+    action_write_pre_upgrade_version_configmap,
+    action_read_pre_upgrade_version_configmap,
+    action_ensure_upgrade_experiment,
+    action_start_upgrade_run,
+    action_log_upgrade_run_params,
+    action_log_upgrade_run_metrics,
+    action_log_upgrade_text_artifact,
+    action_create_upgrade_trace,
+    action_collect_upgrade_trace_observations,
+    action_ensure_upgrade_registered_model,
+    action_create_upgrade_model_version,
+    action_ensure_upgrade_prompt,
+    action_create_upgrade_prompt_version,
+)
 
 __all__ = [
     "action_get_experiment",
@@ -58,4 +74,18 @@ __all__ = [
     "action_wait_for_mlflowconfig_active",
     "action_post_trace_v3_direct",
     "action_list_workspaces",
+    "make_upgrade_state_action",
+    "action_write_pre_upgrade_version_configmap",
+    "action_read_pre_upgrade_version_configmap",
+    "action_ensure_upgrade_experiment",
+    "action_start_upgrade_run",
+    "action_log_upgrade_run_params",
+    "action_log_upgrade_run_metrics",
+    "action_log_upgrade_text_artifact",
+    "action_create_upgrade_trace",
+    "action_collect_upgrade_trace_observations",
+    "action_ensure_upgrade_registered_model",
+    "action_create_upgrade_model_version",
+    "action_ensure_upgrade_prompt",
+    "action_create_upgrade_prompt_version",
 ]

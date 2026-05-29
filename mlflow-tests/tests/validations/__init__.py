@@ -37,6 +37,13 @@ from .validation_utils import (
 from .workspace_validations import (
     validate_workspaces_filtered,
 )
+from .upgrade_validations import (
+    validate_pre_upgrade_version_configmap,
+    validate_upgrade_experiment_runs,
+    validate_upgrade_trace_sessions,
+    validate_upgrade_registered_models,
+    validate_upgrade_prompts,
+)
 
 __all__ = [
     "validate_experiment_retrieved",
@@ -60,4 +67,9 @@ __all__ = [
     "validate_no_error",
     "validate_custom_artifact_location",
     "validate_workspaces_filtered",
+    "validate_pre_upgrade_version_configmap",
+    "validate_upgrade_experiment_runs",
+    "validate_upgrade_trace_sessions",
+    "validate_upgrade_registered_models",
+    "validate_upgrade_prompts",
 ]

@@ -33,6 +33,42 @@ IN_CLUSTER_MODE=false SKIP_DEPLOYMENT=true bash images/test-run.sh
 
 # Skip cleanup (leave the MLflow CR and role bindings in place after the run)
 IN_CLUSTER_MODE=false SKIP_CLEANUP=true bash images/test-run.sh
+
+# Leave the deployed MLflow CR and backing storage resources in place
+# after the run (PVC for sqlite/file, or PostgreSQL/SeaweedFS when used).
+IN_CLUSTER_MODE=false \
+SKIP_CLEANUP=true \
+KEEP_MLFLOW_DEPLOYMENT=true \
+bash images/test-run.sh -m pre_upgrade
+
+# Preserve a PostgreSQL-backed deployment for later inspection
+IN_CLUSTER_MODE=false \
+DB_TYPE=postgres \
+SKIP_CLEANUP=true \
+KEEP_MLFLOW_DEPLOYMENT=true \
+bash images/test-run.sh -m pre_upgrade
+
+# Reuse an existing preserved deployment for post-upgrade checks without
+# touching the reused MLflow CR or its RBAC. The harness still waits for the
+# MLflow CR's status.version to match the current supported MLflow version
+# before pytest starts.
+IN_CLUSTER_MODE=false \
+SKIP_DEPLOYMENT=true \
+bash images/test-run.sh -m post_upgrade
+
+# If you intentionally want the reused MLflow CR removed after the run:
+IN_CLUSTER_MODE=false \
+SKIP_DEPLOYMENT=true \
+CLEANUP_REUSED_MLFLOW=true \
+bash images/test-run.sh -m post_upgrade
+
+# If the earlier run also deployed PostgreSQL / SeaweedFS via this harness and
+# you intentionally want those self-deployed resources removed too:
+IN_CLUSTER_MODE=false \
+SKIP_DEPLOYMENT=true \
+CLEANUP_REUSED_MLFLOW=true \
+CLEANUP_REUSED_INFRASTRUCTURE=true \
+bash images/test-run.sh -m post_upgrade
 ```
 
 ## Running tests in-cluster (CI / container)
@@ -112,6 +148,9 @@ The script is configured entirely via environment variables. Variables can also 
 | `SKIP_OPERATOR` | `false` | Skip operator deployment only. |
 | `SKIP_INFRASTRUCTURE` | `false` | Skip PostgreSQL/SeaweedFS deployment. |
 | `SKIP_CLEANUP` | `false` | Leave resources in place after the run (useful for debugging). |
+| `KEEP_MLFLOW_DEPLOYMENT` | `false` | Preserve the deployed MLflow CR and backing resources on the cluster across subsequent runs until explicitly deleted. |
+| `CLEANUP_REUSED_MLFLOW` | `false` | When reusing an existing deployment with `SKIP_DEPLOYMENT=true`, also remove the reused MLflow CR and harness-managed RBAC at the end of the run. |
+| `CLEANUP_REUSED_INFRASTRUCTURE` | `false` | When reusing an existing deployment with `SKIP_DEPLOYMENT=true`, also remove self-deployed PostgreSQL/SeaweedFS infrastructure at the end of the run. |
 
 ### Other
 

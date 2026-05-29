@@ -93,6 +93,14 @@ Skip / control flags:
   SKIP_OPERATOR         true|false — skip operator deployment only (default: false)
   SKIP_INFRASTRUCTURE   true|false — skip PostgreSQL/SeaweedFS deployment (default: false)
   SKIP_CLEANUP          true|false — leave resources in place after the run (default: false)
+  KEEP_MLFLOW_DEPLOYMENT true|false — preserve the deployed MLflow CR between suite invocations
+                        and keep it available on the cluster for later runs (default: false)
+  CLEANUP_REUSED_MLFLOW true|false — when SKIP_DEPLOYMENT=true and
+                        SKIP_CLEANUP=false, also remove the reused MLflow CR and
+                        harness-managed RBAC (default: false)
+  CLEANUP_REUSED_INFRASTRUCTURE true|false — when SKIP_DEPLOYMENT=true and
+                        SKIP_CLEANUP=false, also remove self-deployed PostgreSQL /
+                        SeaweedFS infrastructure implied by the current env vars (default: false)
   FAIL_FAST             true|false — stop after the first backend suite failure (default: true)
                         Set to false to run all backends even if one fails.
 
@@ -101,6 +109,7 @@ Other:
   MLFLOW_SA_NAME        Service account name created by the operator (default: mlflow-sa)
   IN_CLUSTER_MODE       true|false — false enables port-forwarding for local runs (default: true)
   workspaces            Comma-separated workspace namespace list (default: two random names)
+  upgrade_workspace     Static workspace namespace for upgrade pytest phases
   TEST_RESULTS_DIR      Directory for JUnit XML output (default: /mlflow/results)
   DEPLOY_PY             Path to deploy.py (default: <repo>/.github/actions/deploy/deploy.py)
   ARTIFACT_BACKENDS     Comma-separated artifact storage backends to test in sequence (default: file,s3)
@@ -121,6 +130,82 @@ if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
 fi
 # Any positional arguments are forwarded verbatim to pytest (e.g. "-m smoke").
 PYTEST_ARGS=("$@")
+
+infer_requested_upgrade_phase() {
+    uv run --project "$UV_PROJECT_DIR" --no-sync python - "$REPO_ROOT/mlflow-tests" "$1" <<'PY'
+import sys
+
+sys.path.insert(0, sys.argv[1])
+
+from tests.mark_expression_utils import InvalidUpgradePhaseSelection, infer_requested_upgrade_phase
+
+try:
+    print(infer_requested_upgrade_phase(sys.argv[2]), end="")
+except InvalidUpgradePhaseSelection as exc:
+    print(str(exc), file=sys.stderr)
+    raise SystemExit(2)
+PY
+}
+
+INFERRED_UPGRADE_PHASE=""
+for ((i=0; i<${#PYTEST_ARGS[@]}; i++)); do
+    arg="${PYTEST_ARGS[$i]}"
+    mark_expr=""
+    if [[ "$arg" == -m=* ]]; then
+        mark_expr="${arg#-m=}"
+    elif [[ "$arg" == --markexpr=* ]]; then
+        mark_expr="${arg#--markexpr=}"
+    elif [ "$arg" = "-m" ] || [ "$arg" = "--markexpr" ]; then
+        next_index=$((i + 1))
+        if [ "$next_index" -lt "${#PYTEST_ARGS[@]}" ]; then
+            mark_expr="${PYTEST_ARGS[$next_index]}"
+            if ! INFERRED_UPGRADE_PHASE="$(infer_requested_upgrade_phase "$mark_expr")"; then
+                echo "ERROR: Invalid upgrade marker expression: $mark_expr" >&2
+                exit 1
+            fi
+        fi
+        continue
+    fi
+
+    if [ -n "$mark_expr" ]; then
+        if ! INFERRED_UPGRADE_PHASE="$(infer_requested_upgrade_phase "$mark_expr")"; then
+            echo "ERROR: Invalid upgrade marker expression: $mark_expr" >&2
+            exit 1
+        fi
+    fi
+done
+
+get_supported_mlflow_version_raw() {
+    python3 - "$REPO_ROOT/config/component_metadata.yaml" <<'PY'
+from pathlib import Path
+import re
+import sys
+
+text = Path(sys.argv[1]).read_text()
+match = re.search(r'(?ms)^[ \t]*-[ \t]*name:[ \t]*MLflow[ \t]*$.*?^[ \t]*version:[ \t]*v?([^\t\r\n ]+)', text)
+assert match, text
+print(match.group(1))
+PY
+}
+
+normalize_mlflow_version() {
+    SUPPORTED_MLFLOW_VERSION="$1" python3 - <<'PY'
+import os
+import re
+
+value = os.environ["SUPPORTED_MLFLOW_VERSION"]
+match = re.match(r"^[vV]?(\d+)\.(\d+)", value)
+assert match, value
+print(f"{int(match.group(1))}.{int(match.group(2))}")
+PY
+}
+
+if [ -z "${MLFLOW_TEST_SUPPORTED_VERSION:-}" ]; then
+    SUPPORTED_MLFLOW_VERSION="$(get_supported_mlflow_version_raw)"
+    export MLFLOW_TEST_SUPPORTED_VERSION="$(normalize_mlflow_version "$SUPPORTED_MLFLOW_VERSION")"
+fi
+
+SUPPORTED_MLFLOW_VERSION_RAW="${SUPPORTED_MLFLOW_VERSION_RAW:-$(get_supported_mlflow_version_raw)}"
 
 # ─── Defaults ─────────────────────────────────────────────────────────────────
 
@@ -148,8 +233,17 @@ SKIP_DEPLOYMENT="${SKIP_DEPLOYMENT:-false}"
 SKIP_OPERATOR="${SKIP_OPERATOR:-false}"
 SKIP_INFRASTRUCTURE="${SKIP_INFRASTRUCTURE:-false}"
 SKIP_CLEANUP="${SKIP_CLEANUP:-false}"
+KEEP_MLFLOW_DEPLOYMENT="${KEEP_MLFLOW_DEPLOYMENT:-false}"
+CLEANUP_REUSED_MLFLOW="${CLEANUP_REUSED_MLFLOW:-false}"
+CLEANUP_REUSED_INFRASTRUCTURE="${CLEANUP_REUSED_INFRASTRUCTURE:-false}"
+ALLOW_EMPTY_UPGRADE_TESTS="${ALLOW_EMPTY_UPGRADE_TESTS:-false}"
 FAIL_FAST="${FAIL_FAST:-true}"
 IN_CLUSTER_MODE="${IN_CLUSTER_MODE:-true}"
+
+if [ "$KEEP_MLFLOW_DEPLOYMENT" = "true" ] && [ "$SKIP_CLEANUP" != "true" ]; then
+    echo "ERROR: KEEP_MLFLOW_DEPLOYMENT=true requires SKIP_CLEANUP=true." >&2
+    exit 1
+fi
 
 # Suites to run.  Each entry is an artifact storage backend (file|s3); the script
 # deploys a fresh MLflow CR per suite, runs the full test suite, then tears it down.
@@ -214,60 +308,70 @@ API_BASE="https://${MLFLOW_NAME}.${NAMESPACE}.svc.cluster.local:8443"
 cleanup() {
     [ -n "$PF_PID" ] && kill -0 "$PF_PID" 2>/dev/null && kill "$PF_PID"
 
-    # Only clean up resources this run created. When SKIP_DEPLOYMENT=true the
-    # script was pointed at a pre-existing environment and must not disturb it.
-    if [ "$SKIP_DEPLOYMENT" != "true" ]; then
+    local should_cleanup_mlflow=false
+    local should_cleanup_infrastructure=false
+    if [ "$SKIP_DEPLOYMENT" != "true" ] || [ "$CLEANUP_REUSED_MLFLOW" = "true" ]; then
+        should_cleanup_mlflow=true
+    fi
+    if [ "$SKIP_INFRASTRUCTURE" != "true" ]; then
+        if [ "$SKIP_DEPLOYMENT" != "true" ] || [ "$CLEANUP_REUSED_INFRASTRUCTURE" = "true" ]; then
+            should_cleanup_infrastructure=true
+        fi
+    fi
+
+    # Only delete namespaces this run created; pre-existing namespaces are left intact.
+    for ws in $(echo "$_CREATED_WORKSPACES" | tr ',' ' '); do
+        ws=$(echo "$ws" | xargs); [ -z "$ws" ] && continue
+        kubectl delete namespace "$ws" --ignore-not-found 2>/dev/null || true
+    done
+
+    if [ "$should_cleanup_mlflow" = "true" ]; then
         for ws in $(echo "$WORKSPACE_LIST" | tr ',' ' '); do
             ws=$(echo "$ws" | xargs); [ -z "$ws" ] && continue
             kubectl delete rolebinding "mlflow-permissions-${MLFLOW_NAME}" -n "$ws" --ignore-not-found 2>/dev/null || true
-        done
-        # Only delete namespaces this run created; pre-existing namespaces are left intact.
-        for ws in $(echo "$_CREATED_WORKSPACES" | tr ',' ' '); do
-            ws=$(echo "$ws" | xargs); [ -z "$ws" ] && continue
-            kubectl delete namespace "$ws" --ignore-not-found 2>/dev/null || true
         done
         kubectl delete mlflow "$MLFLOW_NAME" -n "$NAMESPACE" --ignore-not-found 2>/dev/null || true
         kubectl delete rolebinding "mlflow-permissions-${MLFLOW_NAME}" -n "$NAMESPACE" --ignore-not-found 2>/dev/null || true
         kubectl delete clusterrolebinding "mlflow-auth-delegator-${MLFLOW_NAME}" --ignore-not-found 2>/dev/null || true
         kubectl delete clusterrolebinding "mlflow-config-view-${MLFLOW_NAME}" --ignore-not-found 2>/dev/null || true
         kubectl delete clusterrole "mlflow-config-reader-${MLFLOW_NAME}" --ignore-not-found 2>/dev/null || true
+    fi
 
-        if [ "$SKIP_INFRASTRUCTURE" != "true" ]; then
-            # Compute per-component overlay directories, accounting for TLS overlays.
-            local postgres_overlay seaweedfs_overlay
-            if [ "${POSTGRES_TLS:-false}" = "true" ]; then
-                [ "$INFRASTRUCTURE_PLATFORM" = "openshift" ] && postgres_overlay="openshift-tls" || postgres_overlay="tls"
-            else
-                postgres_overlay="$INFRASTRUCTURE_PLATFORM"
-            fi
-            if [ "${SEAWEEDFS_TLS:-false}" = "true" ]; then
-                [ "$INFRASTRUCTURE_PLATFORM" = "openshift" ] && seaweedfs_overlay="openshift-tls" || seaweedfs_overlay="tls"
-            else
-                seaweedfs_overlay="$INFRASTRUCTURE_PLATFORM"
-            fi
+    if [ "$should_cleanup_infrastructure" = "true" ]; then
+        # Compute per-component overlay directories, accounting for TLS overlays.
+        local postgres_overlay seaweedfs_overlay
+        if [ "${POSTGRES_TLS:-false}" = "true" ]; then
+            [ "$INFRASTRUCTURE_PLATFORM" = "openshift" ] && postgres_overlay="openshift-tls" || postgres_overlay="tls"
+        else
+            postgres_overlay="$INFRASTRUCTURE_PLATFORM"
+        fi
+        if [ "${SEAWEEDFS_TLS:-false}" = "true" ]; then
+            [ "$INFRASTRUCTURE_PLATFORM" = "openshift" ] && seaweedfs_overlay="openshift-tls" || seaweedfs_overlay="tls"
+        else
+            seaweedfs_overlay="$INFRASTRUCTURE_PLATFORM"
+        fi
 
-            echo "  Removing self-deployed infrastructure..."
-            kustomize build "$REPO_ROOT/config/postgres/$postgres_overlay" \
-                | kubectl delete --ignore-not-found -n "$NAMESPACE" -f - 2>/dev/null || true
-            # Only tear down SeaweedFS if the in-cluster s3 backend was used.
-            # externals3 uses an external S3 service that this run did not deploy.
-            if echo "$ARTIFACT_BACKENDS" | tr ',' '\n' | grep -qxF 's3'; then
-                export APPLICATION_CRD_ID=mlflow-pipelines \
-                       PROFILE_NAMESPACE_LABEL=mlflow-profile \
-                       S3_BUCKET="${BUCKET:-mlpipeline}"
-                kustomize build "$REPO_ROOT/config/seaweedfs/$seaweedfs_overlay" \
-                    | envsubst '$NAMESPACE,$APPLICATION_CRD_ID,$PROFILE_NAMESPACE_LABEL,$S3_BUCKET' \
-                    | kubectl delete --ignore-not-found -f - 2>/dev/null || true
-            fi
+        echo "  Removing self-deployed infrastructure..."
+        kustomize build "$REPO_ROOT/config/postgres/$postgres_overlay" \
+            | kubectl delete --ignore-not-found -n "$NAMESPACE" -f - 2>/dev/null || true
+        # Only tear down SeaweedFS if the in-cluster s3 backend was used.
+        # externals3 uses an external S3 service that this run did not deploy.
+        if echo "$ARTIFACT_BACKENDS" | tr ',' '\n' | grep -qxF 's3'; then
+            export APPLICATION_CRD_ID=mlflow-pipelines \
+                   PROFILE_NAMESPACE_LABEL=mlflow-profile \
+                   S3_BUCKET="${BUCKET:-mlpipeline}"
+            kustomize build "$REPO_ROOT/config/seaweedfs/$seaweedfs_overlay" \
+                | envsubst '$NAMESPACE,$APPLICATION_CRD_ID,$PROFILE_NAMESPACE_LABEL,$S3_BUCKET' \
+                | kubectl delete --ignore-not-found -f - 2>/dev/null || true
+        fi
 
-            # Clean up TLS resources (cert Secrets, CA bundle ConfigMap, DSCI restore)
-            # after infrastructure is torn down to avoid noisy pod errors from missing secrets.
-            if [ "${POSTGRES_TLS:-false}" = "true" ] || [ "${SEAWEEDFS_TLS:-false}" = "true" ]; then
-                local _tls_args=(--namespace "$NAMESPACE")
-                [ "${POSTGRES_TLS:-false}"  = "true" ] && _tls_args+=(--postgres-tls)
-                [ "${SEAWEEDFS_TLS:-false}" = "true" ] && _tls_args+=(--seaweedfs-tls)
-                uv run python3 "$DEPLOY_PY" --cleanup-tls "${_tls_args[@]}" 2>/dev/null || true
-            fi
+        # Clean up TLS resources (cert Secrets, CA bundle ConfigMap, DSCI restore)
+        # after infrastructure is torn down to avoid noisy pod errors from missing secrets.
+        if [ "${POSTGRES_TLS:-false}" = "true" ] || [ "${SEAWEEDFS_TLS:-false}" = "true" ]; then
+            local _tls_args=(--namespace "$NAMESPACE")
+            [ "${POSTGRES_TLS:-false}"  = "true" ] && _tls_args+=(--postgres-tls)
+            [ "${SEAWEEDFS_TLS:-false}" = "true" ] && _tls_args+=(--seaweedfs-tls)
+            uv run python3 "$DEPLOY_PY" --cleanup-tls "${_tls_args[@]}" 2>/dev/null || true
         fi
     fi
 }
@@ -455,7 +559,10 @@ run_suite() {
         _suite_teardown_done=true
         [ -n "$PF_PID" ] && kill -0 "$PF_PID" 2>/dev/null && kill "$PF_PID" && PF_PID=""
         # --wait ensures finalizers have completed before the next suite's deploy.py apply.
-        kubectl delete mlflow "$MLFLOW_NAME" -n "$NAMESPACE" --ignore-not-found --wait --timeout=120s 2>/dev/null || true
+        if [ "$KEEP_MLFLOW_DEPLOYMENT" != "true" ] && \
+           { [ "$SKIP_DEPLOYMENT" != "true" ] || [ "$CLEANUP_REUSED_MLFLOW" = "true" ]; }; then
+            kubectl delete mlflow "$MLFLOW_NAME" -n "$NAMESPACE" --ignore-not-found --wait --timeout=120s 2>/dev/null || true
+        fi
     }
     trap _suite_teardown RETURN
 
@@ -492,6 +599,19 @@ run_suite() {
     done
     echo "  MLflow endpoint is reachable"
 
+    if [ "$INFERRED_UPGRADE_PHASE" = "post_upgrade" ]; then
+        echo "  Waiting for MLflow CR status.version to reach ${SUPPORTED_MLFLOW_VERSION_RAW}..."
+        if ! kubectl wait \
+            --for="jsonpath={.status.version}=${SUPPORTED_MLFLOW_VERSION_RAW}" \
+            "mlflow/${MLFLOW_NAME}" \
+            --namespace "$NAMESPACE" \
+            --timeout=300s; then
+            echo "ERROR: MLflow CR did not report status.version=${SUPPORTED_MLFLOW_VERSION_RAW} within timeout" >&2
+            return 1
+        fi
+        echo "  MLflow CR status.version matches ${SUPPORTED_MLFLOW_VERSION_RAW}"
+    fi
+
     # ── Kube token ──────────────────────────────────────────────────────────────
     echo "  Generating token for ${MLFLOW_SA_NAME}..."
     if ! kube_token=$(kubectl create token "$MLFLOW_SA_NAME" --namespace "$NAMESPACE"); then
@@ -517,6 +637,10 @@ run_suite() {
     cd "$SCRIPT_DIR/.."
     local suite_exit=0
     uv run --project "$UV_PROJECT_DIR" --no-sync pytest --junit-xml="$results_file" "${PYTEST_ARGS[@]}" || suite_exit=$?
+    if [ "$suite_exit" -eq 5 ] && [ "$INFERRED_UPGRADE_PHASE" = "post_upgrade" ] && [ "$ALLOW_EMPTY_UPGRADE_TESTS" = "true" ]; then
+        echo "  No upgrade tests matched the current phase/version selection; treating as success."
+        suite_exit=0
+    fi
     cd "$SCRIPT_DIR"
 
     return "$suite_exit"

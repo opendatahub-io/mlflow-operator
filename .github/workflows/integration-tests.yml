@@ -23,6 +23,10 @@ env:
   OPERATOR_RUNTIME_IMAGE: 'localhost/mlflow-operator:ci'
   INTEGRATION_OPERATOR_IMAGE: 'kind-registry:5000/mlflow-operator:latest'
   UPGRADE_OPERATOR_IMAGE: 'localhost/mlflow-operator-upgrade:v0.0.1'
+  UPGRADE_MARKER_CLUSTER_NAME: 'mlflow-upgrade-markers'
+  UPGRADE_WORKSPACE: 'mlflow-upgrade-workspace'
+  KUSTOMIZE_VERSION: '5.8.0'
+  KUSTOMIZE_LINUX_AMD64_SHA256: '4dfa8307358dd9284aa4d2b1d5596766a65b93433e8fa3f9f74498941f01c5ef'
   # MLflow ODH release 1.1 image with MLflow v3.10.1+rhaiv.3.
   MLFLOW_SEED_SOURCE_IMAGE: 'quay.io/opendatahub/mlflow@sha256:ad51bbd7f770491da88dc1db3b3c84f7471d25c48026ecb385180b63b18f4c64'
   MLFLOW_SEED_IMAGE: 'localhost/mlflow-seed:3.10.1'
@@ -567,6 +571,163 @@ jobs:
           python3 test/scripts/verify_mlflow_version_alignment.py \
             --params-env config/base/params.env \
             --params-env config/overlays/kind/params.env
+
+  upgrade-pytest-marker-tests:
+    if: ${{ github.event_name != 'push' }}
+    needs: [build-mlflow-runtime-image, build-mlflow-operator-image]
+    name: Run upgrade pytest marker coverage
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+
+      - name: Create Kind cluster
+        uses: ./.github/actions/create-cluster
+        with:
+          cluster_name: ${{ env.UPGRADE_MARKER_CLUSTER_NAME }}
+          k8s_version: "v1.34.0"
+
+      - name: Install test prerequisites
+        shell: bash
+        run: |
+          python3 -m pip install --upgrade pip
+          python3 -m pip install uv
+          curl -fsSL "https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize/v${{ env.KUSTOMIZE_VERSION }}/kustomize_v${{ env.KUSTOMIZE_VERSION }}_linux_amd64.tar.gz" \
+            -o /tmp/kustomize.tar.gz
+          echo "${{ env.KUSTOMIZE_LINUX_AMD64_SHA256 }}  /tmp/kustomize.tar.gz" | sha256sum -c -
+          sudo tar -xf /tmp/kustomize.tar.gz -C /usr/local/bin
+          rm -f /tmp/kustomize.tar.gz
+
+      - name: Sync mlflow-tests virtual environment
+        run: uv sync --project mlflow-tests
+
+      - name: Download MLflow operator image artifact
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: ${{ env.OPERATOR_RUNTIME_ARTIFACT }}
+          path: operator-image
+
+      - name: Load MLflow operator image into Kind cluster
+        shell: bash
+        run: |
+          docker load -i "operator-image/${{ env.OPERATOR_RUNTIME_ARTIFACT }}.tar"
+          kind load docker-image "${{ env.OPERATOR_RUNTIME_IMAGE }}" --name "${{ env.UPGRADE_MARKER_CLUSTER_NAME }}"
+
+      - name: Download MLflow runtime image artifact
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: ${{ env.MLFLOW_RUNTIME_ARTIFACT }}
+          path: runtime-image
+
+      - name: Load MLflow runtime image into Kind cluster
+        shell: bash
+        run: |
+          docker load -i "runtime-image/${{ env.MLFLOW_RUNTIME_ARTIFACT }}.tar"
+          kind load docker-image "${{ env.MLFLOW_RUNTIME_IMAGE }}" --name "${{ env.UPGRADE_MARKER_CLUSTER_NAME }}"
+
+      - name: Run pre-upgrade marker tests
+        shell: bash
+        env:
+          IN_CLUSTER_MODE: "false"
+          DEPLOY_MLFLOW_OPERATOR: "false"
+          SKIP_CLEANUP: "true"
+          KEEP_MLFLOW_DEPLOYMENT: "true"
+          MLFLOW_OPERATOR_IMAGE: ${{ env.OPERATOR_RUNTIME_IMAGE }}
+          MLFLOW_IMAGE: ${{ env.MLFLOW_RUNTIME_IMAGE }}
+          ARTIFACT_BACKENDS: "file"
+          workspaces: ${{ env.UPGRADE_WORKSPACE }}
+          upgrade_workspace: ${{ env.UPGRADE_WORKSPACE }}
+          TEST_RESULTS_DIR: "${{ github.workspace }}/test-results/pre"
+          NAMESPACE: ${{ env.NAMESPACE }}
+        run: |
+          mkdir -p "${TEST_RESULTS_DIR}"
+          bash mlflow-tests/images/test-run.sh -m pre_upgrade
+
+      - name: Run post-upgrade marker tests
+        shell: bash
+        env:
+          IN_CLUSTER_MODE: "false"
+          DEPLOY_MLFLOW_OPERATOR: "false"
+          SKIP_DEPLOYMENT: "true"
+          ALLOW_EMPTY_UPGRADE_TESTS: "true"
+          MLFLOW_OPERATOR_IMAGE: ${{ env.OPERATOR_RUNTIME_IMAGE }}
+          MLFLOW_IMAGE: ${{ env.MLFLOW_RUNTIME_IMAGE }}
+          ARTIFACT_BACKENDS: "file"
+          workspaces: ${{ env.UPGRADE_WORKSPACE }}
+          upgrade_workspace: ${{ env.UPGRADE_WORKSPACE }}
+          TEST_RESULTS_DIR: "${{ github.workspace }}/test-results/post"
+          NAMESPACE: ${{ env.NAMESPACE }}
+        run: |
+          mkdir -p "${TEST_RESULTS_DIR}"
+          bash mlflow-tests/images/test-run.sh -m post_upgrade
+
+      - name: Upload marker test reports
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: upgrade-pytest-marker-results
+          path: test-results/
+          retention-days: 7
+
+      - name: Collect marker debug logs
+        if: ${{ failure() && !cancelled() }}
+        continue-on-error: true
+        env:
+          DEBUG_NAMESPACE: ${{ env.NAMESPACE }}
+        shell: bash
+        run: |
+          echo "🔍 Collecting marker debug information..."
+          mkdir -p debug-logs
+
+          kubectl get namespaces > debug-logs/namespaces.txt 2>&1 || true
+
+          if ! kubectl get namespace "${DEBUG_NAMESPACE}" >/dev/null 2>&1; then
+            echo "Namespace ${DEBUG_NAMESPACE} not found; skipping namespace-scoped debug collection." > debug-logs/namespace.txt
+            exit 0
+          fi
+
+          kubectl get mlflow -n "${DEBUG_NAMESPACE}" -o yaml > debug-logs/mlflow-cr.yaml 2>&1 || true
+          kubectl get pods -n "${DEBUG_NAMESPACE}" -o wide > debug-logs/pods.txt 2>&1 || true
+          kubectl get deployments -n "${DEBUG_NAMESPACE}" -o wide > debug-logs/deployments.txt 2>&1 || true
+          kubectl get jobs -n "${DEBUG_NAMESPACE}" -o wide > debug-logs/jobs.txt 2>&1 || true
+          kubectl get svc -n "${DEBUG_NAMESPACE}" -o wide > debug-logs/services.txt 2>&1 || true
+          kubectl get events -n "${DEBUG_NAMESPACE}" --sort-by='.lastTimestamp' > debug-logs/events.txt 2>&1 || true
+
+          while IFS='|' read -r label suffix; do
+            mapfile -t PODS < <(kubectl get pods -n "${DEBUG_NAMESPACE}" -l "${label}" -o jsonpath='{.items[*].metadata.name}' 2>/dev/null | tr ' ' '\n' | sed '/^$/d')
+            if [[ "${#PODS[@]}" -eq 0 ]]; then
+              continue
+            fi
+
+            for pod in "${PODS[@]}"; do
+              kubectl describe pod "${pod}" -n "${DEBUG_NAMESPACE}" > "debug-logs/${pod}${suffix}.describe.txt" 2>&1 || true
+              kubectl logs "${pod}" -n "${DEBUG_NAMESPACE}" --all-containers=true > "debug-logs/${pod}${suffix}.log" 2>&1 || true
+              kubectl logs "${pod}" -n "${DEBUG_NAMESPACE}" --all-containers=true --previous > "debug-logs/${pod}${suffix}.previous.log" 2>&1 || true
+            done
+          done <<'EOF'
+          app=mlflow|
+          control-plane=controller-manager|-operator
+          mlflow.opendatahub.io/migration-job=true|-migration
+          app=seaweedfs|-seaweedfs
+          app=mlflow-postgres|-postgres
+          EOF
+
+      - name: Upload marker debug logs
+        if: ${{ failure() && !cancelled() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: upgrade-pytest-marker-debug-logs
+          path: debug-logs/
+          retention-days: 7
 
   upgrade-tests:
     if: ${{ github.event_name != 'workflow_dispatch' }}

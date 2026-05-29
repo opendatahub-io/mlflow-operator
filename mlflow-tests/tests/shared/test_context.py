@@ -76,6 +76,8 @@ class TestContext:
     expected_artifact_path: Optional[str] = None
     mlflowconfigs_to_delete: dict[str, str] = field(default_factory=dict)
     secrets_to_delete: dict[str, str] = field(default_factory=dict)
+    upgrade_state: dict[str, Any] = field(default_factory=dict)
+    upgrade_observed_state: dict[str, Any] = field(default_factory=dict)
     k8_manager: Optional["K8Manager"] = None
     discovered_workspaces: set[str] = field(default_factory=set)
     unlabeled_namespace: Optional[str] = None
