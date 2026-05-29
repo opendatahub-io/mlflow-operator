@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 
 import argparse
-import re
 import subprocess
 import sys
 from pathlib import Path
@@ -20,13 +19,25 @@ def normalize(version: str) -> str:
 
 
 def parse_component_version() -> str:
-    match = re.search(
-        r"(?ms)^\s*-\s*name:\s*MLflow\s*$.*?^\s*version:\s*(\S+)\s*$",
-        COMPONENT_METADATA.read_text(),
-    )
-    if not match:
-        raise RuntimeError(f"could not find the MLflow release version in {COMPONENT_METADATA}")
-    return normalize(match.group(1))
+    try:
+        output = subprocess.check_output(
+            [
+                sys.executable,
+                str(REPO_ROOT / "scripts" / "print_supported_mlflow_version.py"),
+                "--component-metadata",
+                str(COMPONENT_METADATA),
+            ],
+            cwd=REPO_ROOT,
+            text=True,
+            stderr=subprocess.STDOUT,
+        ).strip()
+    except subprocess.CalledProcessError as exc:
+        raise RuntimeError(
+            f"could not read supported MLflow version via helper script: {exc.output.strip() or exc}"
+        ) from exc
+    if not output:
+        raise RuntimeError("supported MLflow version helper returned empty output")
+    return normalize(output)
 
 
 def parse_make_supported_version() -> str:

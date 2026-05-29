@@ -33,7 +33,26 @@ IN_CLUSTER_MODE=false SKIP_DEPLOYMENT=true bash images/test-run.sh
 
 # Skip cleanup (leave the MLflow CR and role bindings in place after the run)
 IN_CLUSTER_MODE=false SKIP_CLEANUP=true bash images/test-run.sh
+
+# Preserve the seeded deployment for later post-upgrade validation.
+IN_CLUSTER_MODE=false \
+SKIP_CLEANUP=true \
+bash images/test-run.sh -m pre_upgrade
+
+# Reuse that preserved deployment for post-upgrade checks.
+IN_CLUSTER_MODE=false \
+SKIP_DEPLOYMENT=true \
+bash images/test-run.sh -m post_upgrade
+
+# Also delete the reused MLflow resources after the post-upgrade run.
+IN_CLUSTER_MODE=false \
+SKIP_DEPLOYMENT=true \
+CLEANUP_REUSED_RESOURCES=true \
+bash images/test-run.sh -m post_upgrade
 ```
+
+If the preserved deployment includes self-deployed PostgreSQL or SeaweedFS,
+`CLEANUP_REUSED_RESOURCES=true` removes those harness-managed resources too.
 
 ## Running tests in-cluster (CI / container)
 
@@ -75,16 +94,17 @@ The script is configured entirely via environment variables. Variables can also 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `STORAGE_TYPE` | `file` | Artifact storage backend. Supported: `file`, `s3`. |
-| `DB_TYPE` | `sqlite` | Metadata store backend. Supported: `sqlite`, `postgres`. |
+| `BACKEND_STORE` | `sqlite` | Backend store type. Supported: `sqlite`, `postgres`. |
+| `REGISTRY_STORE` | `sqlite` | Registry store type. Supported: `sqlite`, `postgres`. |
 | `AWS_ACCESS_KEY_ID` | _(unset)_ | S3 access key (`STORAGE_TYPE=s3` only). |
 | `AWS_SECRET_ACCESS_KEY` | _(unset)_ | S3 secret key (`STORAGE_TYPE=s3` only). |
 | `BUCKET` | _(unset)_ | S3 bucket name (`STORAGE_TYPE=s3` only). |
 | `S3_ENDPOINT_URL` | _(unset)_ | S3 endpoint URL (`STORAGE_TYPE=s3` only). |
-| `DB_HOST` | _(auto)_ | PostgreSQL hostname (`DB_TYPE=postgres` only). |
-| `DB_PORT` | `5432` | PostgreSQL port (`DB_TYPE=postgres` only). |
-| `DB_USER` | `postgres` | PostgreSQL username (`DB_TYPE=postgres` only). |
-| `DB_PASSWORD` | _(unset)_ | PostgreSQL password (`DB_TYPE=postgres` only). |
-| `DB_NAME` | `mydatabase` | PostgreSQL database name (`DB_TYPE=postgres` only). |
+| `DB_HOST` | _(auto)_ | PostgreSQL hostname (when either metadata store uses `postgres`). |
+| `DB_PORT` | `5432` | PostgreSQL port (when either metadata store uses `postgres`). |
+| `DB_USER` | `postgres` | PostgreSQL username (when either metadata store uses `postgres`). |
+| `DB_PASSWORD` | _(unset)_ | PostgreSQL password (when either metadata store uses `postgres`). |
+| `DB_NAME` | `mydatabase` | PostgreSQL database name (when either metadata store uses `postgres`). |
 | `DB_SSLMODE` | _(unset)_ | SSL mode for the PostgreSQL connection URI. |
 
 ### Infrastructure image overrides
@@ -102,7 +122,7 @@ The script is configured entirely via environment variables. Variables can also 
 | `MLFLOW_OPERATOR_OWNER` | `opendatahub-io` | GitHub owner for CSV manifest download. |
 | `MLFLOW_OPERATOR_REPO` | `mlflow-operator` | GitHub repo name for CSV manifest download. |
 | `MLFLOW_OPERATOR_BRANCH` | `main` | Branch to pull manifests from for CSV patching. |
-| `INFRASTRUCTURE_PLATFORM` | _(auto)_ | Infrastructure overlay: `kind` or `openshift`. Auto-derived from `DEPLOY_MLFLOW_OPERATOR`. |
+| `INFRASTRUCTURE_PLATFORM` | _(auto)_ | Infrastructure overlay: `base` or `openshift`. When unset, the harness inspects `route.openshift.io` and selects `openshift` only if route resources are actually present; otherwise it uses `base`. |
 
 ### Skip / control flags
 
@@ -111,7 +131,8 @@ The script is configured entirely via environment variables. Variables can also 
 | `SKIP_DEPLOYMENT` | `false` | Skip all cluster deployment (use pre-existing resources). |
 | `SKIP_OPERATOR` | `false` | Skip operator deployment only. |
 | `SKIP_INFRASTRUCTURE` | `false` | Skip PostgreSQL/SeaweedFS deployment. |
-| `SKIP_CLEANUP` | `false` | Leave resources in place after the run (useful for debugging). |
+| `SKIP_CLEANUP` | `false` | Leave the deployment in place after the run. Requires exactly one backend; use it for inspection or later reuse. |
+| `CLEANUP_REUSED_RESOURCES` | `false` | With `SKIP_DEPLOYMENT=true`, also delete the reused MLflow CR, harness-managed RBAC, and any self-deployed PostgreSQL/SeaweedFS resources at the end of the run. |
 
 ### Other
 
@@ -121,6 +142,8 @@ The script is configured entirely via environment variables. Variables can also 
 | `MLFLOW_SA_NAME` | `mlflow-sa` | Service account name created by the operator. |
 | `IN_CLUSTER_MODE` | `true` | Set to `false` for local out-of-cluster runs (enables port-forwarding). |
 | `workspaces` | `workspace1-<random>,workspace2-<random>` | Comma-separated list of workspace namespaces to create and test against. |
+| `upgrade_test_workspace` | `mlflow-upgrade-test-workspace` | Static workspace namespace for upgrade pytest phases and their RBAC setup. |
+| `ARTIFACT_BACKENDS` | `file,s3` | Comma-separated artifact backends to run in sequence (`file`, `s3`, `externals3`). Upgrade pytest phases require exactly one value. |
 | `TEST_RESULTS_DIR` | `/mlflow/results` | Directory for JUnit XML output. |
 | `DEPLOY_PY` | `<repo>/.github/actions/deploy/deploy.py` | Path to the deploy helper script. |
 
@@ -131,7 +154,7 @@ The script is configured entirely via environment variables. Variables can also 
 Uses SQLite for metadata and a local PVC for artifacts. Suitable for quick local testing.
 
 ```bash
-STORAGE_TYPE=file DB_TYPE=sqlite bash images/test-run.sh
+STORAGE_TYPE=file BACKEND_STORE=sqlite REGISTRY_STORE=sqlite bash images/test-run.sh
 ```
 
 ### S3 artifact storage
@@ -145,13 +168,11 @@ AWS_ACCESS_KEY_ID=... AWS_SECRET_ACCESS_KEY=... BUCKET=my-bucket S3_ENDPOINT_URL
 
 ### PostgreSQL metadata store
 
-**NOTE**: This hasn't been implemented for integration testing yet.
-
-Requires `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, and `DB_NAME` to be configured (via `.env`
-or environment variables).
+Set one or both metadata stores to `postgres`, then configure `DB_HOST`, `DB_PORT`, `DB_USER`,
+`DB_PASSWORD`, and `DB_NAME` (via `.env` or environment variables).
 
 ```bash
-DB_TYPE=postgres DB_HOST=... DB_PASSWORD=... bash images/test-run.sh
+BACKEND_STORE=postgres REGISTRY_STORE=postgres DB_HOST=... DB_PASSWORD=... bash images/test-run.sh
 ```
 
 ## Architecture notes

@@ -68,7 +68,7 @@ make generate
 
 **Note**: Always regenerate manifests and code after modifying API types. CI will verify that generated code is up-to-date.
 
-When bumping the supported MLflow version, update `config/component_metadata.yaml`, then rerun the version-alignment verification. The Makefile parses `config/component_metadata.yaml` and injects `SupportedMLflowVersion` via Go `-ldflags`; the Dockerfile resolves the same value by calling `make print-supported-mlflow-version` during the image build. Top-level `scripts/` is preferred for developer-maintenance helpers like this; `test/scripts/` is reserved for test validation helpers.
+When bumping the supported MLflow version, update `config/component_metadata.yaml`, then rerun the version-alignment verification. The Makefile injects `SupportedMLflowVersion` from that metadata via Go `-ldflags`; the test harness and test image read the same value through `scripts/print_supported_mlflow_version.py`. Top-level `scripts/` is preferred for developer-maintenance helpers like this; `test/scripts/` is reserved for test validation helpers.
 
 ## Deployment Modes
 
@@ -259,6 +259,31 @@ make test-e2e-upgrade MLFLOW_SEED_IMAGE=quay.io/opendatahub/mlflow@sha256:ad51bb
 make cleanup-kind-cluster
 ```
 
+### MLflow upgrade pytest phases
+
+The `mlflow-tests/` suite also contains opt-in, version-gated upgrade pytest coverage under:
+
+- `mlflow-tests/tests/upgrade/pre_upgrade/`
+- `mlflow-tests/tests/upgrade/post_upgrade/`
+
+Versioned files are named by the minimum supported MLflow major/minor version they apply to. For example, `test_3_10.py` runs only when the relevant pre-upgrade version is at least `3.10`. Ignore build suffixes such as `+rhaiv.3`; always normalize to `x.y`.
+
+Selection rules:
+
+- `pre_upgrade` files compare their filename threshold against `MLFLOW_TEST_SUPPORTED_VERSION`
+- `post_upgrade` files compare their filename threshold against the pre-upgrade version stored in the namespace-scoped ConfigMap `mlflow-upgrade-test-version`
+- The ConfigMap lives in the same static upgrade workspace namespace used by the seeded MLflow resources so pre/post phases share one namespace-scoped handoff point
+- A missing post-upgrade handoff ConfigMap is treated as "no matching versioned dataset for this source version" and should exit cleanly as a successful skip; malformed or empty ConfigMap contents must still fail the run instead of being treated as an empty selection
+- Harness-driven upgrade phases use the static `upgrade_test_workspace` namespace as the source of truth for both pytest setup and shell-harness RBAC/workspace creation
+- Seeded `pre_upgrade` runs against source MLflow versions before `3.12` must use tracking URIs without the `/mlflow` static prefix; `post_upgrade` and current-version runs still use the prefixed `/mlflow` API path
+- When `INFRASTRUCTURE_PLATFORM` is unset, `mlflow-tests/images/test-run.sh` must treat OpenShift as present only if `kubectl api-resources --api-group=route.openshift.io -o name` returns at least one resource; checking the command exit code alone misdetects Kind as OpenShift and breaks the upstream `postgres:13` overlay selection
+- Harness-driven upgrade phases require exactly one artifact backend; do not rely on the default multi-backend `file,s3` loop for `-m pre_upgrade` or `-m post_upgrade`
+- Harness-driven preserve/reuse flows also require exactly one artifact backend when `SKIP_CLEANUP=true`; reject ambiguous multi-backend preserve requests instead of preserving only the last backend
+- Harness-driven `SKIP_DEPLOYMENT=true` reuse runs preserve the reused `MLflow` CR and RBAC by default; set `CLEANUP_REUSED_RESOURCES=true` to opt into tearing down the reused `MLflow` CR, harness-managed RBAC, and any self-deployed PostgreSQL / SeaweedFS resources after validation
+- Local Fedora/SELinux validation of the containerized `mlflow-tests` harness can fail before pytest starts if the test image (runs as UID `1001`) cannot read `~/.kube/config` or write the mounted results directory. Treat these as host-environment blockers, not suite failures: when reproducing the workflow locally, prefer running the container as the host user (for example `--user "$(id -u):$(id -g)"`) and keep SELinux-friendly bind labels such as `:z` on shared mounts or `:Z` on private writable temp/result directories.
+
+These upgrade pytest suites are opt-in only. A plain `pytest -v` run should not execute them unless the pytest marker expression explicitly selects `pre_upgrade` or `post_upgrade`.
+
 ### Linting
 
 This repo uses golangci-lint; to ensure linting is successful after code changes, run
@@ -401,7 +426,9 @@ Validates sample CRs on every PR:
 - `verify-codegen.yml` - Validates generated code is up-to-date
 - `test.yml` - Runs unit tests
 - `lint.yml` - Runs golangci-lint
-- `integration-tests.yml` - Unified MLflow runtime workflow for push, pull request, and manual runs. It builds one operator image artifact from this repository and one MLflow runtime image artifact from the matching owner MLflow repository, using the target operator branch under test (`github.base_ref || github.ref_name`) as the MLflow ref. The one intentional exception is ODH default-branch parity: operator `main` maps to `opendatahub-io/mlflow@master`. The operator image build uses `Dockerfile.konflux` when that file exists in the checked-out branch and falls back to `Dockerfile` otherwise. Upgrade tests use a pinned ODH release 1.1 seed image digest (`v3.10.1+rhaiv.3`) instead of rebuilding `test/e2e/images/mlflow-3.10.0.Dockerfile`, which was removed after its `microdnf`-based Python reinstall started pulling an incompatible sqlite runtime; the workflow now retags that digest to a local seed tag before `kind load` and deployment so containerd does not have to resolve the digest-only reference during container creation. Built-image version alignment remains RHDS-only, and ODH push/PR activity targeting `main` still verifies the default image version from the checked-out repo without depending on the runtime-image build job. Failed integration and upgrade jobs also upload debug artifacts with namespace snapshots plus operator, MLflow, and migration-job pod logs and descriptions when available.
+- `build-and-push-test-image.yml` - Publishes the public `quay.io/opendatahub/mlflow-tests` image for `main`, `release-*`, and `rhoai-*` branches as a multi-arch manifest covering `amd64`, `arm64`, `ppc64le`, and `s390x`; keep `mlflow-tests/images/Dockerfile.konflux` downloads architecture-aware (`TARGETARCH`) whenever adding new CLI tooling
+- `integration-tests.yml` - Normal MLflow runtime workflow for push and pull request validation. It builds one operator image artifact from this repository, one MLflow runtime image artifact from the matching owner MLflow repository, and one `mlflow-tests` image artifact from this repository, then reuses those artifacts in the current-version integration matrix by executing the test image as the harness entrypoint. The one intentional exception is ODH default-branch parity: operator `main` maps to `opendatahub-io/mlflow@master`. The operator image build uses `Dockerfile.konflux` when that file exists in the checked-out branch and falls back to `Dockerfile` otherwise. Built-image version alignment remains RHDS-only, and ODH push/PR activity targeting `main` still verifies the default image version from the checked-out repo without depending on the runtime-image build job.
+- `upgrade-validation.yml` - Upgrade-focused MLflow workflow for push and pull request validation. It builds and reuses the same operator, runtime, and test image artifacts for two complementary marker-validation jobs plus the upgrade-path e2e job. `current-upgrade-pytest-validation` runs `mlflow-tests` `pre_upgrade` / `post_upgrade` directly on the PR-built images so the upgrade-tagged pytest machinery itself and additive datasets such as `3.11` stay exercised. `seeded-upgrade-state-validation` seeds a `3.10.1`-compatible source deployment, patches the running operator Deployment and seeded MLflow CR in place to the PR-built images, and then runs the `mlflow-tests` `post_upgrade` suite against that upgraded state across both file and S3 artifact backends. The `build-mlflow-tests-image` job also verifies that the direct-execution test image exposes the repo's normalized supported MLflow version through `MLFLOW_TEST_SUPPORTED_VERSION`, matching the Jenkins-style container entry path. Upgrade tests use a pinned ODH release 1.1 seed image digest (`v3.10.1+rhaiv.3`) instead of rebuilding `test/e2e/images/mlflow-3.10.0.Dockerfile`, which was removed after its `microdnf`-based Python reinstall started pulling an incompatible sqlite runtime; the workflow retags that digest to a local seed tag before `kind load` and deployment so containerd does not have to resolve the digest-only reference during container creation. Failed jobs upload debug artifacts with namespace snapshots plus operator, MLflow, and migration-job pod logs and descriptions when available.
 - `operator-chaos.yml` - Offline operator-chaos upgrade-risk gate. It validates `chaos/knowledge/mlflow.yaml`, runs `operator-chaos preflight --local`, diffs the base and PR knowledge models with `operator-chaos diff --breaking`, compares the checked-in MLflow CRD schema with `operator-chaos diff-crds`, previews generated upgrade experiments with `operator-chaos simulate-upgrade --dry-run`, and fails fast when validation, command execution, or breaking knowledge/CRD changes are reported. This workflow is intentionally asset-focused and does not create a cluster or execute live chaos experiments.
 - `verify-mlflow-version-alignment.yml` - Scheduled ODH-only default-image alignment check. It runs directly from the checked-out operator repo and verifies the `config/base/params.env` plus `config/overlays/kind/params.env` defaults against the supported MLflow version metadata without instantiating the heavier integration workflow.
 - `test-e2e.yml` - Runs end-to-end tests

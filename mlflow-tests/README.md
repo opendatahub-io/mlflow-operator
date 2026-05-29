@@ -72,6 +72,8 @@ The framework supports configuration via environment variables:
 | `AWS_ACCESS_KEY_ID` | AWS access key for S3 | Optional | Both |
 | `AWS_SECRET_ACCESS_KEY` | AWS secret key for S3 | Optional | Both |
 | `AWS_S3_BUCKET` | S3 bucket for artifact override tests | `""` | Both |
+| `MLFLOW_TEST_SUPPORTED_VERSION` | Supported pre-upgrade MLflow version, normalized to `x.y` | Auto-derived | Upgrade |
+| `upgrade_test_workspace` | Static namespace used by upgrade pytest phases | `mlflow-upgrade-test-workspace` | Upgrade |
 
 **Required Setup:**
 - **Kubernetes Mode**: Requires `MLFLOW_TRACKING_URI`, `workspaces`, and `kube_token`
@@ -109,6 +111,60 @@ uv run pytest --log-cli-level=INFO
 uv run pytest tests/test_experiments.py -k "GET permission can get experiment"
 ```
 
+### Running Upgrade Phase Tests
+
+Upgrade-phase tests are opt-in and live under:
+
+- `tests/upgrade/pre_upgrade/`
+- `tests/upgrade/post_upgrade/`
+
+Versioned files are gated by filename. For example, `test_3_10.py` runs only when the relevant pre-upgrade version is at least `3.10`. Build suffixes are ignored, so `v3.10.1+rhaiv.3` normalizes to `3.10`.
+
+- `pre_upgrade` uses `MLFLOW_TEST_SUPPORTED_VERSION`
+- `post_upgrade` uses the version stored in the `mlflow-upgrade-test-version` ConfigMap in `upgrade_test_workspace`
+
+Examples:
+
+```bash
+# Pre-upgrade dataset seeding against the static upgrade workspace.
+# Direct pytest runs must provide the normalized pre-upgrade version explicitly.
+MLFLOW_TEST_SUPPORTED_VERSION=3.12 \
+upgrade_test_workspace=mlflow-upgrade-test-workspace \
+uv run pytest tests/upgrade/pre_upgrade/test_3_10.py -m pre_upgrade
+
+# Post-upgrade validation against the same workspace and ConfigMap handoff.
+# This assumes a pre-upgrade phase has already written the ConfigMap
+# `mlflow-upgrade-test-version` in `mlflow-upgrade-test-workspace`.
+upgrade_test_workspace=mlflow-upgrade-test-workspace \
+uv run pytest tests/upgrade/post_upgrade/test_3_10.py -m post_upgrade
+```
+
+`bash images/test-run.sh` derives `MLFLOW_TEST_SUPPORTED_VERSION` if it is unset. The test image also bakes the normalized value into `BASH_ENV` so direct image execution paths can rely on the same default without reimplementing the lookup. Harness-driven upgrade runs use `upgrade_test_workspace` for workspace creation and RBAC, default to `ARTIFACT_BACKENDS=file` when no backend is set, and require exactly one backend for `pre_upgrade`, `post_upgrade`, or `SKIP_CLEANUP=true`. For `post_upgrade`, the harness also waits for the MLflow health endpoint and the `MLflow` CR `status.version` to reach the current supported version before pytest starts. A missing `mlflow-upgrade-test-version` ConfigMap still means "no matching post-upgrade dataset for this source version" and now exits cleanly as a successful skip, while a present ConfigMap with empty or invalid handoff data still fails the run.
+
+The upgrade datasets use fixed resource names in a fixed namespace. If a local `pre_upgrade` run is interrupted or you want to reseed from scratch, delete the static namespace and the `mlflow-upgrade-test-version` ConfigMap before rerunning, or use a fresh cluster.
+
+To preserve the seeded deployment for later inspection or reuse:
+
+```bash
+IN_CLUSTER_MODE=false \
+SKIP_CLEANUP=true \
+upgrade_test_workspace=mlflow-upgrade-test-workspace \
+bash images/test-run.sh -m pre_upgrade
+```
+
+That leaves the `MLflow` CR, the seeded workspace, and the selected backend resources in place.
+
+To validate against that preserved deployment:
+
+```bash
+IN_CLUSTER_MODE=false \
+SKIP_DEPLOYMENT=true \
+upgrade_test_workspace=mlflow-upgrade-test-workspace \
+bash images/test-run.sh -m post_upgrade
+```
+
+Add `CLEANUP_REUSED_RESOURCES=true` only if you also want the harness to remove the reused `MLflow` CR, harness-managed RBAC, and any self-deployed PostgreSQL or SeaweedFS resources afterward. Leave both cleanup flags unset when the reused deployment depends on external S3 or PostgreSQL.
+
 ### Test Markers
 
 The framework defines the following custom pytest markers:
@@ -118,6 +174,8 @@ The framework defines the following custom pytest markers:
 - **`@pytest.mark.Traces`**: Test direct trace-ingestion RBAC and experiment-scoped trace authorization
 - **`@pytest.mark.Artifacts`**: Test artifact operations, model logging, and S3 storage verification
 - **`@pytest.mark.smoke`**: Fast sanity-check tests suitable for pre-merge smoke runs
+- **`@pytest.mark.pre_upgrade`**: Seed static MLflow state for upgrade validation
+- **`@pytest.mark.post_upgrade`**: Validate static MLflow state after an upgrade
 
 ### Test Execution Workflow
 
@@ -695,7 +753,6 @@ curl -k -H "Authorization: Bearer $kube_token" "$MLFLOW_TRACKING_URI/api/2.0/mlf
 
 ### Optional Dependencies
 - **scikit-learn**: Required for artifact/model logging tests
-- **Flask-WTF**: <2 (transitive dependency of MLflow auth)
 - **boto3**: >=1.42.40 (for S3 artifact storage)
 - **pydantic**: >=2.0.0 (for structured error models)
 

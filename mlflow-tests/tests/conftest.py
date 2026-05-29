@@ -2,7 +2,6 @@
 
 import logging
 import os
-import tempfile
 from pathlib import Path
 
 import pytest
@@ -13,9 +12,129 @@ from mlflow_tests.manager.namespace import K8Manager
 from mlflow_tests.manager.user import K8UserManager
 from mlflow_tests.utils.client import ClientManager
 from .constants.config import Config
+from .upgrade.utils import (
+    UPGRADE_PHASES,
+    clear_missing_post_upgrade_dataset,
+    get_upgrade_test_workspace,
+    is_upgrade_phase,
+    missing_post_upgrade_dataset,
+    set_requested_upgrade_phase,
+    should_run_versioned_test,
+)
 
 logger = logging.getLogger(__name__)
 random_gen = random.Random()
+
+
+def _get_requested_upgrade_phase(mark_expression: str | None = None) -> str:
+    """Return the effective upgrade phase from an exact pytest marker selection."""
+    normalized = (mark_expression or "").strip()
+    if normalized == "pre_upgrade":
+        return "pre_upgrade"
+    if normalized == "post_upgrade":
+        return "post_upgrade"
+    return ""
+
+
+def _should_ignore_upgrade_collection(collection_path: Path, phase: str) -> bool:
+    """Return whether pytest should skip collecting a path for upgrade selection."""
+    path_name = collection_path.name
+    parent_name = collection_path.parent.name
+
+    if phase in UPGRADE_PHASES:
+        allowed_dir = "pre_upgrade" if phase == "pre_upgrade" else "post_upgrade"
+        if path_name in UPGRADE_PHASES:
+            return path_name != allowed_dir
+        if parent_name in UPGRADE_PHASES:
+            return parent_name != allowed_dir
+        return path_name.startswith("test_")
+
+    return path_name in UPGRADE_PHASES or parent_name in UPGRADE_PHASES
+
+
+def pytest_configure(config):
+    """Infer the upgrade phase from explicit marker selection when env is unset."""
+    clear_missing_post_upgrade_dataset()
+    set_requested_upgrade_phase(_get_requested_upgrade_phase(config.option.markexpr))
+
+
+def _get_configured_workspaces() -> list[str]:
+    """Return the workspaces for the current pytest phase."""
+    if is_upgrade_phase():
+        return [get_upgrade_test_workspace()]
+    return Config.WORKSPACES
+
+
+def pytest_ignore_collect(collection_path, config):
+    """Keep upgrade-only modules opt-in at collection time."""
+    phase = _get_requested_upgrade_phase(config.option.markexpr)
+    should_ignore = _should_ignore_upgrade_collection(collection_path, phase)
+    return True if should_ignore else None
+
+
+def pytest_collection_modifyitems(config, items):
+    """Keep upgrade tests opt-in and gate versioned files per upgrade phase."""
+    phase = _get_requested_upgrade_phase(config.option.markexpr)
+    deselected = []
+    selected = []
+
+    for item in items:
+        marker_names = {marker.name for marker in item.iter_markers()}
+        is_upgrade_item = bool(marker_names & UPGRADE_PHASES)
+
+        if not phase:
+            if is_upgrade_item:
+                deselected.append(item)
+            else:
+                selected.append(item)
+            continue
+
+        if not is_upgrade_item:
+            deselected.append(item)
+            continue
+
+        if phase not in marker_names:
+            deselected.append(item)
+            continue
+
+        try:
+            should_run = should_run_versioned_test(item.path, phase)
+        except Exception as exc:
+            guidance = (
+                "For direct pre-upgrade pytest runs, set `MLFLOW_TEST_SUPPORTED_VERSION`, "
+                "or run the suite through `images/test-run.sh`."
+            )
+            if phase == "post_upgrade":
+                guidance = (
+                    "For direct post-upgrade pytest runs, run the suite through "
+                    "`images/test-run.sh` after the pre-upgrade phase has written the ConfigMap."
+                )
+            raise pytest.UsageError(
+                "Unable to resolve upgrade test version gating for "
+                f"'{item.path}': {exc}. {guidance}"
+            ) from exc
+
+        if not should_run:
+            deselected.append(item)
+            continue
+
+        selected.append(item)
+
+    if deselected:
+        config.hook.pytest_deselected(items=deselected)
+    items[:] = selected
+
+
+def pytest_sessionfinish(session, exitstatus):
+    """Treat missing post-upgrade datasets as a clean no-op instead of exit code 5."""
+    phase = _get_requested_upgrade_phase(session.config.option.markexpr)
+    if phase == "post_upgrade" and exitstatus == 5 and missing_post_upgrade_dataset():
+        terminal_reporter = session.config.pluginmanager.getplugin("terminalreporter")
+        if terminal_reporter is not None:
+            terminal_reporter.write_line(
+                "No matching post-upgrade dataset exists for this source version; treating the run as a successful skip."
+            )
+        session.exitstatus = 0
 
 @pytest.fixture(scope="session")
 def setup_clients():
@@ -48,7 +167,7 @@ def setup_clients():
         os.environ['AWS_SECRET_ACCESS_KEY'] = Config.AWS_SECRET_KEY
 
     # Define workspaces
-    workspaces = Config.WORKSPACES
+    workspaces = _get_configured_workspaces()
     logger.info(f"Configured workspaces: {workspaces}")
 
     logger.info("Setting up Kubernetes environment")
@@ -162,6 +281,12 @@ def create_experiments_and_runs(setup_clients):
     logger.info("=" * 80)
 
     admin_client, k8_manager, user_manager, workspaces = setup_clients
+
+    if is_upgrade_phase():
+        logger.info("Skipping baseline resource creation for upgrade-only pytest phase")
+        logger.info("=" * 80)
+        return {}
+
     resource_map = dict()
 
     # Verify admin authentication is properly set

@@ -24,6 +24,7 @@ env:
   QUAY_TOKEN: ${{ secrets.QUAY_ROBOT_TOKEN }}
   IMAGE_REPO: mlflow-tests
   DOCKERFILE_PATH: mlflow-tests/images/Dockerfile.konflux
+  IMAGE_PLATFORMS: linux/amd64,linux/arm64,linux/ppc64le,linux/s390x
 
 jobs:
   build-test-image:
@@ -86,6 +87,7 @@ jobs:
           OVERWRITE: true
           IMAGE_REPO: ${{ env.IMAGE_REPO }}
           DOCKERFILE: ${{ env.DOCKERFILE_PATH }}
+          PLATFORMS: ${{ env.IMAGE_PLATFORMS }}
           GH_REPO: ${{ github.repository }}
           QUAY_ORG: ${{ env.QUAY_ORG }}
           QUAY_ID: ${{ secrets.QUAY_ROBOT_USERNAME }}
@@ -100,6 +102,7 @@ jobs:
             echo "**Branch:** ${{ steps.determine_tag.outputs.branch_name }}"
             echo "**Image Tag:** ${{ steps.determine_tag.outputs.tag_name }}"
             echo "**Full Image:** \`${{ steps.determine_tag.outputs.full_image }}\`"
+            echo "**Platforms:** \`${{ env.IMAGE_PLATFORMS }}\`"
             echo ""
             echo "**Status:** ✅ Built and pushed successfully"
           } >> "$GITHUB_STEP_SUMMARY"

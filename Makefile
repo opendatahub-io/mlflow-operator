@@ -25,7 +25,7 @@ CGO_ENABLED ?= 1
 SHELL = /usr/bin/env bash -o pipefail
 .SHELLFLAGS = -ec
 
-SUPPORTED_MLFLOW_VERSION := $(shell python3 -c 'from pathlib import Path; import re; text = Path("config/component_metadata.yaml").read_text(); match = re.search(r"(?ms)^[ \t]*-[ \t]*name:[ \t]*MLflow[ \t]*$$.*?^[ \t]*version:[ \t]*v?([^ \t\r\n]+)", text); print(match.group(1) if match else "")')
+SUPPORTED_MLFLOW_VERSION := $(shell python3 scripts/print_supported_mlflow_version.py --component-metadata config/component_metadata.yaml)
 SUPPORTED_MLFLOW_VERSION_OVERRIDE ?=
 EFFECTIVE_SUPPORTED_MLFLOW_VERSION = $(if $(strip $(SUPPORTED_MLFLOW_VERSION_OVERRIDE)),$(strip $(SUPPORTED_MLFLOW_VERSION_OVERRIDE)),$(strip $(SUPPORTED_MLFLOW_VERSION)))
 SUPPORTED_MLFLOW_VERSION_LDFLAG = -X github.com/opendatahub-io/mlflow-operator/internal/controller.SupportedMLflowVersion=$(EFFECTIVE_SUPPORTED_MLFLOW_VERSION)
