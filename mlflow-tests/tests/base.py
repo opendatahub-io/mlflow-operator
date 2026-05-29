@@ -14,6 +14,7 @@ from mlflow_tests.manager.user import K8UserManager
 from mlflow_tests.manager.namespace import K8Manager
 from mlflow_tests.utils.client import ClientManager
 from .constants.config import Config
+from .upgrade_utils import is_upgrade_phase
 from .shared import (
     ErrorResponse,
     TestContext,
@@ -180,6 +181,10 @@ class TestBase:
         """
         # Setup: yield control to test
         yield
+
+        if is_upgrade_phase():
+            logger.info("Skipping resource cleanup for explicit upgrade pytest phase")
+            return
 
         # Teardown: cleanup resources after test completes
         logger.info("Starting cleanup of test resources")

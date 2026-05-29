@@ -45,11 +45,20 @@ COPY --chown=1001:1001 ./mlflow-tests/uv.lock        ./mlflow-tests/
 COPY --chown=1001:1001 ./mlflow-tests/pyproject.toml ./mlflow-tests/
 COPY --chown=1001:1001 ./mlflow-tests/README.md      ./mlflow-tests/
 COPY --chown=1001:1001 ./mlflow-tests/src            ./mlflow-tests/src
+COPY --chown=1001:1001 ./config/component_metadata.yaml ./config/component_metadata.yaml
 
 RUN cd mlflow-tests && VIRTUAL_ENV="" uv sync --locked
 
 COPY --chown=1001:1001 .github/actions/deploy/deploy.py ./.github/actions/deploy/deploy.py
 COPY --chown=1001:1001 ./config ./config
 COPY --chown=1001:1001 ./mlflow-tests ./mlflow-tests
+
+RUN SUPPORTED_MLFLOW_VERSION="$(python3 -c 'from pathlib import Path; import re; text = Path("/mlflow/config/component_metadata.yaml").read_text(); match = re.search(r"(?ms)^[ \t]*-[ \t]*name:[ \t]*MLflow[ \t]*$.*?^[ \t]*version:[ \t]*v?([^\t\r\n ]+)", text); assert match, text; print(match.group(1))')" && \
+    NORMALIZED_MLFLOW_VERSION="$(SUPPORTED_MLFLOW_VERSION="${SUPPORTED_MLFLOW_VERSION}" python3 -c 'import os; import re; value = os.environ["SUPPORTED_MLFLOW_VERSION"]; match = re.match(r"^[vV]?(\d+)\.(\d+)", value); assert match, value; print(f"{int(match.group(1))}.{int(match.group(2))}")')" && \
+    printf 'if [ -z "${MLFLOW_TEST_SUPPORTED_VERSION:-}" ]; then export MLFLOW_TEST_SUPPORTED_VERSION=%s; fi\n' "${NORMALIZED_MLFLOW_VERSION}" > /mlflow/mlflow-tests/.bash_env
+
+# Non-interactive bash entrypoints source BASH_ENV, which lets the image expose the
+# derived supported MLflow version while still allowing runtime overrides.
+ENV BASH_ENV=/mlflow/mlflow-tests/.bash_env
 
 ENTRYPOINT ["bash", "mlflow-tests/images/test-run.sh"]

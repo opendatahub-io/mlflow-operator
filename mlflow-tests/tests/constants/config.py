@@ -26,3 +26,15 @@ class Config:
         for workspace in os.getenv("workspaces", "workspace1,workspace2").split(",")
         if workspace.strip()  # Filter out empty strings after stripping
     ]
+
+    UPGRADE_SUPPORTED_VERSION: str = os.getenv("MLFLOW_TEST_SUPPORTED_VERSION", "").strip()
+    UPGRADE_VERSION_CONFIGMAP_NAME: str = "mlflow-upgrade-test-version"
+    UPGRADE_VERSION_CONFIGMAP_KEY: str = "pre_upgrade_version"
+    UPGRADE_WORKSPACE: str = os.getenv(
+        "upgrade_workspace",
+        "mlflow-upgrade-workspace",
+    ).strip()
+    UPGRADE_CONFIGMAP_NAMESPACE: str = os.getenv(
+        "MLFLOW_UPGRADE_CONFIGMAP_NAMESPACE",
+        UPGRADE_WORKSPACE,
+    ).strip()
