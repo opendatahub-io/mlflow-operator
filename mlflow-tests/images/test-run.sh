@@ -196,9 +196,23 @@ MLFLOW_IMAGE_REPO="${MLFLOW_IMAGE_REPO:-}"
 MLFLOW_IMAGE="${MLFLOW_IMAGE:-}"
 MLFLOW_OPERATOR_IMAGE="${MLFLOW_OPERATOR_IMAGE:-quay.io/opendatahub/mlflow-operator:odh-stable}"
 
-if [ -n "${DB_TYPE+x}" ]; then
-    echo "ERROR: DB_TYPE is no longer supported. Use BACKEND_STORE and REGISTRY_STORE instead." >&2
-    exit 1
+# Legacy DB_TYPE support: map to BACKEND_STORE/REGISTRY_STORE if they aren't set.
+# Jenkins sets this instead of BACKEND_STORE/REGISTRY_STORE.
+if [ -n "${DB_TYPE:-}" ]; then
+    case "$DB_TYPE" in
+        postgresql|postgres)
+            BACKEND_STORE="${BACKEND_STORE:-postgres}"
+            REGISTRY_STORE="${REGISTRY_STORE:-postgres}"
+            ;;
+        sqlite)
+            BACKEND_STORE="${BACKEND_STORE:-sqlite}"
+            REGISTRY_STORE="${REGISTRY_STORE:-sqlite}"
+            ;;
+        *)
+            echo "ERROR: Unsupported DB_TYPE='${DB_TYPE}'. Use BACKEND_STORE and REGISTRY_STORE instead." >&2
+            exit 1
+            ;;
+    esac
 fi
 BACKEND_STORE="${BACKEND_STORE:-sqlite}"
 REGISTRY_STORE="${REGISTRY_STORE:-sqlite}"
