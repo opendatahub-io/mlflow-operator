@@ -241,7 +241,6 @@ jobs:
           docker run --rm --network host \
             -v "$HOME/.kube:/mlflow/.kube:ro,z" \
             -v "${{ github.workspace }}/test-results:/mlflow/results:z" \
-            -e IN_CLUSTER_MODE=false \
             -e DEPLOY_MLFLOW_OPERATOR=false \
             -e SKIP_CLEANUP=true \
             -e NAMESPACE="${{ env.NAMESPACE }}" \
@@ -270,7 +269,6 @@ jobs:
           docker run --rm --network host \
             -v "$HOME/.kube:/mlflow/.kube:ro,z" \
             -v "${{ github.workspace }}/test-results:/mlflow/results:z" \
-            -e IN_CLUSTER_MODE=false \
             -e DEPLOY_MLFLOW_OPERATOR=false \
             -e SKIP_DEPLOYMENT=true \
             -e SKIP_CLEANUP=true \
@@ -430,7 +428,6 @@ jobs:
           docker run --rm --network host \
             -v "$HOME/.kube:/mlflow/.kube:ro,z" \
             -v "${{ github.workspace }}/test-results:/mlflow/results:z" \
-            -e IN_CLUSTER_MODE=false \
             -e DEPLOY_MLFLOW_OPERATOR=false \
             -e SKIP_CLEANUP=true \
             -e NAMESPACE="${{ env.NAMESPACE }}" \
@@ -484,7 +481,6 @@ jobs:
           docker run --rm --network host \
             -v "$HOME/.kube:/mlflow/.kube:ro,z" \
             -v "${{ github.workspace }}/test-results:/mlflow/results:z" \
-            -e IN_CLUSTER_MODE=false \
             -e DEPLOY_MLFLOW_OPERATOR=false \
             -e SKIP_DEPLOYMENT=true \
             -e SKIP_CLEANUP=true \

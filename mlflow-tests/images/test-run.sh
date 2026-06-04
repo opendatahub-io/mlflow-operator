@@ -89,7 +89,9 @@ Operator / OpenShift:
   MLFLOW_OPERATOR_REPO    GitHub repo for CSV manifest download  (default: mlflow-operator)
   MLFLOW_OPERATOR_BRANCH  GitHub branch for CSV manifest download (default: main)
   INFRASTRUCTURE_PLATFORM Infrastructure overlay: base|openshift
-                          (default: openshift when DEPLOY_MLFLOW_OPERATOR=true, else base)
+                          (default: auto-detect OpenShift via route.openshift.io, else base)
+  FORCE_PORT_FORWARD      true|false — always port-forward the MLflow service to localhost,
+                          even on OpenShift (default: false)
 
 Skip / control flags:
   SKIP_DEPLOYMENT       true|false — skip all cluster deployment (default: false)
@@ -110,7 +112,6 @@ Skip / control flags:
 Other:
   NAMESPACE             Target namespace (default: opendatahub)
   MLFLOW_SA_NAME        Service account name created by the operator (default: mlflow-sa)
-  IN_CLUSTER_MODE       true|false — false enables port-forwarding for local runs (default: true)
   workspaces            Comma-separated workspace namespace list (default: two random names)
   upgrade_test_workspace Static workspace namespace for upgrade pytest phases. During
                         upgrade-phase runs, the harness derives workspaces and RBAC
@@ -231,7 +232,7 @@ SKIP_INFRASTRUCTURE="${SKIP_INFRASTRUCTURE:-false}"
 SKIP_CLEANUP="${SKIP_CLEANUP:-false}"
 CLEANUP_REUSED_RESOURCES="${CLEANUP_REUSED_RESOURCES:-false}"
 FAIL_FAST="${FAIL_FAST:-true}"
-IN_CLUSTER_MODE="${IN_CLUSTER_MODE:-true}"
+FORCE_PORT_FORWARD="${FORCE_PORT_FORWARD:-false}"
 SERVE_ARTIFACTS="${SERVE_ARTIFACTS:-${serve_artifacts:-true}}"
 
 ARTIFACT_BACKENDS_CONFIGURED=false
@@ -311,7 +312,6 @@ fi
 export workspaces="$WORKSPACE_LIST"
 
 PF_PID=""
-PG_PF_PID=""
 S3_PF_PID=""
 _CREATED_WORKSPACES=""  # tracks only namespaces created by this run (not pre-existing)
 # Set to true after the first suite so subsequent suites skip re-deploying the operator.
@@ -322,10 +322,6 @@ if [ -n "${MLFLOW_IMAGE_REPO:-}" ] && [ -n "${MLFLOW_TAG:-}" ]; then
     MLFLOW_DEFAULT_IMAGE="${MLFLOW_IMAGE_REPO}:${MLFLOW_TAG}"
 fi
 MLFLOW_RESOLVED_IMAGE="${MLFLOW_IMAGE:-${MLFLOW_DEFAULT_IMAGE}}"
-
-
-
-API_BASE="https://${MLFLOW_NAME}.${NAMESPACE}.svc.cluster.local:8443"
 
 should_use_mlflow_static_prefix() {
     if [ "$INFERRED_UPGRADE_PHASE" != "pre_upgrade" ] && [ "$INFERRED_UPGRADE_PHASE" != "post_upgrade" ]; then
@@ -364,7 +360,6 @@ should_use_mlflow_prefixed_health_endpoint() {
 
 cleanup() {
     [ -n "$PF_PID" ] && kill -0 "$PF_PID" 2>/dev/null && kill "$PF_PID"
-    [ -n "$PG_PF_PID" ] && kill -0 "$PG_PF_PID" 2>/dev/null && kill "$PG_PF_PID"
     [ -n "$S3_PF_PID" ] && kill -0 "$S3_PF_PID" 2>/dev/null && kill "$S3_PF_PID"
 
     local should_cleanup_mlflow=false
@@ -637,7 +632,6 @@ run_suite() {
         "$_suite_teardown_done" && return
         _suite_teardown_done=true
         [ -n "$PF_PID" ] && kill -0 "$PF_PID" 2>/dev/null && kill "$PF_PID" && PF_PID=""
-        [ -n "$PG_PF_PID" ] && kill -0 "$PG_PF_PID" 2>/dev/null && kill "$PG_PF_PID" && PG_PF_PID=""
         [ -n "$S3_PF_PID" ] && kill -0 "$S3_PF_PID" 2>/dev/null && kill "$S3_PF_PID" && S3_PF_PID=""
         # --wait ensures finalizers have completed before the next suite's deploy.py apply.
         if [ "$SKIP_CLEANUP" != "true" ] && \
@@ -652,25 +646,49 @@ run_suite() {
     setup_rbac || return $?
 
     # ── Tracking URI ────────────────────────────────────────────────────────────
-    local mlflow_base_path="/mlflow"
-    if ! should_use_mlflow_static_prefix; then
-        mlflow_base_path=""
-        echo "  Using legacy tracking URI shape without /mlflow static prefix for upgrade MLflow ${MLFLOW_TEST_SUPPORTED_VERSION:-unknown}"
-    fi
-    local health_base_path="/mlflow"
-    if ! should_use_mlflow_prefixed_health_endpoint; then
-        health_base_path=""
-    fi
-    if [ "$IN_CLUSTER_MODE" = "true" ]; then
-        export MLFLOW_TRACKING_URI="${API_BASE}${mlflow_base_path}"
-        local health_url="${API_BASE}${health_base_path}/health"
+    local health_url
+    if [ "$INFRASTRUCTURE_PLATFORM" = "openshift" ] && [ "$FORCE_PORT_FORWARD" != "true" ]; then
+        echo "  Waiting for MLflow CR status.url to be populated..."
+        local external_url=""
+        local addr_retry=0
+        local addr_max=60  # 60 × 5 s = 5 min
+        while [ -z "$external_url" ]; do
+            external_url=$(kubectl get mlflow "$MLFLOW_NAME" -o jsonpath='{.status.url}' 2>/dev/null || true)
+            [ -n "$external_url" ] && break
+            addr_retry=$((addr_retry + 1))
+            if [ "$addr_retry" -ge "$addr_max" ]; then
+                echo "ERROR: MLflow CR status.url not populated within timeout" >&2
+                return 1
+            fi
+            echo "  Attempt $addr_retry/$addr_max — retrying in 5s..."
+            sleep 5
+        done
+        local tracking_url="$external_url"
+        if ! should_use_mlflow_static_prefix; then
+            tracking_url="${external_url%/mlflow}"
+            echo "  Using legacy tracking URI shape without /mlflow static prefix for upgrade MLflow ${MLFLOW_TEST_SUPPORTED_VERSION:-unknown}"
+        fi
+        export MLFLOW_TRACKING_URI="$tracking_url"
+        health_url="${external_url}/health"
     else
+        local mlflow_base_path="/mlflow"
+        if ! should_use_mlflow_static_prefix; then
+            mlflow_base_path=""
+            echo "  Using legacy tracking URI shape without /mlflow static prefix for upgrade MLflow ${MLFLOW_TEST_SUPPORTED_VERSION:-unknown}"
+        fi
+        local health_base_path="/mlflow"
+        if ! should_use_mlflow_prefixed_health_endpoint; then
+            health_base_path=""
+        fi
+        if [ "$INFRASTRUCTURE_PLATFORM" = "openshift" ] && [ "$FORCE_PORT_FORWARD" = "true" ]; then
+            echo "  FORCE_PORT_FORWARD=true, using localhost port-forward instead of MLflow CR status.url"
+        fi
         echo "  Port-forwarding MLflow service to localhost:8443..."
         kubectl port-forward "svc/${MLFLOW_NAME}" -n "$NAMESPACE" 8443:8443 &
         PF_PID=$!
         sleep 2
         export MLFLOW_TRACKING_URI="https://localhost:8443${mlflow_base_path}"
-        local health_url="https://localhost:8443${health_base_path}/health"
+        health_url="https://localhost:8443${health_base_path}/health"
     fi
     echo "  MLFLOW_TRACKING_URI=$MLFLOW_TRACKING_URI"
 
@@ -702,17 +720,8 @@ run_suite() {
         echo "  MLflow CR status.version matches ${SUPPORTED_MLFLOW_VERSION_RAW}"
     fi
 
-    if [ "$IN_CLUSTER_MODE" = "false" ] && [ "$SKIP_INFRASTRUCTURE" != "true" ] && \
-       { [ "$BACKEND_STORE" = "postgres" ] || [ "$BACKEND_STORE" = "postgresql" ]; }; then
-        echo "  Port-forwarding PostgreSQL service to localhost:5432..."
-        kubectl port-forward service/postgres-service 5432:5432 -n "$NAMESPACE" &
-        PG_PF_PID=$!
-        sleep 2
-        export MLFLOW_BACKEND_STORE_URI="postgresql://${DB_USER:-postgres}:${DB_PASSWORD:-mysecretpassword}@localhost:${DB_PORT:-5432}/${DB_NAME:-mydatabase}"
-    fi
-
-    if [ "$IN_CLUSTER_MODE" = "false" ] && [ "$SERVE_ARTIFACTS" = "false" ] && \
-       [ "$STORAGE_TYPE" = "s3" ] && [ "$SKIP_INFRASTRUCTURE" != "true" ]; then
+    if [ "$SERVE_ARTIFACTS" = "false" ] && [ "$STORAGE_TYPE" = "s3" ] && \
+       [ "$SKIP_INFRASTRUCTURE" != "true" ]; then
         echo "  Port-forwarding SeaweedFS S3 endpoint to localhost:9000..."
         kubectl port-forward service/minio-service 9000:9000 -n "$NAMESPACE" &
         S3_PF_PID=$!

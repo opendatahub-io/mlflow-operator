@@ -67,7 +67,6 @@ The framework supports configuration via environment variables:
 | `DISABLE_TLS` | Disable TLS verification | `true` | Both |
 | `artifact_storage` | Artifact storage type (`s3` or `file`) | `file` | Both |
 | `serve_artifacts` | Whether MLflow serves artifacts | `true` | Both |
-| `MLFLOW_BACKEND_STORE_URI` | Database connection URI for store cleanup | `postgresql://postgres:mysecretpassword@localhost:5432/mydatabase` | Both |
 | `MLFLOW_S3_ENDPOINT_URL` | S3 endpoint URL | Optional | Both |
 | `AWS_ACCESS_KEY_ID` | AWS access key for S3 | Optional | Both |
 | `AWS_SECRET_ACCESS_KEY` | AWS secret key for S3 | Optional | Both |
@@ -146,7 +145,6 @@ The upgrade datasets use fixed resource names in a fixed namespace. If a local `
 To preserve the seeded deployment for later inspection or reuse:
 
 ```bash
-IN_CLUSTER_MODE=false \
 SKIP_CLEANUP=true \
 upgrade_test_workspace=mlflow-upgrade-test-workspace \
 bash images/test-run.sh -m pre_upgrade
@@ -157,7 +155,6 @@ That leaves the `MLflow` CR, the seeded workspace, and the selected backend reso
 To validate against that preserved deployment:
 
 ```bash
-IN_CLUSTER_MODE=false \
 SKIP_DEPLOYMENT=true \
 upgrade_test_workspace=mlflow-upgrade-test-workspace \
 bash images/test-run.sh -m post_upgrade

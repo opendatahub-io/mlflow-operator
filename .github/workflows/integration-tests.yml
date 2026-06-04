@@ -261,7 +261,6 @@ jobs:
           docker run --rm --network host \
             -v "$HOME/.kube:/mlflow/.kube:ro,z" \
             -v "${{ github.workspace }}/test-results:/mlflow/results:z" \
-            -e IN_CLUSTER_MODE=false \
             -e DEPLOY_MLFLOW_OPERATOR=false \
             -e NAMESPACE="${{ env.NAMESPACE }}" \
             -e MLFLOW_OPERATOR_IMAGE="${{ env.OPERATOR_RUNTIME_IMAGE }}" \

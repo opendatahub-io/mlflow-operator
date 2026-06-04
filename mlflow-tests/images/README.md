@@ -16,36 +16,38 @@ then exercising experiment, model, and artifact operations as users with varying
 
 ## Running tests locally (out-of-cluster)
 
-In out-of-cluster mode the script port-forwards the MLflow service to `localhost:8443` so the test
-client can reach it from your machine.
+On generic Kubernetes, the harness port-forwards the MLflow service to `localhost:8443` so the test
+client can reach it from your machine. On OpenShift, it instead uses the MLflow CR `status.url`
+gateway address by default. Set `FORCE_PORT_FORWARD=true` if you need the old localhost path on
+OpenShift as well.
 
 ```bash
 cd mlflow-tests
 
 # Full run: deploys MLflow, runs tests, cleans up
-IN_CLUSTER_MODE=false bash images/test-run.sh
+bash images/test-run.sh
 
 # Use a custom MLflow server image (recommended when testing against a specific commit)
-IN_CLUSTER_MODE=false MLFLOW_IMAGE=quay.io/opendatahub/mlflow:master bash images/test-run.sh
+MLFLOW_IMAGE=quay.io/opendatahub/mlflow:master bash images/test-run.sh
+
+# Force localhost port-forwarding even on OpenShift
+FORCE_PORT_FORWARD=true bash images/test-run.sh
 
 # Skip deployment (MLflow CR already exists on the cluster)
-IN_CLUSTER_MODE=false SKIP_DEPLOYMENT=true bash images/test-run.sh
+SKIP_DEPLOYMENT=true bash images/test-run.sh
 
 # Skip cleanup (leave the MLflow CR and role bindings in place after the run)
-IN_CLUSTER_MODE=false SKIP_CLEANUP=true bash images/test-run.sh
+ARTIFACT_BACKENDS=file SKIP_CLEANUP=true bash images/test-run.sh
 
 # Preserve the seeded deployment for later post-upgrade validation.
-IN_CLUSTER_MODE=false \
 SKIP_CLEANUP=true \
 bash images/test-run.sh -m pre_upgrade
 
 # Reuse that preserved deployment for post-upgrade checks.
-IN_CLUSTER_MODE=false \
 SKIP_DEPLOYMENT=true \
 bash images/test-run.sh -m post_upgrade
 
 # Also delete the reused MLflow resources after the post-upgrade run.
-IN_CLUSTER_MODE=false \
 SKIP_DEPLOYMENT=true \
 CLEANUP_REUSED_RESOURCES=true \
 bash images/test-run.sh -m post_upgrade
@@ -54,10 +56,12 @@ bash images/test-run.sh -m post_upgrade
 If the preserved deployment includes self-deployed PostgreSQL or SeaweedFS,
 `CLEANUP_REUSED_RESOURCES=true` removes those harness-managed resources too.
 
-## Running tests in-cluster (CI / container)
+## Running tests in a container / CI
 
-When running inside the test container (as CI does), the script connects directly to the MLflow
-service via its cluster-internal DNS name, bypassing the OpenShift gateway entirely.
+The test container still runs outside the MLflow pod network namespace, so connectivity follows the
+same rules as other out-of-cluster runs: OpenShift uses the MLflow CR `status.url` by default,
+while generic Kubernetes uses localhost port-forwarding. Use `FORCE_PORT_FORWARD=true` to force the
+localhost path on OpenShift when needed.
 
 ```bash
 # From the repository root
@@ -68,7 +72,6 @@ podman build -f mlflow-tests/images/Dockerfile.konflux -t mlflow-tests:latest .
 podman run --rm \
   --user root \
   -v $HOME/.kube:/mlflow/.kube:z \
-  -e IN_CLUSTER_MODE=false \
   mlflow-tests:latest
 ```
 
@@ -123,6 +126,7 @@ The script is configured entirely via environment variables. Variables can also 
 | `MLFLOW_OPERATOR_REPO` | `mlflow-operator` | GitHub repo name for CSV manifest download. |
 | `MLFLOW_OPERATOR_BRANCH` | `main` | Branch to pull manifests from for CSV patching. |
 | `INFRASTRUCTURE_PLATFORM` | _(auto)_ | Infrastructure overlay: `base` or `openshift`. When unset, the harness inspects `route.openshift.io` and selects `openshift` only if route resources are actually present; otherwise it uses `base`. |
+| `FORCE_PORT_FORWARD` | `false` | Force the harness to port-forward the MLflow service to `localhost:8443` even on OpenShift, instead of using the MLflow CR `status.url`. |
 
 ### Skip / control flags
 
@@ -140,7 +144,6 @@ The script is configured entirely via environment variables. Variables can also 
 |----------|---------|-------------|
 | `NAMESPACE` | `opendatahub` | Namespace where the MLflow Operator is deployed. |
 | `MLFLOW_SA_NAME` | `mlflow-sa` | Service account name created by the operator. |
-| `IN_CLUSTER_MODE` | `true` | Set to `false` for local out-of-cluster runs (enables port-forwarding). |
 | `workspaces` | `workspace1-<random>,workspace2-<random>` | Comma-separated list of workspace namespaces to create and test against. |
 | `upgrade_test_workspace` | `mlflow-upgrade-test-workspace` | Static workspace namespace for upgrade pytest phases and their RBAC setup. |
 | `ARTIFACT_BACKENDS` | `file,s3` | Comma-separated artifact backends to run in sequence (`file`, `s3`, `externals3`). Upgrade pytest phases require exactly one value. |
