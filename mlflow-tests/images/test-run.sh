@@ -55,7 +55,9 @@ Storage:
   AWS_ACCESS_KEY_ID     S3 access key     (when STORAGE_TYPE=s3 or externals3)
   AWS_SECRET_ACCESS_KEY S3 secret key     (when STORAGE_TYPE=s3 or externals3)
   BUCKET                S3 bucket name    (when STORAGE_TYPE=s3 or externals3)
-  S3_ENDPOINT_URL       S3 endpoint URL   (when STORAGE_TYPE=s3; omit for real AWS with externals3)
+  S3_ENDPOINT_URL       S3 endpoint URL   (when STORAGE_TYPE=s3 or externals3)
+                        Falls back to AWS_DEFAULT_ENDPOINT when not explicitly set.
+  AWS_DEFAULT_ENDPOINT  Alias for S3_ENDPOINT_URL (set by Jenkins)
   AWS_DEFAULT_REGION    AWS region        (when STORAGE_TYPE=externals3; optional for s3)
 
   DB_HOST               PostgreSQL host   (when BACKEND_STORE=postgres and/or REGISTRY_STORE=postgres; default: auto)
@@ -277,6 +279,10 @@ POSTGRES_TLS="${POSTGRES_TLS:-false}"
 SEAWEEDFS_TLS="${SEAWEEDFS_TLS:-false}"
 CA_BUNDLE_PATH="${CA_BUNDLE_PATH:-}"
 CA_BUNDLE_CONFIGMAP="${CA_BUNDLE_CONFIGMAP:-}"
+
+# S3 endpoint URL: prefer explicit S3_ENDPOINT_URL, fall back to AWS_DEFAULT_ENDPOINT
+# (Jenkins on disconnected clusters sets AWS_DEFAULT_ENDPOINT to the bastion MinIO URL).
+S3_ENDPOINT_URL="${S3_ENDPOINT_URL:-${AWS_DEFAULT_ENDPOINT:-}}"
 
 # PostgreSQL sslmode appended to the connection URI.
 # Leave empty to let deploy.py use its default ("disable" for self-deployed postgres).
@@ -554,7 +560,7 @@ run_suite() {
             externals3)
                 # Use externally-provided S3 credentials (AWS_* env vars); SeaweedFS is
                 # NOT deployed. Requires: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, BUCKET.
-                # Optional: S3_ENDPOINT_URL (omit for real AWS), AWS_DEFAULT_REGION.
+                # Optional: S3_ENDPOINT_URL or AWS_DEFAULT_ENDPOINT, AWS_DEFAULT_REGION.
                 deploy_args+=(--artifact-storage externals3)
                 deploy_args+=(--s3-access-key "$AWS_ACCESS_KEY_ID")
                 deploy_args+=(--s3-secret-key "$AWS_SECRET_ACCESS_KEY")
