@@ -24,7 +24,7 @@ env:
   QUAY_TOKEN: ${{ secrets.QUAY_ROBOT_TOKEN }}
   IMAGE_REPO: mlflow-tests
   DOCKERFILE_PATH: mlflow-tests/images/Dockerfile.konflux
-  IMAGE_PLATFORMS: linux/amd64,linux/arm64,linux/ppc64le,linux/s390x
+  IMAGE_PLATFORMS: linux/amd64,linux/arm64
 
 jobs:
   build-test-image:

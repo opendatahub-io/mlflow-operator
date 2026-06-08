@@ -21,8 +21,6 @@ RUN microdnf install -y --setopt=tsflags=nodocs \
 RUN case "${TARGETARCH}" in \
       amd64)  oc_archive="openshift-client-linux-${OC_VERSION}.tar.gz" ;; \
       arm64)  oc_archive="openshift-client-linux-arm64-${OC_VERSION}.tar.gz" ;; \
-      ppc64le) oc_archive="openshift-client-linux-ppc64le-${OC_VERSION}.tar.gz" ;; \
-      s390x)  oc_archive="openshift-client-linux-s390x-rhel9-${OC_VERSION}.tar.gz" ;; \
       *) echo "Unsupported TARGETARCH '${TARGETARCH}' for oc client download" >&2; exit 1 ;; \
     esac && \
     curl -fsSL "https://mirror.openshift.com/pub/openshift-v4/clients/ocp/${OC_VERSION}/${oc_archive}" \
@@ -33,7 +31,7 @@ RUN case "${TARGETARCH}" in \
     rm -f /tmp/oc-client.tar.gz /tmp/oc /tmp/kubectl
 
 RUN case "${TARGETARCH}" in \
-      amd64|arm64|ppc64le|s390x) kustomize_arch="${TARGETARCH}" ;; \
+      amd64|arm64) kustomize_arch="${TARGETARCH}" ;; \
       *) echo "Unsupported TARGETARCH '${TARGETARCH}' for kustomize download" >&2; exit 1 ;; \
     esac && \
     curl -fsSL "https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize/v${KUSTOMIZE_VERSION}/kustomize_v${KUSTOMIZE_VERSION}_linux_${kustomize_arch}.tar.gz" \
