@@ -23,6 +23,18 @@ spec:
     limits:
       cpu: "4"
       memory: "3Gi"
+    # DRA-capable containers can reference pod-level claims by name.
+    # claims:
+    #   - name: shared-gpu
+    #     request: gpu
+
+  # Optional pod-level Dynamic Resource Allocation claims.
+  # These must be paired with resources.claims entries in the container.
+  # Each resourceClaims entry must set exactly one of
+  # resourceClaimName or resourceClaimTemplateName.
+  # resourceClaims:
+  #   - name: shared-gpu
+  #     resourceClaimTemplateName: shared-gpu-template
 
   # Pod-specific annotations
   podAnnotations:

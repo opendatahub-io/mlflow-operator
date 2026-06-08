@@ -39,6 +39,7 @@ import (
 // +kubebuilder:validation:XValidation:rule="!has(self.env) || self.env.all(e, e.name != 'MLFLOW_SERVER_DISABLE_SECURITY_MIDDLEWARE')",message="setting the MLFLOW_SERVER_DISABLE_SECURITY_MIDDLEWARE environment variable is not allowed"
 // +kubebuilder:validation:XValidation:rule="!has(self.networkPolicyEgressRules) || self.networkPolicyEgressRules.all(r, (has(r.ports) && size(r.ports) > 0) || (has(r.to) && size(r.to) > 0))",message="each networkPolicyEgressRules entry must specify at least one port or one destination"
 // +kubebuilder:validation:XValidation:rule="!has(self.networkPolicyAdditionalEgressRules) || self.networkPolicyAdditionalEgressRules.all(r, (has(r.ports) && size(r.ports) > 0) || (has(r.to) && size(r.to) > 0))",message="each networkPolicyAdditionalEgressRules entry must specify at least one port or one destination"
+// +kubebuilder:validation:XValidation:rule="!has(self.resourceClaims) || self.resourceClaims.all(c, ((has(c.resourceClaimName) && size(c.resourceClaimName) > 0) != (has(c.resourceClaimTemplateName) && size(c.resourceClaimTemplateName) > 0)))",message="each resourceClaims entry must set exactly one non-empty value: resourceClaimName or resourceClaimTemplateName"
 type MLflowSpec struct {
 	// Image specifies the MLflow container image.
 	// If not specified, use the default image
@@ -223,6 +224,22 @@ type MLflowSpec struct {
 	// Affinity specifies the pod's scheduling constraints
 	// +optional
 	Affinity *corev1.Affinity `json:"affinity,omitempty"`
+
+	// ResourceClaims defines which ResourceClaims must be allocated
+	// and reserved before the Pod is allowed to start. The resources
+	// will be made available to those containers which consume them
+	// by name.
+	//
+	// This is an alpha field and requires enabling the
+	// DynamicResourceAllocation feature gate.
+	//
+	// +patchMergeKey=name
+	// +patchStrategy=merge,retainKeys
+	// +listType=map
+	// +listMapKey=name
+	// +featureGate=DynamicResourceAllocation
+	// +optional
+	ResourceClaims []corev1.PodResourceClaim `json:"resourceClaims,omitempty" patchStrategy:"merge,retainKeys" patchMergeKey:"name"`
 
 	// CABundleConfigMap specifies a ConfigMap containing a CA certificate bundle.
 	// The bundle will be mounted into the MLflow container and configured for use

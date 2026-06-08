@@ -558,6 +558,7 @@ func buildMigrationJobFromDeployment(mlflow *mlflowv1.MLflow, deployment *appsv1
 	jobContainer.ReadinessProbe = nil
 	jobContainer.StartupProbe = nil
 	jobContainer.Lifecycle = nil
+	jobContainer.Resources.Claims = nil
 	jobContainer.Env = append(jobContainer.Env, corev1.EnvVar{
 		Name:  "MIGRATION_PYTHON_SCRIPT",
 		Value: migrationPythonScript,
@@ -569,6 +570,7 @@ func buildMigrationJobFromDeployment(mlflow *mlflowv1.MLflow, deployment *appsv1
 
 	podSpec.Containers = []corev1.Container{*jobContainer}
 	podSpec.InitContainers = filterMigrationInitContainers(podSpec.InitContainers)
+	podSpec.ResourceClaims = nil
 	podSpec.Volumes = filterVolumes(podSpec.Volumes, usedVolumeNames(*podSpec))
 	podSpec.RestartPolicy = corev1.RestartPolicyNever
 	podSpec.TerminationGracePeriodSeconds = nil

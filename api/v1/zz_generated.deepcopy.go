@@ -326,6 +326,13 @@ func (in *MLflowSpec) DeepCopyInto(out *MLflowSpec) {
 		*out = new(corev1.Affinity)
 		(*in).DeepCopyInto(*out)
 	}
+	if in.ResourceClaims != nil {
+		in, out := &in.ResourceClaims, &out.ResourceClaims
+		*out = make([]corev1.PodResourceClaim, len(*in))
+		for i := range *in {
+			(*in)[i].DeepCopyInto(&(*out)[i])
+		}
+	}
 	if in.CABundleConfigMap != nil {
 		in, out := &in.CABundleConfigMap, &out.CABundleConfigMap
 		*out = new(CABundleConfigMapSpec)

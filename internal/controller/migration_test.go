@@ -243,6 +243,16 @@ func TestBuildMigrationJobFromDeployment(t *testing.T) {
 			PodAnnotations: map[string]string{
 				"sidecar.istio.io/inject": "true",
 			},
+			ResourceClaims: []corev1.PodResourceClaim{{
+				Name:                      "shared-gpu",
+				ResourceClaimTemplateName: ptr("shared-gpu-template"),
+			}},
+			Resources: &corev1.ResourceRequirements{
+				Claims: []corev1.ResourceClaim{{
+					Name:    "shared-gpu",
+					Request: "gpu",
+				}},
+			},
 		},
 	}, "test-ns", RenderOptions{PlatformTrustedCABundleExists: true})
 	g.Expect(err).NotTo(gomega.HaveOccurred())
@@ -259,6 +269,7 @@ func TestBuildMigrationJobFromDeployment(t *testing.T) {
 	g.Expect(job.Spec.Template.Spec.InitContainers).To(gomega.HaveLen(1))
 	g.Expect(job.Spec.Template.Spec.InitContainers[0].Name).To(gomega.Equal("combine-ca-bundles"))
 	g.Expect(job.Spec.Template.Spec.Containers).To(gomega.HaveLen(1))
+	g.Expect(job.Spec.Template.Spec.ResourceClaims).To(gomega.BeNil())
 	g.Expect(job.Spec.TTLSecondsAfterFinished).NotTo(gomega.BeNil())
 	g.Expect(*job.Spec.TTLSecondsAfterFinished).To(gomega.Equal(int32(24 * 60 * 60)))
 	g.Expect(job.Labels).To(gomega.HaveKeyWithValue("component", "mlflow-migration"))
@@ -278,6 +289,7 @@ func TestBuildMigrationJobFromDeployment(t *testing.T) {
 	g.Expect(container.Args).To(gomega.HaveLen(1))
 	g.Expect(container.Args[0]).To(gomega.ContainSubstring("python3.12"))
 	g.Expect(container.Args[0]).To(gomega.ContainSubstring("MIGRATION_PYTHON_SCRIPT"))
+	g.Expect(container.Resources.Claims).To(gomega.BeNil())
 	g.Expect(job.Spec.BackoffLimit).NotTo(gomega.BeNil())
 	g.Expect(*job.Spec.BackoffLimit).To(gomega.Equal(int32(3)))
 

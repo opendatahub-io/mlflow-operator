@@ -240,6 +240,28 @@ kubectl create secret generic mlflow-db-credentials \
   -n <namespace>
 ```
 
+### Dynamic Resource Allocation
+
+Use `spec.resourceClaims` for pod-level Dynamic Resource Allocation (DRA) claims, then reference those claims from `spec.resources.claims` so the MLflow container can consume the allocated resource:
+
+```yaml
+spec:
+  resourceClaims:
+    - name: shared-gpu
+      resourceClaimTemplateName: shared-gpu-template
+  resources:
+    claims:
+      - name: shared-gpu
+        request: gpu
+```
+
+`resourceClaims` is optional and requires the Kubernetes `DynamicResourceAllocation` feature gate when running on clusters that still gate the field.
+For each `spec.resourceClaims[]` entry, set exactly one non-empty value:
+- `resourceClaimName` to reference an existing claim
+- `resourceClaimTemplateName` to create a claim from a template
+
+Setting both, neither, or an empty string value is rejected by CRD validation.
+
 ### Database Migration
 
 Use `spec.migration.mode` to control operator-managed database migration orchestration:
@@ -357,9 +379,13 @@ When CA bundles are present (platform or custom), PostgreSQL connections use `PG
 ### Example Configurations
 
 See the [config/samples](./config/samples/) directory for complete examples:
-- `mlflow_v1_mlflow.yaml` - OpenShift deployment with local storage and service-ca TLS
+- `mlflow_v1_mlflow.yaml` - OpenShift deployment with local storage, service-ca TLS, and a commented DRA example
 - `mlflow_v1_mlflow_remote_storage.yaml` - Remote PostgreSQL + S3 storage with horizontal scaling
 - `mlflow_v1_mlflowconfig.yaml` - Namespace-scoped artifact storage override using the upstream `MLflowConfig` CRD
+
+## Development
+
+For API and code-generation changes, use `make generate` and `make manifests`. The Makefile scopes `controller-gen` to the root controller package plus the nested `api/` module so unrelated nested repo copies or temp trees under the workspace do not affect generated output. Keep the Kubernetes dependency versions in the root module and `api/go.mod` aligned so generation runs against the same API types the operator binary uses.
 
 ## Testing
 

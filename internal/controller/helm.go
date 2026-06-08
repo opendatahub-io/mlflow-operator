@@ -547,6 +547,12 @@ func (h *HelmRenderer) mlflowToHelmValues(mlflow *mlflowv1.MLflow, namespace str
 		values["tolerations"] = []corev1.Toleration{}
 	}
 
+	if len(mlflow.Spec.ResourceClaims) > 0 {
+		values["resourceClaims"] = mlflow.Spec.ResourceClaims
+	} else {
+		values["resourceClaims"] = []corev1.PodResourceClaim{}
+	}
+
 	if mlflow.Spec.Affinity != nil {
 		values["affinity"] = mlflow.Spec.Affinity
 	} else {

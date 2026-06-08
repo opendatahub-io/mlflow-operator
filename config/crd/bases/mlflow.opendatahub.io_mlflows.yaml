@@ -2095,6 +2095,62 @@ spec:
                 format: int32
                 minimum: 1
                 type: integer
+              resourceClaims:
+                description: |-
+                  ResourceClaims defines which ResourceClaims must be allocated
+                  and reserved before the Pod is allowed to start. The resources
+                  will be made available to those containers which consume them
+                  by name.
+
+                  This is an alpha field and requires enabling the
+                  DynamicResourceAllocation feature gate.
+                items:
+                  description: |-
+                    PodResourceClaim references exactly one ResourceClaim, either directly
+                    or by naming a ResourceClaimTemplate which is then turned into a ResourceClaim
+                    for the pod.
+
+                    It adds a name to it that uniquely identifies the ResourceClaim inside the Pod.
+                    Containers that need access to the ResourceClaim reference it with this name.
+                  properties:
+                    name:
+                      description: |-
+                        Name uniquely identifies this resource claim inside the pod.
+                        This must be a DNS_LABEL.
+                      type: string
+                    resourceClaimName:
+                      description: |-
+                        ResourceClaimName is the name of a ResourceClaim object in the same
+                        namespace as this pod.
+
+                        Exactly one of ResourceClaimName and ResourceClaimTemplateName must
+                        be set.
+                      type: string
+                    resourceClaimTemplateName:
+                      description: |-
+                        ResourceClaimTemplateName is the name of a ResourceClaimTemplate
+                        object in the same namespace as this pod.
+
+                        The template will be used to create a new ResourceClaim, which will
+                        be bound to this pod. When this pod is deleted, the ResourceClaim
+                        will also be deleted. The pod name and resource name, along with a
+                        generated component, will be used to form a unique name for the
+                        ResourceClaim, which will be recorded in pod.status.resourceClaimStatuses.
+
+                        This field is immutable and no changes will be made to the
+                        corresponding ResourceClaim by the control plane after creating the
+                        ResourceClaim.
+
+                        Exactly one of ResourceClaimName and ResourceClaimTemplateName must
+                        be set.
+                      type: string
+                  required:
+                  - name
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - name
+                x-kubernetes-list-type: map
               resources:
                 description: Resources specifies the compute resources for the MLflow
                   container
@@ -2727,6 +2783,11 @@ spec:
               rule: '!has(self.networkPolicyAdditionalEgressRules) || self.networkPolicyAdditionalEgressRules.all(r,
                 (has(r.ports) && size(r.ports) > 0) || (has(r.to) && size(r.to) >
                 0))'
+            - message: 'each resourceClaims entry must set exactly one non-empty value:
+                resourceClaimName or resourceClaimTemplateName'
+              rule: '!has(self.resourceClaims) || self.resourceClaims.all(c, ((has(c.resourceClaimName)
+                && size(c.resourceClaimName) > 0) != (has(c.resourceClaimTemplateName)
+                && size(c.resourceClaimTemplateName) > 0)))'
           status:
             description: status defines the observed state of MLflow
             properties:

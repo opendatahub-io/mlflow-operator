@@ -240,6 +240,10 @@ nodeSelector: {}
 tolerations: []
 affinity: {}
 
+# Pod-level Dynamic Resource Allocation claims. Containers can reference these
+# from resources.claims using the same claim name.
+resourceClaims: []
+
 # Garbage collection via a CronJob that runs `mlflow gc`.
 # Permanently removes soft-deleted runs, experiments, and logged models
 # along with their artifacts. Resources must be soft-deleted first

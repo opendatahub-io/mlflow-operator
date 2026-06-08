@@ -29,6 +29,7 @@ SUPPORTED_MLFLOW_VERSION := $(shell python3 scripts/print_supported_mlflow_versi
 SUPPORTED_MLFLOW_VERSION_OVERRIDE ?=
 EFFECTIVE_SUPPORTED_MLFLOW_VERSION = $(if $(strip $(SUPPORTED_MLFLOW_VERSION_OVERRIDE)),$(strip $(SUPPORTED_MLFLOW_VERSION_OVERRIDE)),$(strip $(SUPPORTED_MLFLOW_VERSION)))
 SUPPORTED_MLFLOW_VERSION_LDFLAG = -X github.com/opendatahub-io/mlflow-operator/internal/controller.SupportedMLflowVersion=$(EFFECTIVE_SUPPORTED_MLFLOW_VERSION)
+API_MODULE_DIR ?= api
 
 .PHONY: all
 all: build
@@ -59,11 +60,12 @@ print-supported-mlflow-version: ## Print the supported MLflow version from compo
 
 .PHONY: manifests
 manifests: controller-gen ## Generate WebhookConfiguration, ClusterRole and CustomResourceDefinition objects.
-	"$(CONTROLLER_GEN)" rbac:roleName=manager-role crd webhook paths="./..." output:crd:artifacts:config=config/crd/bases
+	"$(CONTROLLER_GEN)" rbac:roleName=manager-role webhook paths="./internal/controller"
+	(cd "$(API_MODULE_DIR)" && "$(CONTROLLER_GEN)" crd paths="./..." output:crd:artifacts:config=../config/crd/bases)
 
 .PHONY: generate
 generate: controller-gen ## Generate code containing DeepCopy, DeepCopyInto, and DeepCopyObject method implementations.
-	"$(CONTROLLER_GEN)" object:headerFile="hack/boilerplate.go.txt" paths="./..."
+	(cd "$(API_MODULE_DIR)" && "$(CONTROLLER_GEN)" object:headerFile="../hack/boilerplate.go.txt" paths="./...")
 
 .PHONY: fmt
 fmt: ## Run go fmt against code.
