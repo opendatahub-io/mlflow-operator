@@ -164,33 +164,40 @@ jobs:
       matrix:
         k8s_version: ["v1.34.0"]
         serve_artifacts: ["true", "false"]
-        artifact_storage: ["file", "s3"]
+        artifact_backends: ["file", "s3"]
         backend_store: ["sqlite", "postgres"]
         registry_store: ["sqlite", "postgres"]
         include:
           - k8s_version: "v1.29.0"
             backend_store: "sqlite"
-            artifact_storage: "file"
+            artifact_backends: "file"
             serve_artifacts: "true"
             registry_store: "sqlite"
             workspace_label_selector: '{"matchLabels":{"mlflow-enabled":"true"}}'
           - k8s_version: "v1.29.0"
             backend_store: "postgres"
-            artifact_storage: "s3"
+            artifact_backends: "s3"
             serve_artifacts: "false"
+            registry_store: "postgres"
+          # Jenkins runs multiple backend suites in one test-run.sh invocation; keep
+          # this row so CI exercises the same file -> s3 reuse path.
+          - k8s_version: "v1.34.0"
+            backend_store: "postgres"
+            artifact_backends: "file,s3"
+            serve_artifacts: "true"
             registry_store: "postgres"
           # TLS variant — validates MLflow connects to postgres + s3 over TLS.
           # Only serve_artifacts=true so the test runner doesn't need direct
           # TLS access to the backends (MLflow proxies everything).
           - k8s_version: "v1.34.0"
             backend_store: "postgres"
-            artifact_storage: "s3"
+            artifact_backends: "s3"
             serve_artifacts: "true"
             registry_store: "postgres"
             postgres_tls: "true"
             seaweedfs_tls: "true"
       fail-fast: false
-    name: MLflow Integration tests - K8sVersion=${{ matrix.k8s_version }} serve_artifacts=${{ matrix.serve_artifacts }} artifact_storage=${{ matrix.artifact_storage }} backend_store=${{ matrix.backend_store }} registry_store=${{ matrix.registry_store }} postgres_tls=${{ matrix.postgres_tls || 'false' }} seaweedfs_tls=${{ matrix.seaweedfs_tls || 'false' }}
+    name: MLflow Integration tests - K8sVersion=${{ matrix.k8s_version }} serve_artifacts=${{ matrix.serve_artifacts }} artifact_backends=${{ matrix.artifact_backends }} backend_store=${{ matrix.backend_store }} registry_store=${{ matrix.registry_store }} postgres_tls=${{ matrix.postgres_tls || 'false' }} seaweedfs_tls=${{ matrix.seaweedfs_tls || 'false' }}
 
     steps:
       - name: Checkout repository
@@ -248,7 +255,7 @@ jobs:
         id: run-tests
         continue-on-error: true
         env:
-          ARTIFACT_BACKENDS: ${{ matrix.artifact_storage }}
+          ARTIFACT_BACKENDS: ${{ matrix.artifact_backends }}
           BACKEND_STORE: ${{ matrix.backend_store }}
           REGISTRY_STORE: ${{ matrix.registry_store }}
           SERVE_ARTIFACTS: ${{ matrix.serve_artifacts }}
@@ -297,7 +304,7 @@ jobs:
         id: upload-report
         if: (!cancelled())
         with:
-          name: integration-test-results-${{ matrix.k8s_version }}-${{ matrix.backend_store }}-${{ matrix.registry_store }}-${{ matrix.artifact_storage }}-${{ matrix.serve_artifacts }}-postgres_tls_${{ matrix.postgres_tls || 'false' }}-seaweedfs_tls_${{ matrix.seaweedfs_tls || 'false' }}
+          name: integration-test-results-${{ matrix.k8s_version }}-${{ matrix.backend_store }}-${{ matrix.registry_store }}-${{ matrix.artifact_backends }}-${{ matrix.serve_artifacts }}-postgres_tls_${{ matrix.postgres_tls || 'false' }}-seaweedfs_tls_${{ matrix.seaweedfs_tls || 'false' }}
           path: test-results/
           retention-days: 30
 
@@ -320,7 +327,7 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: ${{ failure() && !cancelled() }}
         with:
-          name: debug-logs-${{ matrix.k8s_version }}-${{ matrix.backend_store }}-${{ matrix.registry_store }}-${{ matrix.artifact_storage }}-${{ matrix.serve_artifacts }}-postgres_tls_${{ matrix.postgres_tls || 'false' }}-seaweedfs_tls_${{ matrix.seaweedfs_tls || 'false' }}
+          name: debug-logs-${{ matrix.k8s_version }}-${{ matrix.backend_store }}-${{ matrix.registry_store }}-${{ matrix.artifact_backends }}-${{ matrix.serve_artifacts }}-postgres_tls_${{ matrix.postgres_tls || 'false' }}-seaweedfs_tls_${{ matrix.seaweedfs_tls || 'false' }}
           path: debug-logs/
           retention-days: 7
 

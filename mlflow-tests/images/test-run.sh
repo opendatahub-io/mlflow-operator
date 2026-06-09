@@ -352,6 +352,68 @@ should_use_mlflow_prefixed_health_endpoint() {
     return 0
 }
 
+stop_port_forwards() {
+    [ -n "$PF_PID" ] && kill -0 "$PF_PID" 2>/dev/null && kill "$PF_PID"
+    [ -n "$S3_PF_PID" ] && kill -0 "$S3_PF_PID" 2>/dev/null && kill "$S3_PF_PID"
+    PF_PID=""
+    S3_PF_PID=""
+}
+
+cleanup_self_managed_infrastructure() {
+    local cleanup_internal_s3="${1:-false}"
+    local wait_for_delete="${2:-false}"
+
+    # Compute per-component overlay directories, accounting for TLS overlays.
+    local postgres_overlay seaweedfs_overlay
+    if [ "${POSTGRES_TLS:-false}" = "true" ]; then
+        [ "$INFRASTRUCTURE_PLATFORM" = "openshift" ] && postgres_overlay="openshift-tls" || postgres_overlay="tls"
+    else
+        postgres_overlay="$INFRASTRUCTURE_PLATFORM"
+    fi
+    if [ "${SEAWEEDFS_TLS:-false}" = "true" ]; then
+        [ "$INFRASTRUCTURE_PLATFORM" = "openshift" ] && seaweedfs_overlay="openshift-tls" || seaweedfs_overlay="tls"
+    else
+        seaweedfs_overlay="$INFRASTRUCTURE_PLATFORM"
+    fi
+
+    echo "  Removing self-deployed infrastructure..."
+    kustomize build "$REPO_ROOT/config/postgres/$postgres_overlay" \
+        | kubectl delete --ignore-not-found -n "$NAMESPACE" -f - 2>/dev/null || true
+
+    if [ "$wait_for_delete" = "true" ]; then
+        kubectl wait --for=delete deployment/postgres-deployment --namespace "$NAMESPACE" --timeout=180s 2>/dev/null || true
+        kubectl wait --for=delete pod -l app=mlflow-postgres --namespace "$NAMESPACE" --timeout=180s 2>/dev/null || true
+        kubectl wait --for=delete pvc/postgres-pvc --namespace "$NAMESPACE" --timeout=180s 2>/dev/null || true
+    fi
+
+    # Only tear down SeaweedFS if the in-cluster s3 backend was used.
+    # externals3 uses an external S3 service that this run did not deploy.
+    if [ "$cleanup_internal_s3" = "true" ]; then
+        export APPLICATION_CRD_ID=mlflow-pipelines \
+               PROFILE_NAMESPACE_LABEL=mlflow-profile \
+               S3_BUCKET="${BUCKET:-mlpipeline}"
+        kustomize build "$REPO_ROOT/config/seaweedfs/$seaweedfs_overlay" \
+            | envsubst '$NAMESPACE,$APPLICATION_CRD_ID,$PROFILE_NAMESPACE_LABEL,$S3_BUCKET' \
+            | kubectl delete --ignore-not-found -f - 2>/dev/null || true
+
+        if [ "$wait_for_delete" = "true" ]; then
+            kubectl wait --for=delete deployment/seaweedfs --namespace "$NAMESPACE" --timeout=180s 2>/dev/null || true
+            kubectl wait --for=delete job/init-seaweedfs --namespace "$NAMESPACE" --timeout=180s 2>/dev/null || true
+            kubectl wait --for=delete pod -l app=seaweedfs --namespace "$NAMESPACE" --timeout=180s 2>/dev/null || true
+            kubectl wait --for=delete pvc/seaweedfs-pvc --namespace "$NAMESPACE" --timeout=180s 2>/dev/null || true
+        fi
+    fi
+
+    # Clean up TLS resources (cert Secrets, CA bundle ConfigMap, DSCI restore)
+    # after infrastructure is torn down to avoid noisy pod errors from missing secrets.
+    if [ "${POSTGRES_TLS:-false}" = "true" ] || [ "${SEAWEEDFS_TLS:-false}" = "true" ]; then
+        local _tls_args=(--namespace "$NAMESPACE")
+        [ "${POSTGRES_TLS:-false}"  = "true" ] && _tls_args+=(--postgres-tls)
+        [ "${SEAWEEDFS_TLS:-false}" = "true" ] && _tls_args+=(--seaweedfs-tls)
+        uv run python3 "$DEPLOY_PY" --cleanup-tls "${_tls_args[@]}" 2>/dev/null || true
+    fi
+}
+
 # ─── Shared teardown (EXIT trap) ──────────────────────────────────────────────
 # Removes all resources created by this run: workspace namespaces (only those the
 # script itself created, not pre-existing ones), role bindings, the MLflow CR,
@@ -359,11 +421,11 @@ should_use_mlflow_prefixed_health_endpoint() {
 # The DataScienceCluster mlflowoperator component is assumed to remain Managed.
 
 cleanup() {
-    [ -n "$PF_PID" ] && kill -0 "$PF_PID" 2>/dev/null && kill "$PF_PID"
-    [ -n "$S3_PF_PID" ] && kill -0 "$S3_PF_PID" 2>/dev/null && kill "$S3_PF_PID"
+    stop_port_forwards
 
     local should_cleanup_mlflow=false
     local should_cleanup_infrastructure=false
+    local cleanup_internal_s3=false
     if [ "$SKIP_DEPLOYMENT" != "true" ] || [ "$CLEANUP_REUSED_RESOURCES" = "true" ]; then
         should_cleanup_mlflow=true
     fi
@@ -392,41 +454,10 @@ cleanup() {
     fi
 
     if [ "$should_cleanup_infrastructure" = "true" ]; then
-        # Compute per-component overlay directories, accounting for TLS overlays.
-        local postgres_overlay seaweedfs_overlay
-        if [ "${POSTGRES_TLS:-false}" = "true" ]; then
-            [ "$INFRASTRUCTURE_PLATFORM" = "openshift" ] && postgres_overlay="openshift-tls" || postgres_overlay="tls"
-        else
-            postgres_overlay="$INFRASTRUCTURE_PLATFORM"
-        fi
-        if [ "${SEAWEEDFS_TLS:-false}" = "true" ]; then
-            [ "$INFRASTRUCTURE_PLATFORM" = "openshift" ] && seaweedfs_overlay="openshift-tls" || seaweedfs_overlay="tls"
-        else
-            seaweedfs_overlay="$INFRASTRUCTURE_PLATFORM"
-        fi
-
-        echo "  Removing self-deployed infrastructure..."
-        kustomize build "$REPO_ROOT/config/postgres/$postgres_overlay" \
-            | kubectl delete --ignore-not-found -n "$NAMESPACE" -f - 2>/dev/null || true
-        # Only tear down SeaweedFS if the in-cluster s3 backend was used.
-        # externals3 uses an external S3 service that this run did not deploy.
         if echo "$ARTIFACT_BACKENDS" | tr ',' '\n' | grep -qxF 's3'; then
-            export APPLICATION_CRD_ID=mlflow-pipelines \
-                   PROFILE_NAMESPACE_LABEL=mlflow-profile \
-                   S3_BUCKET="${BUCKET:-mlpipeline}"
-            kustomize build "$REPO_ROOT/config/seaweedfs/$seaweedfs_overlay" \
-                | envsubst '$NAMESPACE,$APPLICATION_CRD_ID,$PROFILE_NAMESPACE_LABEL,$S3_BUCKET' \
-                | kubectl delete --ignore-not-found -f - 2>/dev/null || true
+            cleanup_internal_s3=true
         fi
-
-        # Clean up TLS resources (cert Secrets, CA bundle ConfigMap, DSCI restore)
-        # after infrastructure is torn down to avoid noisy pod errors from missing secrets.
-        if [ "${POSTGRES_TLS:-false}" = "true" ] || [ "${SEAWEEDFS_TLS:-false}" = "true" ]; then
-            local _tls_args=(--namespace "$NAMESPACE")
-            [ "${POSTGRES_TLS:-false}"  = "true" ] && _tls_args+=(--postgres-tls)
-            [ "${SEAWEEDFS_TLS:-false}" = "true" ] && _tls_args+=(--seaweedfs-tls)
-            uv run python3 "$DEPLOY_PY" --cleanup-tls "${_tls_args[@]}" 2>/dev/null || true
-        fi
+        cleanup_self_managed_infrastructure "$cleanup_internal_s3"
     fi
 }
 
@@ -624,19 +655,26 @@ run_suite() {
 
     # ── Between-suite teardown (runs on every exit path) ────────────────────────
     # Registered here so it fires even when RBAC, health-check, or token steps fail,
-    # ensuring the port-forward and MLflow CR are cleaned up before the next suite.
-    # SKIP_CLEANUP preserves the single-backend suite state so the final deployment can
-    # be inspected or reused after the script exits.
+    # ensuring the current suite is fully reset before the next backend starts.
+    # Single-backend preserve/reuse flows still rely on the final EXIT cleanup semantics.
     local _suite_teardown_done=false
     _suite_teardown() {
         "$_suite_teardown_done" && return
         _suite_teardown_done=true
-        [ -n "$PF_PID" ] && kill -0 "$PF_PID" 2>/dev/null && kill "$PF_PID" && PF_PID=""
-        [ -n "$S3_PF_PID" ] && kill -0 "$S3_PF_PID" 2>/dev/null && kill "$S3_PF_PID" && S3_PF_PID=""
-        # --wait ensures finalizers have completed before the next suite's deploy.py apply.
-        if [ "$SKIP_CLEANUP" != "true" ] && \
+        stop_port_forwards
+
+        if [ "$SUITE_HAS_NEXT" = "true" ] && \
            { [ "$SKIP_DEPLOYMENT" != "true" ] || [ "$CLEANUP_REUSED_RESOURCES" = "true" ]; }; then
+            echo "  Resetting suite state before the next backend..."
             kubectl delete mlflow "$MLFLOW_NAME" -n "$NAMESPACE" --ignore-not-found --wait --timeout=120s 2>/dev/null || true
+
+            if [ "$SKIP_INFRASTRUCTURE" != "true" ]; then
+                local cleanup_internal_s3=false
+                if [ "$STORAGE_TYPE" = "s3" ]; then
+                    cleanup_internal_s3=true
+                fi
+                cleanup_self_managed_infrastructure "$cleanup_internal_s3" "true"
+            fi
         fi
     }
     trap _suite_teardown RETURN
@@ -766,9 +804,13 @@ TEST_RESULTS_DIR="${TEST_RESULTS_DIR:-/mlflow/results}"
 mkdir -p "$TEST_RESULTS_DIR"
 
 OVERALL_EXIT=0
-for STORAGE_TYPE in $(echo "$ARTIFACT_BACKENDS" | tr ',' ' '); do
-    STORAGE_TYPE=$(echo "$STORAGE_TYPE" | xargs)
+for suite_idx in "${!_resolved_backends[@]}"; do
+    STORAGE_TYPE="${_resolved_backends[$suite_idx]}"
     [ -z "$STORAGE_TYPE" ] && continue
+    SUITE_HAS_NEXT=false
+    if [ "$suite_idx" -lt $((ARTIFACT_BACKEND_COUNT - 1)) ]; then
+        SUITE_HAS_NEXT=true
+    fi
     if ! run_suite; then
         OVERALL_EXIT=1
         [ "$FAIL_FAST" = "true" ] && break
