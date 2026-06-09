@@ -190,6 +190,9 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Free up disk space
+        uses: kubeflow/pipelines/.github/actions/github-disk-cleanup@3004f974b571840bdb1ed6362c520d3cf566e9c0 # master
+
       - name: Create Kind cluster
         uses: ./.github/actions/create-cluster
         with:
@@ -342,6 +345,9 @@ jobs:
         uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
         with:
           persist-credentials: false
+
+      - name: Free up disk space
+        uses: kubeflow/pipelines/.github/actions/github-disk-cleanup@3004f974b571840bdb1ed6362c520d3cf566e9c0 # master
 
       - name: Create Kind cluster
         uses: ./.github/actions/create-cluster
@@ -548,6 +554,9 @@ jobs:
         uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
         with:
           persist-credentials: false
+
+      - name: Free up disk space
+        uses: kubeflow/pipelines/.github/actions/github-disk-cleanup@3004f974b571840bdb1ed6362c520d3cf566e9c0 # master
 
       - name: Resolve operator Dockerfile
         id: resolve-operator-dockerfile
