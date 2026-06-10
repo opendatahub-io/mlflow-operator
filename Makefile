@@ -3,10 +3,12 @@
 IMG ?= localhost/mlflow-operator:latest
 
 # Get the currently used golang install path (in GOPATH/bin, unless GOBIN is set)
-ifeq (,$(shell go env GOBIN))
-GOBIN=$(shell go env GOPATH)/bin
+# GOTOOLCHAIN=local prevents auto-downloading a newer Go toolchain during Makefile
+# evaluation, which would print download noise and break targets that capture stdout.
+ifeq (,$(shell GOTOOLCHAIN=local go env GOBIN))
+GOBIN=$(shell GOTOOLCHAIN=local go env GOPATH)/bin
 else
-GOBIN=$(shell go env GOBIN)
+GOBIN=$(shell GOTOOLCHAIN=local go env GOBIN)
 endif
 
 # CONTAINER_TOOL defines the container tool to be used for building images.
