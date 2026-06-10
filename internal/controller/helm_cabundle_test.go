@@ -34,7 +34,7 @@ func TestMlflowToHelmValues_CABundle(t *testing.T) {
 		Spec: mlflowv1.MLflowSpec{
 			BackendStoreURI: ptr(testBackendStoreURI),
 		},
-	}, "test-ns", RenderOptions{PlatformTrustedCABundleExists: false})
+	}, "test-ns", RenderOptions{PlatformTrustedCABundleExists: false}, nil)
 	if err != nil {
 		t.Fatalf("mlflowToHelmValues() error = %v", err)
 	}
@@ -59,7 +59,7 @@ func TestMlflowToHelmValues_CABundle(t *testing.T) {
 			BackendStoreURI:   ptr(testBackendStoreURI),
 			CABundleConfigMap: &mlflowv1.CABundleConfigMapSpec{Name: "my-ca"},
 		},
-	}, "test-ns", RenderOptions{PlatformTrustedCABundleExists: false})
+	}, "test-ns", RenderOptions{PlatformTrustedCABundleExists: false}, nil)
 	if err != nil {
 		t.Fatalf("mlflowToHelmValues() error = %v", err)
 	}
@@ -82,7 +82,7 @@ func TestMlflowToHelmValues_CABundle(t *testing.T) {
 		Spec: mlflowv1.MLflowSpec{
 			BackendStoreURI: ptr(testBackendStoreURI),
 		},
-	}, "test-ns", RenderOptions{PlatformTrustedCABundleExists: true})
+	}, "test-ns", RenderOptions{PlatformTrustedCABundleExists: true}, nil)
 	if err != nil {
 		t.Fatalf("mlflowToHelmValues() error = %v", err)
 	}
@@ -106,7 +106,7 @@ func TestMlflowToHelmValues_CABundle(t *testing.T) {
 			BackendStoreURI:   ptr(testBackendStoreURI),
 			CABundleConfigMap: &mlflowv1.CABundleConfigMapSpec{Name: "my-ca"},
 		},
-	}, "test-ns", RenderOptions{PlatformTrustedCABundleExists: true})
+	}, "test-ns", RenderOptions{PlatformTrustedCABundleExists: true}, nil)
 	if err != nil {
 		t.Fatalf("mlflowToHelmValues() error = %v", err)
 	}
@@ -138,7 +138,7 @@ func TestRenderChart_CABundle(t *testing.T) {
 		},
 	}
 
-	objs, err := renderer.RenderChart(mlflow, "test-ns", RenderOptions{PlatformTrustedCABundleExists: true})
+	objs, err := renderer.RenderChart(mlflow, "test-ns", RenderOptions{PlatformTrustedCABundleExists: true}, nil)
 	if err != nil {
 		t.Fatalf("RenderChart() error = %v", err)
 	}
@@ -278,7 +278,7 @@ func TestRenderChart_CABundle_ODHOnly(t *testing.T) {
 		},
 	}
 
-	objs, err := renderer.RenderChart(mlflow, "test-ns", RenderOptions{PlatformTrustedCABundleExists: true})
+	objs, err := renderer.RenderChart(mlflow, "test-ns", RenderOptions{PlatformTrustedCABundleExists: true}, nil)
 	if err != nil {
 		t.Fatalf("RenderChart() error = %v", err)
 	}
@@ -334,7 +334,7 @@ func TestRenderChart_NoCABundle(t *testing.T) {
 		},
 	}
 
-	objs, err := renderer.RenderChart(mlflow, "test-ns", RenderOptions{PlatformTrustedCABundleExists: false})
+	objs, err := renderer.RenderChart(mlflow, "test-ns", RenderOptions{PlatformTrustedCABundleExists: false}, nil)
 	if err != nil {
 		t.Fatalf("RenderChart() error = %v", err)
 	}

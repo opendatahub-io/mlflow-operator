@@ -39,6 +39,7 @@ var consoleLinkIconSVG []byte
 
 const (
 	ServiceMonitorCRDName = "ServiceMonitor"
+	MLflowOperatorCRDName = "MLflowOperator"
 )
 
 // IsConsoleLinkAvailable checks if ConsoleLink CRD is available in the cluster using discovery API
@@ -125,16 +126,44 @@ func IsServiceMonitorAvailable(discoveryClient discovery.DiscoveryInterface) (bo
 	return false, nil
 }
 
+// IsMLflowOperatorAvailable checks if the MLflowOperator CRD is available in the cluster using discovery API.
+func IsMLflowOperatorAvailable(discoveryClient discovery.DiscoveryInterface) (bool, error) {
+	ctx := context.Background()
+	log := logf.FromContext(ctx)
+
+	gv := schema.GroupVersion{Group: "components.platform.opendatahub.io", Version: "v1alpha1"}
+	resourceList, err := discoveryClient.ServerResourcesForGroupVersion(gv.String())
+	if err != nil {
+		if errors.IsNotFound(err) || discovery.IsGroupDiscoveryFailedError(err) {
+			log.V(1).Info(fmt.Sprintf("%s CRD not available in cluster", MLflowOperatorCRDName))
+			return false, nil
+		}
+		return false, fmt.Errorf("failed to check for %s availability: %w", MLflowOperatorCRDName, err)
+	}
+
+	for _, resource := range resourceList.APIResources {
+		if resource.Kind == MLflowOperatorCRDName {
+			log.V(1).Info(fmt.Sprintf("%s CRD is available in cluster", MLflowOperatorCRDName))
+			return true, nil
+		}
+	}
+
+	log.V(1).Info(fmt.Sprintf("%s CRD not found in resource list", MLflowOperatorCRDName))
+	return false, nil
+}
+
 // reconcileConsoleLink creates or updates the ConsoleLink for MLflow
-func (r *MLflowReconciler) reconcileConsoleLink(ctx context.Context, mlflow *mlflowv1.MLflow) error {
+func (r *MLflowReconciler) reconcileConsoleLink(
+	ctx context.Context,
+	mlflow *mlflowv1.MLflow,
+	cfg *config.OperatorConfig,
+) error {
 	log := logf.FromContext(ctx)
 
 	if !r.ConsoleLinkAvailable {
 		log.V(1).Info("Skipping ConsoleLink creation - not available in cluster")
 		return nil
 	}
-
-	cfg := config.GetConfig()
 
 	// Determine ConsoleLink name based on CR name
 	// If CR name is "mlflow", ConsoleLink name is "mlflow"
@@ -186,15 +215,18 @@ func (r *MLflowReconciler) reconcileConsoleLink(ctx context.Context, mlflow *mlf
 }
 
 // reconcileHttpRoute creates or updates the HttpRoute for MLflow
-func (r *MLflowReconciler) reconcileHttpRoute(ctx context.Context, mlflow *mlflowv1.MLflow, namespace string) error {
+func (r *MLflowReconciler) reconcileHttpRoute(
+	ctx context.Context,
+	mlflow *mlflowv1.MLflow,
+	namespace string,
+	cfg *config.OperatorConfig,
+) error {
 	log := logf.FromContext(ctx)
 
 	if !r.HTTPRouteAvailable {
 		log.V(1).Info("Skipping HTTPRoute creation - not available in cluster")
 		return nil
 	}
-
-	cfg := config.GetConfig()
 
 	// Determine HttpRoute name and path prefix based on CR name using resource suffix
 	// If CR name is "mlflow", HttpRoute name is "mlflow" and path prefix is "/mlflow"

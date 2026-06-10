@@ -254,7 +254,7 @@ func TestBuildMigrationJobFromDeployment(t *testing.T) {
 				}},
 			},
 		},
-	}, "test-ns", RenderOptions{PlatformTrustedCABundleExists: true})
+	}, "test-ns", RenderOptions{PlatformTrustedCABundleExists: true}, nil)
 	g.Expect(err).NotTo(gomega.HaveOccurred())
 
 	deployment, err := renderedDeployment(objs, "mlflow", "test-ns")

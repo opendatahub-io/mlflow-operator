@@ -99,7 +99,7 @@ func TestMlflowToHelmValues_Metrics(t *testing.T) {
 			g := gomega.NewWithT(t)
 
 			opts := RenderOptions{IsOpenShift: tt.isOpenShift, ServiceMonitorAvailable: tt.serviceMonitorAvailable}
-			values, err := renderer.mlflowToHelmValues(tt.mlflow, tt.namespace, opts)
+			values, err := renderer.mlflowToHelmValues(tt.mlflow, tt.namespace, opts, nil)
 			g.Expect(err).NotTo(gomega.HaveOccurred())
 
 			metrics, ok := values["metrics"].(map[string]interface{})
@@ -151,7 +151,7 @@ func TestRenderChart_ServiceMonitorWithTLSConfig(t *testing.T) {
 	}
 
 	// Render chart on OpenShift - CA-based tlsConfig should be set
-	objs, err := renderer.RenderChart(mlflow, "opendatahub", RenderOptions{IsOpenShift: true, ServiceMonitorAvailable: true})
+	objs, err := renderer.RenderChart(mlflow, "opendatahub", RenderOptions{IsOpenShift: true, ServiceMonitorAvailable: true}, nil)
 	g.Expect(err).NotTo(gomega.HaveOccurred())
 
 	var serviceMonitor *unstructured.Unstructured
@@ -237,7 +237,7 @@ func TestRenderChart_ServiceMonitorInsecureSkipVerify(t *testing.T) {
 	}
 
 	// Render on non-OpenShift - should fall back to insecureSkipVerify
-	objs, err := renderer.RenderChart(mlflow, "default", RenderOptions{IsOpenShift: false, ServiceMonitorAvailable: true})
+	objs, err := renderer.RenderChart(mlflow, "default", RenderOptions{IsOpenShift: false, ServiceMonitorAvailable: true}, nil)
 	g.Expect(err).NotTo(gomega.HaveOccurred())
 
 	var serviceMonitor *unstructured.Unstructured

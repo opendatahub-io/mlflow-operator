@@ -79,7 +79,7 @@ func TestMlflowToHelmValues_Resources(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			g := gomega.NewWithT(t)
 
-			values, err := renderer.mlflowToHelmValues(tt.mlflow, "test-namespace", RenderOptions{})
+			values, err := renderer.mlflowToHelmValues(tt.mlflow, "test-namespace", RenderOptions{}, nil)
 			g.Expect(err).NotTo(gomega.HaveOccurred())
 
 			rawResources, exists := values["resources"]
@@ -149,7 +149,7 @@ func TestMlflowToHelmValues_Replicas(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			g := gomega.NewWithT(t)
 
-			values, err := renderer.mlflowToHelmValues(tt.mlflow, "test-namespace", RenderOptions{})
+			values, err := renderer.mlflowToHelmValues(tt.mlflow, "test-namespace", RenderOptions{}, nil)
 			g.Expect(err).NotTo(gomega.HaveOccurred())
 
 			if got := values["replicaCount"].(int32); got != tt.wantReplicas {
@@ -171,7 +171,7 @@ func TestMlflowToHelmValues_Namespace(t *testing.T) {
 	}
 
 	testNamespace := "custom-namespace"
-	values, err := renderer.mlflowToHelmValues(mlflow, testNamespace, RenderOptions{})
+	values, err := renderer.mlflowToHelmValues(mlflow, testNamespace, RenderOptions{}, nil)
 	g.Expect(err).NotTo(gomega.HaveOccurred())
 
 	if got := values["namespace"].(string); got != testNamespace {
@@ -214,7 +214,7 @@ func TestMlflowToHelmValues_ResourceSuffix(t *testing.T) {
 				},
 			}
 
-			values, err := renderer.mlflowToHelmValues(mlflow, "test-namespace", RenderOptions{})
+			values, err := renderer.mlflowToHelmValues(mlflow, "test-namespace", RenderOptions{}, nil)
 			g.Expect(err).NotTo(gomega.HaveOccurred())
 
 			if got := values["resourceSuffix"].(string); got != tt.wantResourceSuffix {

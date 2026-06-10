@@ -275,7 +275,7 @@ func TestRenderChart(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			objs, err := renderer.RenderChart(tt.mlflow, tt.namespace, RenderOptions{})
+			objs, err := renderer.RenderChart(tt.mlflow, tt.namespace, RenderOptions{}, nil)
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("RenderChart() error = %v, wantErr %v", err, tt.wantErr)
 			}

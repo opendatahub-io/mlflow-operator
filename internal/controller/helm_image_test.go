@@ -68,7 +68,7 @@ func TestMlflowToHelmValues_Image(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			g := gomega.NewWithT(t)
 
-			values, err := renderer.mlflowToHelmValues(tt.mlflow, "test-namespace", RenderOptions{})
+			values, err := renderer.mlflowToHelmValues(tt.mlflow, "test-namespace", RenderOptions{}, nil)
 			g.Expect(err).NotTo(gomega.HaveOccurred())
 
 			image, ok := values["image"].(map[string]interface{})

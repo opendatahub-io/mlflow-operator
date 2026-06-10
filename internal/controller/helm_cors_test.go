@@ -185,7 +185,7 @@ func TestMlflowToHelmValues_CORSAllowedOrigins(t *testing.T) {
 		},
 	}
 
-	values, err := renderer.mlflowToHelmValues(mlflow, "test-namespace", RenderOptions{})
+	values, err := renderer.mlflowToHelmValues(mlflow, "test-namespace", RenderOptions{}, nil)
 	g.Expect(err).NotTo(gomega.HaveOccurred())
 
 	mlflowConfig, ok := values["mlflow"].(map[string]interface{})
@@ -212,7 +212,7 @@ func TestRenderChart_CORSEnvVar(t *testing.T) {
 		},
 	}
 
-	objs, err := renderer.RenderChart(mlflow, "test-ns", RenderOptions{})
+	objs, err := renderer.RenderChart(mlflow, "test-ns", RenderOptions{}, nil)
 	g.Expect(err).NotTo(gomega.HaveOccurred())
 
 	var deployment *unstructured.Unstructured

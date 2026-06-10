@@ -42,7 +42,7 @@ func TestMlflowToHelmValues_ResourceClaims(t *testing.T) {
 				ResourceClaimTemplateName: ptr("shared-gpu-template"),
 			}},
 		},
-	}, "test-namespace", RenderOptions{})
+	}, "test-namespace", RenderOptions{}, nil)
 	g.Expect(err).NotTo(gomega.HaveOccurred())
 
 	rawClaims, exists := values["resourceClaims"]
@@ -79,7 +79,7 @@ func TestRenderChart_ResourceClaims(t *testing.T) {
 		},
 	}
 
-	objs, err := renderer.RenderChart(mlflow, "test-ns", RenderOptions{})
+	objs, err := renderer.RenderChart(mlflow, "test-ns", RenderOptions{}, nil)
 	g.Expect(err).NotTo(gomega.HaveOccurred())
 
 	deployment := findObject(objs, deploymentKind, "mlflow")
@@ -139,7 +139,7 @@ func TestRenderChart_ResourceClaimName(t *testing.T) {
 		},
 	}
 
-	objs, err := renderer.RenderChart(mlflow, "test-ns", RenderOptions{})
+	objs, err := renderer.RenderChart(mlflow, "test-ns", RenderOptions{}, nil)
 	g.Expect(err).NotTo(gomega.HaveOccurred())
 
 	deployment := findObject(objs, deploymentKind, "mlflow")

@@ -128,15 +128,20 @@ func NewHelmRenderer(chartPath string) *HelmRenderer {
 	}
 }
 
-// RenderChart renders the Helm chart with the given values
-func (h *HelmRenderer) RenderChart(mlflow *mlflowv1.MLflow, namespace string, opts RenderOptions) ([]*unstructured.Unstructured, error) {
+// RenderChart renders the Helm chart with the given values.
+func (h *HelmRenderer) RenderChart(
+	mlflow *mlflowv1.MLflow,
+	namespace string,
+	opts RenderOptions,
+	cfg *config.OperatorConfig,
+) ([]*unstructured.Unstructured, error) {
 	// Load the Helm chart
 	loadedChart, err := loader.Load(h.chartPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load chart: %w", err)
 	}
 
-	values, err := h.mlflowToHelmValues(mlflow, namespace, opts)
+	values, err := h.mlflowToHelmValues(mlflow, namespace, opts, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("failed to convert MLflow spec to Helm values: %w", err)
 	}
@@ -158,7 +163,12 @@ func (h *HelmRenderer) RenderChart(mlflow *mlflowv1.MLflow, namespace string, op
 }
 
 // mlflowToHelmValues converts MLflow CR spec to Helm values
-func (h *HelmRenderer) mlflowToHelmValues(mlflow *mlflowv1.MLflow, namespace string, opts RenderOptions) (map[string]interface{}, error) {
+func (h *HelmRenderer) mlflowToHelmValues(
+	mlflow *mlflowv1.MLflow,
+	namespace string,
+	opts RenderOptions,
+	cfg *config.OperatorConfig,
+) (map[string]interface{}, error) {
 	values := make(map[string]interface{})
 
 	values["namespace"] = namespace
@@ -188,7 +198,11 @@ func (h *HelmRenderer) mlflowToHelmValues(mlflow *mlflowv1.MLflow, namespace str
 		values["podAnnotations"] = podAnnotations
 	}
 
-	cfg := config.GetConfig()
+	effectiveCfg := config.GetConfig()
+	if cfg != nil {
+		// Callers can pass a reconcile-scoped config that already applied modular overrides.
+		effectiveCfg = cfg
+	}
 	tlsSecretName := TLSSecretName
 
 	tlsValues := map[string]interface{}{
@@ -235,7 +249,7 @@ func (h *HelmRenderer) mlflowToHelmValues(mlflow *mlflowv1.MLflow, namespace str
 	}
 
 	// Use config from environment variables as default, can be overridden by CR spec
-	mlflowImage := cfg.MLflowImage
+	mlflowImage := effectiveCfg.MLflowImage
 	var imagePullPolicy *string
 
 	if mlflow.Spec.Image != nil {
@@ -413,7 +427,7 @@ func (h *HelmRenderer) mlflowToHelmValues(mlflow *mlflowv1.MLflow, namespace str
 		mlflowConfig["registryStoreUriFrom"] = registryStoreURIFrom
 	}
 
-	mlflowConfig["corsAllowedOrigins"] = buildCORSAllowedOrigins(mlflow, namespace, cfg)
+	mlflowConfig["corsAllowedOrigins"] = buildCORSAllowedOrigins(mlflow, namespace, effectiveCfg)
 
 	values["mlflow"] = mlflowConfig
 

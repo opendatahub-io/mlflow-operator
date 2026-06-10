@@ -44,6 +44,8 @@ spec:
           value: placeholder-mlflow-url
         - name: SECTION_TITLE
           value: placeholder-section-title
+        - name: ENABLE_MLFLOW_OPERATOR_MODULE_CONTROLLER
+          value: "false"
         ports: []
         securityContext:
           readOnlyRootFilesystem: true
