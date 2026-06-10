@@ -17,6 +17,7 @@ limitations under the License.
 package main
 
 import (
+	"context"
 	"crypto/tls"
 	"flag"
 	"fmt"
@@ -37,6 +38,7 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
+	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/discovery"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -48,6 +50,7 @@ import (
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 
+	modulev1alpha1 "github.com/opendatahub-io/mlflow-operator/api/mlflowoperator/v1alpha1"
 	mlflowv1 "github.com/opendatahub-io/mlflow-operator/api/v1"
 	"github.com/opendatahub-io/mlflow-operator/internal/config"
 	"github.com/opendatahub-io/mlflow-operator/internal/controller"
@@ -73,13 +76,76 @@ func validateStartupConfig(namespace string, cfg *config.OperatorConfig, support
 	return nil
 }
 
+const mlflowOperatorCRDWaitPollInterval = 2 * time.Second
+
 func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
+	utilruntime.Must(modulev1alpha1.AddToScheme(scheme))
 	utilruntime.Must(mlflowv1.AddToScheme(scheme))
 	utilruntime.Must(consolev1.AddToScheme(scheme))
 	utilruntime.Must(monitoringv1.AddToScheme(scheme))
 	utilruntime.Must(gatewayv1.Install(scheme))
 	// +kubebuilder:scaffold:scheme
+}
+
+func resolveManagerNamespace(namespace string, operatorConfig *config.OperatorConfig) string {
+	if operatorConfig != nil &&
+		operatorConfig.EnableMLflowOperatorModuleController &&
+		operatorConfig.ApplicationsNamespace != "" {
+		return operatorConfig.ApplicationsNamespace
+	}
+	return namespace
+}
+
+func waitForMLflowOperatorCRD(
+	timeout time.Duration,
+	interval time.Duration,
+	isAvailable func() (bool, error),
+) error {
+	if timeout <= 0 {
+		return fmt.Errorf(
+			"%s CRD wait timeout must be greater than zero",
+			controller.MLflowOperatorCRDName,
+		)
+	}
+	if interval <= 0 {
+		return fmt.Errorf(
+			"%s CRD wait interval must be greater than zero",
+			controller.MLflowOperatorCRDName,
+		)
+	}
+
+	var lastErr error
+	err := wait.PollUntilContextTimeout(
+		context.Background(),
+		interval,
+		timeout,
+		true,
+		func(context.Context) (bool, error) {
+			available, err := isAvailable()
+			if err != nil {
+				lastErr = err
+				return false, nil
+			}
+			return available, nil
+		},
+	)
+	if err == nil {
+		return nil
+	}
+	if lastErr != nil {
+		return fmt.Errorf(
+			"%s CRD did not become available within %s: %w",
+			controller.MLflowOperatorCRDName,
+			timeout,
+			lastErr,
+		)
+	}
+	return fmt.Errorf(
+		"%s CRD did not become available within %s",
+		controller.MLflowOperatorCRDName,
+		timeout,
+	)
 }
 
 // nolint:gocyclo
@@ -112,6 +178,7 @@ func main() {
 
 	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
 	operatorConfig := config.GetConfig()
+	namespace = resolveManagerNamespace(namespace, operatorConfig)
 
 	if err := validateStartupConfig(namespace, operatorConfig, controller.SupportedMLflowVersion); err != nil {
 		setupLog.Error(err, "invalid startup configuration")
@@ -223,6 +290,24 @@ func main() {
 		setupLog.Info("ServiceMonitor CRD not available, skipping cache configuration")
 	}
 
+	if operatorConfig.EnableMLflowOperatorModuleController {
+		setupLog.Info(
+			"MLflowOperator controller enabled; waiting for required CRD before controller setup",
+			"timeout", operatorConfig.MLflowOperatorCRDWaitTimeout,
+		)
+		if err := waitForMLflowOperatorCRD(
+			operatorConfig.MLflowOperatorCRDWaitTimeout,
+			mlflowOperatorCRDWaitPollInterval,
+			func() (bool, error) {
+				return controller.IsMLflowOperatorAvailable(discoveryClient)
+			},
+		); err != nil {
+			setupLog.Error(err, "MLflowOperator controller enabled but required CRD did not become available")
+			os.Exit(1)
+		}
+		setupLog.Info("MLflowOperator CRD available, proceeding with controller setup")
+	}
+
 	mgr, err := ctrl.NewManager(cfg, ctrl.Options{
 		Scheme:                 scheme,
 		Metrics:                metricsServerOptions,
@@ -287,6 +372,18 @@ func main() {
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "MLflow")
 		os.Exit(1)
+	}
+	// Only turn on the new MLflowOperator ownership path during the coordinated ODH handoff.
+	if operatorConfig.EnableMLflowOperatorModuleController {
+		if err := (&controller.MLflowOperatorReconciler{
+			Client: mgr.GetClient(),
+			Scheme: mgr.GetScheme(),
+		}).SetupWithManager(mgr); err != nil {
+			setupLog.Error(err, "unable to create controller", "controller", "MLflowOperator")
+			os.Exit(1)
+		}
+	} else {
+		setupLog.Info("MLflowOperator controller disabled; keeping legacy module ownership path inactive")
 	}
 	// +kubebuilder:scaffold:builder
 

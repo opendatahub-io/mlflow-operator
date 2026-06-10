@@ -73,7 +73,7 @@ func TestMlflowToHelmValues_PodAnnotations(t *testing.T) {
 				},
 			}
 
-			values, err := renderer.mlflowToHelmValues(mlflow, "test-namespace", RenderOptions{})
+			values, err := renderer.mlflowToHelmValues(mlflow, "test-namespace", RenderOptions{}, nil)
 			g.Expect(err).NotTo(gomega.HaveOccurred())
 
 			podAnnotations, exists := values["podAnnotations"]
@@ -126,7 +126,7 @@ func TestRenderChart_PodAnnotations(t *testing.T) {
 		},
 	}
 
-	objs, err := renderer.RenderChart(mlflow, "test-ns", RenderOptions{})
+	objs, err := renderer.RenderChart(mlflow, "test-ns", RenderOptions{}, nil)
 	g.Expect(err).NotTo(gomega.HaveOccurred())
 
 	deployment := findObject(objs, deploymentKind, "mlflow")
@@ -186,7 +186,7 @@ func TestMlflowToHelmValues_PodLabels(t *testing.T) {
 				},
 			}
 
-			values, err := renderer.mlflowToHelmValues(mlflow, "test-namespace", RenderOptions{})
+			values, err := renderer.mlflowToHelmValues(mlflow, "test-namespace", RenderOptions{}, nil)
 			g.Expect(err).NotTo(gomega.HaveOccurred())
 
 			podLabels, exists := values["podLabels"]

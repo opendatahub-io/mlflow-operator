@@ -40,7 +40,7 @@ func TestMlflowToHelmValues_StaticPrefix(t *testing.T) {
 		},
 	}
 
-	values, err := renderer.mlflowToHelmValues(mlflow, "test-namespace", RenderOptions{})
+	values, err := renderer.mlflowToHelmValues(mlflow, "test-namespace", RenderOptions{}, nil)
 	g.Expect(err).NotTo(gomega.HaveOccurred())
 
 	mlflowConfig, ok := values["mlflow"].(map[string]interface{})
@@ -127,7 +127,7 @@ func TestMlflowToHelmValues_Env(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			g := gomega.NewWithT(t)
 
-			values, err := renderer.mlflowToHelmValues(tt.mlflow, "test-namespace", RenderOptions{})
+			values, err := renderer.mlflowToHelmValues(tt.mlflow, "test-namespace", RenderOptions{}, nil)
 			g.Expect(err).NotTo(gomega.HaveOccurred())
 
 			env, ok := values["env"].([]any)
@@ -198,7 +198,7 @@ func TestMlflowToHelmValues_OpenShiftInjectsUvicornSSLCiphersEnv(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			g := gomega.NewWithT(t)
 
-			values, err := renderer.mlflowToHelmValues(tt.mlflow, "test-namespace", RenderOptions{IsOpenShift: true})
+			values, err := renderer.mlflowToHelmValues(tt.mlflow, "test-namespace", RenderOptions{IsOpenShift: true}, nil)
 			g.Expect(err).NotTo(gomega.HaveOccurred())
 
 			env, ok := values["env"].([]any)
@@ -239,7 +239,7 @@ func TestMlflowToHelmValues_NonOpenShiftDoesNotInjectUvicornSSLCiphersEnv(t *tes
 				{Name: "CUSTOM_VAR", Value: "custom-value"},
 			},
 		},
-	}, "test-namespace", RenderOptions{IsOpenShift: false})
+	}, "test-namespace", RenderOptions{IsOpenShift: false}, nil)
 	g.Expect(err).NotTo(gomega.HaveOccurred())
 
 	env, ok := values["env"].([]any)
@@ -317,7 +317,7 @@ func TestMlflowToHelmValues_EnvFrom(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			g := gomega.NewWithT(t)
 
-			values, err := renderer.mlflowToHelmValues(tt.mlflow, "test-namespace", RenderOptions{})
+			values, err := renderer.mlflowToHelmValues(tt.mlflow, "test-namespace", RenderOptions{}, nil)
 			g.Expect(err).NotTo(gomega.HaveOccurred())
 
 			if tt.wantEnvFromCount == 0 {
@@ -374,7 +374,7 @@ func TestRenderChart_EnvVars(t *testing.T) {
 		},
 	}
 
-	objs, err := renderer.RenderChart(mlflow, "test-ns", RenderOptions{})
+	objs, err := renderer.RenderChart(mlflow, "test-ns", RenderOptions{}, nil)
 	if err != nil {
 		t.Fatalf("RenderChart() error = %v", err)
 	}
@@ -510,7 +510,7 @@ func TestRenderChart_WorkspaceLabelSelectorEnvVar(t *testing.T) {
 		},
 	}
 
-	objs, err := renderer.RenderChart(mlflow, "test-ns", RenderOptions{})
+	objs, err := renderer.RenderChart(mlflow, "test-ns", RenderOptions{}, nil)
 	if err != nil {
 		t.Fatalf("RenderChart() error = %v", err)
 	}
@@ -577,7 +577,7 @@ func TestRenderChart_WorkspaceLabelSelectorNilOmitsEnvVar(t *testing.T) {
 		Spec:       mlflowv1.MLflowSpec{},
 	}
 
-	objs, err := renderer.RenderChart(mlflow, "test-ns", RenderOptions{})
+	objs, err := renderer.RenderChart(mlflow, "test-ns", RenderOptions{}, nil)
 	if err != nil {
 		t.Fatalf("RenderChart() error = %v", err)
 	}
@@ -633,7 +633,7 @@ func TestRenderChart_WorkspaceLabelSelectorEmptyOmitsEnvVar(t *testing.T) {
 		},
 	}
 
-	objs, err := renderer.RenderChart(mlflow, "test-ns", RenderOptions{})
+	objs, err := renderer.RenderChart(mlflow, "test-ns", RenderOptions{}, nil)
 	if err != nil {
 		t.Fatalf("RenderChart() error = %v", err)
 	}
@@ -697,7 +697,7 @@ func TestRenderChart_WorkspaceLabelSelectorInvalidOperatorReturnsError(t *testin
 		},
 	}
 
-	_, err := renderer.RenderChart(mlflow, "test-ns", RenderOptions{})
+	_, err := renderer.RenderChart(mlflow, "test-ns", RenderOptions{}, nil)
 	if err == nil {
 		t.Fatal("expected RenderChart to return an error for invalid label selector operator")
 	}

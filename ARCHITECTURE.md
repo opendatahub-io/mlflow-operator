@@ -19,15 +19,19 @@ This split is intentional:
 The ODH path is operator-managed and platform-integrated:
 
 1. `DataScienceCluster` enables the MLflow Operator.
-2. The operator watches cluster-scoped `MLflow` resources in `mlflow.opendatahub.io/v1`.
-3. For each `MLflow` resource, the operator renders its internal Helm chart into Kubernetes resources.
-4. The resulting MLflow deployment is exposed through the platform gateway under `/mlflow`.
+2. ODH deploys `mlflow-operator`, and during the modular handoff it can also create the singleton cluster-scoped `MLflowOperator` module CR in `components.platform.opendatahub.io/v1alpha1`.
+3. The operator watches cluster-scoped `MLflow` resources in `mlflow.opendatahub.io/v1`.
+4. For each `MLflow` resource, the operator renders its internal Helm chart into Kubernetes resources.
+5. The resulting MLflow deployment is exposed through the platform gateway under `/mlflow`.
+
+The new `MLflowOperator` controller path is intentionally rollout-gated behind `ENABLE_MLFLOW_OPERATOR_MODULE_CONTROLLER` so releases can carry the API/controller implementation before ODH switches over to the module framework.
 
 ## Reconciliation Diagram
 
 ```mermaid
 flowchart LR
-  dsc[DataScienceCluster] --> operator[MLflowOperator]
+  dsc[DataScienceCluster] --> moduleCr["default-mlflowoperator"]
+  moduleCr --> operator[mlflow-operator]
   operator --> mlflowCr["Cluster-scoped MLflow custom resource"]
   mlflowCr --> chart["Internal Helm chart"]
 
@@ -78,7 +82,7 @@ It also sets `MLFLOW_K8S_AUTH_AUTHORIZATION_MODE=self_subject_access_review` so 
 For OpenShift and ODH deployments, the operator integrates MLflow with the platform gateway and application menu:
 
 - A `ConsoleLink` named after the MLflow resource exposes an `MLflow` application-menu entry.
-- The link target is built from the configured `MLFLOW_URL` plus the resource name.
+- The link target is built from the configured external base URL. During the legacy path that comes from `MLFLOW_URL`; during the modular handoff it can be derived from the singleton `MLflowOperator` gateway projection.
 - An `HTTPRoute` points traffic at the namespaced MLflow service on port `8443`.
 
 ### Path Layout

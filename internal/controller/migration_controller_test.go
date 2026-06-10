@@ -677,7 +677,7 @@ var _ = Describe("Migration reconcile", func() {
 
 		reconciler := newReconciler(namespace)
 		renderer := NewHelmRenderer("../../charts/mlflow")
-		objects, err := renderer.RenderChart(mlflow, namespace, RenderOptions{})
+		objects, err := renderer.RenderChart(mlflow, namespace, RenderOptions{}, nil)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(reconciler.applyRenderedObjects(ctx, mlflow, objects)).To(Succeed())
 

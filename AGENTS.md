@@ -12,6 +12,11 @@ This project was generated using [Kubebuilder](https://book.kubebuilder.io/) v4.
 
 The MLflow custom resource is **cluster-scoped**, meaning it can be created without specifying a namespace and is accessible across the entire cluster.
 
+### MLflowOperator (components.platform.opendatahub.io/v1alpha1)
+
+The `MLflowOperator` custom resource is a **cluster-scoped singleton module CR** named `default-mlflowoperator`. It exists to carry platform-level MLflow module state and status during the ODH modularization handoff. The new in-repo `MLflowOperator` controller path is guarded by the `ENABLE_MLFLOW_OPERATOR_MODULE_CONTROLLER` rollout toggle and should stay disabled by default until the coordinating ODH module-handler change is ready. When that toggle is enabled, startup waits up to `MLFLOW_OPERATOR_MODULE_CONTROLLER_CRD_WAIT_TIMEOUT` for the `MLflowOperator` CRD and fails startup if the timeout expires, so explicit enablement never silently skips controller registration.
+`APPLICATIONS_NAMESPACE` remains a Deployment/startup input for the operator itself and is not projected through the `MLflowOperator` CR spec, so cache scope and namespace-scoped RBAC stay aligned with the live operand target namespace.
+
 ### MLflowConfig (mlflow.kubeflow.org/v1)
 
 The MLflowConfig custom resource is **namespace-scoped**, allowing Kubernetes namespace owners to override the default artifact storage configuration for their namespace.
@@ -25,6 +30,11 @@ The `api/` folder contains the API type definitions owned by this repository:
 
 ```text
 api/
+├── mlflowoperator/
+│   └── v1alpha1/
+│       ├── groupversion_info.go     # MLflowOperator module API registration
+│       ├── mlflowoperator_types.go  # MLflowOperator singleton module CR
+│       └── zz_generated.deepcopy.go # Auto-generated DeepCopy methods
 ├── v1/
 │   ├── groupversion_info.go     # MLflow API group and version registration
 │   ├── mlflow_types.go          # MLflow resource type definitions
@@ -48,6 +58,7 @@ To add or modify fields in the MLflow resource:
 
 3. The CRDs will be updated at:
    - `config/crd/bases/mlflow.opendatahub.io_mlflows.yaml`
+   - `config/crd/bases/components.platform.opendatahub.io_mlflowoperators.yaml`
 
 Changes to the `MLflowConfig` schema must be made in the upstream `mlflow-kubernetes-plugins` repository, then vendored here at `config/crd/mlflow.kubeflow.org_mlflowconfigs.yaml`. This repo references that local copy from `config/crd/kustomization.yaml`.
 
@@ -70,6 +81,7 @@ make generate
 **Note**: Always regenerate manifests and code after modifying API types. CI will verify that generated code is up-to-date.
 
 The operator now fails fast at startup when `MLFLOW_IMAGE` is empty. Checked-in manifests still set that environment variable for normal overlay-based installs, and `deploy.py` requires `--mlflow-image` when it is creating an `MLflow` custom resource.
+During the MLflow modularization transition, keep legacy ODH deployment behavior and the new module-controller path cleanly separated. Prefer isolated helpers for legacy-vs-modular branching, and add concise inline comments only at the toggle boundary or where fallback precedence is otherwise non-obvious.
 
 When bumping the supported MLflow version, update `config/component_metadata.yaml`, then rerun the version-alignment verification. The Makefile injects `SupportedMLflowVersion` from that metadata via Go `-ldflags`; the test harness and test image read the same value through `scripts/print_supported_mlflow_version.py`. Top-level `scripts/` is preferred for developer-maintenance helpers like this; `test/scripts/` is reserved for test validation helpers.
 

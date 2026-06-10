@@ -19,14 +19,25 @@ package config
 import (
 	"os"
 	"sync"
+	"time"
 
 	"github.com/spf13/viper"
 )
 
-const DefaultMLflowURL = "https://mlflow.example.com"
+const (
+	DefaultMLflowURL                    = "https://mlflow.example.com"
+	DefaultMLflowOperatorCRDWaitTimeout = 30 * time.Second
+)
 
 // OperatorConfig holds the configuration for the MLflow operator
 type OperatorConfig struct {
+	// ApplicationsNamespace is the namespace where MLflow operands are created.
+	ApplicationsNamespace string
+	// EnableMLflowOperatorModuleController turns on the new MLflowOperator controller path.
+	EnableMLflowOperatorModuleController bool
+	// MLflowOperatorCRDWaitTimeout bounds how long startup waits for the MLflowOperator CRD
+	// after the module-controller path has been explicitly enabled.
+	MLflowOperatorCRDWaitTimeout time.Duration
 	// MLflowImage is the default image to use for MLflow deployments
 	MLflowImage string
 	// GatewayName is the name of the Gateway resource for HttpRoute
@@ -44,26 +55,46 @@ var (
 	once     sync.Once
 )
 
+type envLookupFn func(string) (string, bool)
+
+func loadConfig(v *viper.Viper, lookupEnv envLookupFn) *OperatorConfig {
+	_, mlflowURLConfigured := lookupEnv("MLFLOW_URL")
+
+	// RELATED_IMAGE_* is the platform override. MLFLOW_IMAGE remains the
+	// operator's built-in default image fallback rather than a legacy-only path.
+	mlflowImage := v.GetString("RELATED_IMAGE_ODH_MLFLOW_IMAGE")
+	if mlflowImage == "" {
+		mlflowImage = v.GetString("MLFLOW_IMAGE")
+	}
+
+	return &OperatorConfig{
+		ApplicationsNamespace:                v.GetString("APPLICATIONS_NAMESPACE"),
+		EnableMLflowOperatorModuleController: v.GetBool("ENABLE_MLFLOW_OPERATOR_MODULE_CONTROLLER"),
+		MLflowOperatorCRDWaitTimeout:         v.GetDuration("MLFLOW_OPERATOR_MODULE_CONTROLLER_CRD_WAIT_TIMEOUT"),
+		MLflowImage:                          mlflowImage,
+		GatewayName:                          v.GetString("GATEWAY_NAME"),
+		MLflowURL:                            v.GetString("MLFLOW_URL"),
+		MLflowURLConfigured:                  mlflowURLConfigured,
+		SectionTitle:                         v.GetString("SECTION_TITLE"),
+	}
+}
+
 // GetConfig returns the singleton operator configuration
 // It reads from environment variables using viper
 func GetConfig() *OperatorConfig {
 	once.Do(func() {
 		v := viper.New()
 		v.AutomaticEnv()
-		_, mlflowURLConfigured := os.LookupEnv("MLFLOW_URL")
 
 		// Set defaults (these can be overridden by env vars)
 		v.SetDefault("GATEWAY_NAME", "data-science-gateway")
 		v.SetDefault("MLFLOW_URL", DefaultMLflowURL)
 		v.SetDefault("SECTION_TITLE", "MLflow")
+		v.SetDefault("APPLICATIONS_NAMESPACE", "")
+		v.SetDefault("ENABLE_MLFLOW_OPERATOR_MODULE_CONTROLLER", false)
+		v.SetDefault("MLFLOW_OPERATOR_MODULE_CONTROLLER_CRD_WAIT_TIMEOUT", DefaultMLflowOperatorCRDWaitTimeout)
 
-		instance = &OperatorConfig{
-			MLflowImage:         v.GetString("MLFLOW_IMAGE"),
-			GatewayName:         v.GetString("GATEWAY_NAME"),
-			MLflowURL:           v.GetString("MLFLOW_URL"),
-			MLflowURLConfigured: mlflowURLConfigured,
-			SectionTitle:        v.GetString("SECTION_TITLE"),
-		}
+		instance = loadConfig(v, os.LookupEnv)
 	})
 	return instance
 }

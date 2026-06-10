@@ -93,7 +93,7 @@ func TestMlflowToHelmValues_Storage(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			g := gomega.NewWithT(t)
 
-			values, err := renderer.mlflowToHelmValues(tt.mlflow, "test-namespace", RenderOptions{})
+			values, err := renderer.mlflowToHelmValues(tt.mlflow, "test-namespace", RenderOptions{}, nil)
 			g.Expect(err).NotTo(gomega.HaveOccurred())
 
 			storage, ok := values["storage"].(map[string]interface{})

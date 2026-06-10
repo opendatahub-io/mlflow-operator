@@ -39,7 +39,7 @@ func TestRenderChart_NetworkPolicy(t *testing.T) {
 		Spec: mlflowv1.MLflowSpec{
 			BackendStoreURI: ptr(testBackendStoreURI),
 		},
-	}, "test-ns", RenderOptions{})
+	}, "test-ns", RenderOptions{}, nil)
 	g.Expect(err).NotTo(gomega.HaveOccurred())
 
 	np := findObject(objs, "NetworkPolicy", "mlflow")
@@ -96,7 +96,7 @@ func TestRenderChart_NetworkPolicy(t *testing.T) {
 				},
 			},
 		},
-	}, "test-ns", RenderOptions{})
+	}, "test-ns", RenderOptions{}, nil)
 	g.Expect(err).NotTo(gomega.HaveOccurred())
 
 	np = findObject(objs, "NetworkPolicy", "mlflow")
@@ -150,7 +150,7 @@ func TestRenderChart_NetworkPolicy(t *testing.T) {
 				},
 			},
 		},
-	}, "test-ns", RenderOptions{})
+	}, "test-ns", RenderOptions{}, nil)
 	g.Expect(err).NotTo(gomega.HaveOccurred())
 
 	np = findObject(objs, "NetworkPolicy", "mlflow")
@@ -193,7 +193,7 @@ func TestRenderChart_NetworkPolicy(t *testing.T) {
 				},
 			},
 		},
-	}, "test-ns", RenderOptions{})
+	}, "test-ns", RenderOptions{}, nil)
 	g.Expect(err).NotTo(gomega.HaveOccurred())
 
 	np = findObject(objs, "NetworkPolicy", "mlflow")

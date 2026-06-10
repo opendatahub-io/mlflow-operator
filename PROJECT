@@ -14,6 +14,15 @@ resources:
     namespaced: false
   controller: true
   domain: opendatahub.io
+  group: components.platform
+  kind: MLflowOperator
+  path: github.com/opendatahub-io/mlflow-operator/api/components/v1alpha1
+  version: v1alpha1
+- api:
+    crdVersion: v1
+    namespaced: false
+  controller: true
+  domain: opendatahub.io
   group: mlflow
   kind: MLflow
   path: github.com/opendatahub-io/mlflow-operator/api/v1
