@@ -292,7 +292,6 @@ func TestRenderChart_GarbageCollection(t *testing.T) {
 							"get":    true,
 							"list":   true,
 							"update": true,
-							"delete": true,
 						}
 						for _, verb := range verbs {
 							delete(expectedVerbs, verb)

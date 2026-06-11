@@ -28,6 +28,7 @@ import (
 	consolev1 "github.com/openshift/api/console/v1"
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
+	crcache "sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
@@ -48,6 +49,12 @@ var (
 	cfg       *rest.Config
 	k8sClient client.Client
 )
+
+func mustNewGCRBACWatchCache() crcache.Cache {
+	gcCache, err := NewGCRBACWatchCache(cfg, scheme.Scheme)
+	Expect(err).NotTo(HaveOccurred())
+	return gcCache
+}
 
 func TestControllers(t *testing.T) {
 	RegisterFailHandler(Fail)

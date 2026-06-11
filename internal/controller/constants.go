@@ -21,6 +21,10 @@ const (
 	ResourceName = "mlflow"
 	// ClusterRoleName is the name of the shared ClusterRole used by all MLflow instances
 	ClusterRoleName = "mlflow"
+	// ClusterRoleBindingName is the name of the shared ClusterRoleBinding used by all MLflow instances
+	ClusterRoleBindingName = "mlflow"
+	// GCClusterRBACName is the currently effective singleton GC ClusterRole/ClusterRoleBinding name.
+	GCClusterRBACName = "mlflow-gc"
 	// ServiceAccountName is the name of the service account for MLflow deployments
 	ServiceAccountName = "mlflow-sa"
 	// GCServiceAccountName is the name of the service account for the GC CronJob

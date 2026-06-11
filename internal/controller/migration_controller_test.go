@@ -47,6 +47,7 @@ var _ = Describe("Migration reconcile", func() {
 			ChartPath:            "../../charts/mlflow",
 			ConsoleLinkAvailable: false,
 			HTTPRouteAvailable:   false,
+			GCRBACWatchCache:     mustNewGCRBACWatchCache(),
 		}
 	}
 

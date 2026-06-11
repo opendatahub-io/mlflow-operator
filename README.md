@@ -164,22 +164,22 @@ The standalone Helm chart does not orchestrate MLflow database migrations. Boots
 
 ### Authentication and Security
 
-MLflow is deployed with the `kubernetes-auth` app enabled. The operator sets `MLFLOW_K8S_AUTH_AUTHORIZATION_MODE=self_subject_access_review`, so authorization checks are performed directly by MLflow using the caller's token. For the server itself, no special RBAC permissions are required beyond listing namespaces for the workspaces feature.
+MLflow is deployed with the `kubernetes-auth` app enabled. The operator sets `MLFLOW_K8S_AUTH_AUTHORIZATION_MODE=self_subject_access_review`, so authorization checks are performed directly by MLflow using the caller's token. The MLflow server itself still runs under a shared `mlflow` ClusterRole and ClusterRoleBinding so the workspace provider can enumerate namespaces and watch the shared `mlflow-artifact-connection` secret plus `MLflowConfig` overrides across workspaces.
 
 The deployment always sets `MLFLOW_DISABLE_TELEMETRY=true` and `MLFLOW_SERVER_ENABLE_JOB_EXECUTION=false` to disable telemetry and job execution by default.
 
 TLS is terminated inside the MLflow container using uvicorn options. Certificates come from the `mlflow-tls` secret, which is created automatically on OpenShift via the `service.beta.openshift.io/serving-cert-secret-name` annotation. If you need to provide your own certificates, place `tls.crt` and `tls.key` in a secret named `mlflow-tls` (or override `tls.secretName` in Helm values). On OpenShift, the operator sets `UVICORN_SSL_CIPHERS=PROFILE=SYSTEM` by default unless `spec.env` already defines that variable, so uvicorn follows the platform crypto policy, including FIPS-compatible TLS 1.2 and 1.3 cipher selection.
 
-When garbage collection is enabled, the CronJob runs under a separate `mlflow-gc-sa` ServiceAccount with its own `mlflow-gc` ClusterRole and ClusterRoleBinding.
+When garbage collection is enabled, the CronJob runs under a separate `mlflow-gc-sa` ServiceAccount with its own suffixed `mlflow-gc{{ resourceSuffix }}` ClusterRole and ClusterRoleBinding. The retained `experiments/update` permission is only needed when artifact deletion still goes through the MLflow artifact proxy; metadata cleanup itself uses the backend store directly.
 
 ### Operator RBAC Privileges
 
 The operator requires two levels of RBAC permissions:
 
-- **Cluster-scoped** (`config/rbac/role.yaml`): Manages the MLflow custom resource lifecycle, enumerates namespaces, reads and watches the well-known artifact storage secret, watches MLflowConfig overrides, manages ClusterRoles/ClusterRoleBindings for MLflow server pods, and handles OpenShift console links and Gateway API routes.
+- **Cluster-scoped** (`config/rbac/role.yaml`): Manages the MLflow custom resource lifecycle, enumerates namespaces, reads and watches the well-known artifact storage secret, watches MLflowConfig overrides, manages the shared `mlflow` ClusterRole/ClusterRoleBinding plus the currently effective singleton `mlflow-gc` RBAC names, and handles OpenShift console links and Gateway API routes.
 - **Namespace-scoped** (`config/rbac/namespace_role.yaml`): Manages deployment resources (ConfigMaps, Secrets, ServiceAccounts, Services, PVCs, Deployments, NetworkPolicies, ServiceMonitors) within the target namespace.
 
-The operator also creates a shared `mlflow` ClusterRole for the MLflow server pod itself, granting read-only cluster-wide access to namespaces, the well-known `mlflow-artifact-connection` secret, and MLflowConfig CRs. Secret access includes watch-based reads so namespace-specific artifact override updates can be observed across workspaces. These cannot be scoped to a single namespace because MLflow serves requests across namespaces.
+The operator also creates shared `mlflow` ClusterRole and ClusterRoleBinding objects for the MLflow server pod itself, granting read-only cluster-wide access to namespaces, the well-known `mlflow-artifact-connection` secret, and MLflowConfig CRs. Secret access includes watch-based reads so namespace-specific artifact override updates can be observed across workspaces. These cannot be scoped to a single namespace because MLflow serves requests across namespaces.
 
 See the manifest files for detailed per-resource documentation.
 

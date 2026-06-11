@@ -87,8 +87,29 @@ rules:
   - clusterroles
   verbs:
   - create
+- apiGroups:
+  - rbac.authorization.k8s.io
+  resourceNames:
+  - mlflow
+  resources:
+  - clusterrolebindings
+  - clusterroles
+  verbs:
   - delete
   - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - rbac.authorization.k8s.io
+  resourceNames:
+  - mlflow-gc
+  resources:
+  - clusterrolebindings
+  - clusterroles
+  verbs:
+  - delete
   - list
   - patch
   - update

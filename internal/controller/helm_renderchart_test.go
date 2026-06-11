@@ -184,7 +184,7 @@ func TestRenderChart(t *testing.T) {
 			},
 		},
 		{
-			name: "RBAC resources should use static ClusterRole name and resourceSuffix for ClusterRoleBinding",
+			name: "RBAC resources should use static ClusterRole and ClusterRoleBinding names",
 			mlflow: &mlflowv1.MLflow{
 				ObjectMeta: metav1.ObjectMeta{
 					Name: "my-instance",
@@ -198,9 +198,8 @@ func TestRenderChart(t *testing.T) {
 			namespace: "test-ns",
 			wantErr:   false,
 			validateObjs: func(t *testing.T, objs []*unstructured.Unstructured) {
-				expectedSuffix := "-my-instance"
-				expectedBindingName := "mlflow" + expectedSuffix
-				// ClusterRole is static (shared across all instances)
+				expectedBindingName := "mlflow"
+				// Shared server RBAC stays static across all instances.
 				expectedClusterRoleName := "mlflow"
 
 				foundClusterRole := false
@@ -252,7 +251,7 @@ func TestRenderChart(t *testing.T) {
 					case "ClusterRoleBinding":
 						foundClusterRoleBinding = true
 						if obj.GetName() != expectedBindingName {
-							t.Errorf("ClusterRoleBinding name = %s, want %s (should include resourceSuffix)", obj.GetName(), expectedBindingName)
+							t.Errorf("ClusterRoleBinding name = %s, want %s (should be static, shared across all MLflow instances)", obj.GetName(), expectedBindingName)
 						}
 						roleRef, found, err := unstructured.NestedString(obj.Object, "roleRef", "name")
 						if err != nil || !found {

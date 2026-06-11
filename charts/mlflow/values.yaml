@@ -5,8 +5,9 @@
 # Namespace where MLflow will be deployed
 namespace: mlflow
 
-# Resource suffix for unique naming across multiple MLflow instances
-# All resources will be named like "mlflow{{ .Values.resourceSuffix }}"
+# Resource suffix for unique naming across most per-instance MLflow resources.
+# Shared server RBAC objects keep static names, while most namespaced resources
+# and GC RBAC objects still use "mlflow{{ .Values.resourceSuffix }}".
 # Example: If resourceSuffix is "-dev", resources will be named "mlflow-dev"
 # Leave empty (default) for standard "mlflow" resource names
 # This is automatically set by the operator based on the CR name
@@ -255,8 +256,9 @@ garbageCollection:
   # Required when enabled.
   schedule: "0 2 * * 0"
   # ServiceAccount used by the CronJob. The chart creates this SA along with
-  # a ClusterRole/ClusterRoleBinding granting the MLflow pseudo-resource
-  # permissions that `mlflow gc` needs.
+  # a suffixed ClusterRole/ClusterRoleBinding granting the MLflow pseudo-resource
+  # permissions that `mlflow gc` still needs when artifact deletion goes through
+  # the MLflow artifact proxy.
   serviceAccount:
     name: mlflow-gc-sa
   # Optional. Restrict deletion to resources that have been soft-deleted for

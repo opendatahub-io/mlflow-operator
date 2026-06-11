@@ -25,9 +25,9 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: mlflow{{ .Values.resourceSuffix }}
+  name: mlflow
   labels:
-    app: mlflow{{ .Values.resourceSuffix }}
+    app: mlflow
     {{- with .Values.commonLabels }}
     {{- toYaml . | nindent 4 }}
     {{- end }}
@@ -51,10 +51,12 @@ metadata:
     {{- toYaml . | nindent 4 }}
     {{- end }}
 rules:
-  # Pseudo-resource permissions for `mlflow gc`
+  # `mlflow gc` deletes metadata directly from the backend store, but proxied artifact
+  # deletion still goes through the MLflow server and is authorized as experiments/update.
+  # Long term, rework `mlflow gc` to resolve backing storage and delete artifacts directly.
   - apiGroups: ["mlflow.kubeflow.org"]
     resources: ["experiments"]
-    verbs: ["get", "list", "update", "delete"]
+    verbs: ["get", "list", "update"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding

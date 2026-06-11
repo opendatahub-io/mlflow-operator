@@ -112,6 +112,7 @@ var _ = Describe("MLflow Controller", func() {
 				ChartPath:            "../../charts/mlflow",
 				ConsoleLinkAvailable: false,
 				HTTPRouteAvailable:   false,
+				GCRBACWatchCache:     mustNewGCRBACWatchCache(),
 			}
 
 			_, reconcileErr := controllerReconciler.Reconcile(ctx, reconcile.Request{
@@ -140,6 +141,7 @@ var _ = Describe("MLflow Controller", func() {
 				ChartPath:            "../../charts/mlflow",
 				ConsoleLinkAvailable: false,
 				HTTPRouteAvailable:   false,
+				GCRBACWatchCache:     mustNewGCRBACWatchCache(),
 			}
 
 			By("Reconciling to create the CronJob")
@@ -201,6 +203,7 @@ var _ = Describe("MLflow Controller", func() {
 				ChartPath:            "../../charts/mlflow",
 				ConsoleLinkAvailable: false,
 				HTTPRouteAvailable:   true,
+				GCRBACWatchCache:     mustNewGCRBACWatchCache(),
 			}
 
 			_, reconcileErr := controllerReconciler.Reconcile(ctx, reconcile.Request{

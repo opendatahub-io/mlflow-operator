@@ -331,7 +331,7 @@ The `config/samples/` directory contains example MLflow custom resource configur
    - Multi-replica deployment
    - Periodic garbage collection via CronJob
    - `mlflow-gc-sa` ServiceAccount for the CronJob
-   - `mlflow-gc` ClusterRole and ClusterRoleBinding for the CronJob
+   - Suffixed `mlflow-gc{{ resourceSuffix }}` ClusterRole and ClusterRoleBinding for the CronJob
 
 5. **mlflow_v1_mlflow_digest.yaml** - Digest-based images
    - Uses SHA256 image digests for reproducibility
