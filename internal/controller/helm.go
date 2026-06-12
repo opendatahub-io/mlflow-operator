@@ -162,6 +162,11 @@ func (h *HelmRenderer) RenderChart(
 	return rendered, nil
 }
 
+// isTraceArchivalEnabled returns true when trace archival is configured and enabled.
+func isTraceArchivalEnabled(mlflow *mlflowv1.MLflow) bool {
+	return mlflow.Spec.TraceArchival != nil && mlflow.Spec.TraceArchival.Enabled
+}
+
 // mlflowToHelmValues converts MLflow CR spec to Helm values
 func (h *HelmRenderer) mlflowToHelmValues(
 	mlflow *mlflowv1.MLflow,
@@ -614,6 +619,47 @@ func (h *HelmRenderer) mlflowToHelmValues(
 		}
 	}
 	values["garbageCollection"] = gcValues
+
+	// Trace archival - disabled unless explicitly configured in the CR.
+	// When enabled, the operator creates a CronJob that runs the standalone
+	// archival module and mounts the config into the MLflow Deployment so the
+	// UI can surface archival status.
+	taValues := map[string]interface{}{
+		"enabled": false,
+	}
+	if isTraceArchivalEnabled(mlflow) {
+		taValues["enabled"] = true
+		if mlflow.Spec.TraceArchival.Schedule != nil {
+			taValues["schedule"] = *mlflow.Spec.TraceArchival.Schedule
+		}
+		taValues["serviceAccount"] = map[string]interface{}{
+			"name": TraceArchivalServiceAccountName,
+		}
+		if mlflow.Spec.TraceArchival.Location != nil {
+			taValues["location"] = *mlflow.Spec.TraceArchival.Location
+		}
+		if mlflow.Spec.TraceArchival.Retention != nil {
+			taValues["retention"] = *mlflow.Spec.TraceArchival.Retention
+		}
+		if mlflow.Spec.TraceArchival.MaxTracesPerPass != nil {
+			taValues["maxTracesPerPass"] = *mlflow.Spec.TraceArchival.MaxTracesPerPass
+		}
+		if len(mlflow.Spec.TraceArchival.LongRetentionAllowlist) > 0 {
+			allowlist := make([]interface{}, len(mlflow.Spec.TraceArchival.LongRetentionAllowlist))
+			for i, id := range mlflow.Spec.TraceArchival.LongRetentionAllowlist {
+				allowlist[i] = id
+			}
+			taValues["longRetentionAllowlist"] = allowlist
+		}
+		if mlflow.Spec.TraceArchival.Resources != nil {
+			resourcesMap, err := runtime.DefaultUnstructuredConverter.ToUnstructured(mlflow.Spec.TraceArchival.Resources)
+			if err != nil {
+				return nil, fmt.Errorf("failed to convert traceArchival.resources: %w", err)
+			}
+			taValues["resources"] = resourcesMap
+		}
+	}
+	values["traceArchival"] = taValues
 
 	return values, nil
 }

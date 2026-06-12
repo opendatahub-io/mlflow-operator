@@ -58,6 +58,7 @@ func mustNewGCRBACWatchCache() crcache.Cache {
 	return gcCache
 }
 
+
 func TestControllers(t *testing.T) {
 	RegisterFailHandler(Fail)
 

@@ -37,9 +37,14 @@ import (
 // +kubebuilder:validation:XValidation:rule="!has(self.artifactsDestination) || !self.artifactsDestination.startsWith('file://') || has(self.storage)",message="storage must be configured when artifactsDestination uses file-based storage (file:// prefix)"
 // +kubebuilder:validation:XValidation:rule="!has(self.artifactsDestination) || !self.artifactsDestination.startsWith('file://') || (has(self.serveArtifacts) && self.serveArtifacts)",message="serveArtifacts must be enabled when artifactsDestination uses file-based storage (file:// prefix)"
 // +kubebuilder:validation:XValidation:rule="!has(self.env) || self.env.all(e, e.name != 'MLFLOW_SERVER_DISABLE_SECURITY_MIDDLEWARE')",message="setting the MLFLOW_SERVER_DISABLE_SECURITY_MIDDLEWARE environment variable is not allowed"
+// +kubebuilder:validation:XValidation:rule="!has(self.env) || self.env.all(e, e.name != 'MLFLOW_SERVER_ENABLE_JOB_EXECUTION')",message="setting the MLFLOW_SERVER_ENABLE_JOB_EXECUTION environment variable is not allowed; the operator manages job execution lifecycle"
 // +kubebuilder:validation:XValidation:rule="!has(self.networkPolicyEgressRules) || self.networkPolicyEgressRules.all(r, (has(r.ports) && size(r.ports) > 0) || (has(r.to) && size(r.to) > 0))",message="each networkPolicyEgressRules entry must specify at least one port or one destination"
 // +kubebuilder:validation:XValidation:rule="!has(self.networkPolicyAdditionalEgressRules) || self.networkPolicyAdditionalEgressRules.all(r, (has(r.ports) && size(r.ports) > 0) || (has(r.to) && size(r.to) > 0))",message="each networkPolicyAdditionalEgressRules entry must specify at least one port or one destination"
 // +kubebuilder:validation:XValidation:rule="!has(self.resourceClaims) || self.resourceClaims.all(c, ((has(c.resourceClaimName) && size(c.resourceClaimName) > 0) != (has(c.resourceClaimTemplateName) && size(c.resourceClaimTemplateName) > 0)))",message="each resourceClaims entry must set exactly one non-empty value: resourceClaimName or resourceClaimTemplateName"
+// +kubebuilder:validation:XValidation:rule="!has(self.traceArchival) || !has(self.traceArchival.location) || !self.traceArchival.location.startsWith('file://') || has(self.storage)",message="storage must be configured when traceArchival.location uses file-based storage (file:// prefix)"
+// +kubebuilder:validation:XValidation:rule="!has(self.traceArchival) || !has(self.traceArchival.enabled) || self.traceArchival.enabled == false || (has(self.traceArchival.schedule) && size(self.traceArchival.schedule) > 0)",message="traceArchival.schedule is required when traceArchival.enabled is true"
+// +kubebuilder:validation:XValidation:rule="!has(self.traceArchival) || !has(self.traceArchival.enabled) || self.traceArchival.enabled == false || (has(self.traceArchival.location) && size(self.traceArchival.location) > 0)",message="traceArchival.location is required when traceArchival.enabled is true"
+// +kubebuilder:validation:XValidation:rule="!has(self.traceArchival) || !has(self.traceArchival.enabled) || self.traceArchival.enabled == false || (has(self.traceArchival.retention) && size(self.traceArchival.retention) > 0)",message="traceArchival.retention is required when traceArchival.enabled is true"
 type MLflowSpec struct {
 	// Image specifies the MLflow container image.
 	// If not specified, use the default image
@@ -273,6 +278,15 @@ type MLflowSpec struct {
 	// that have been in the deleted state for a minimum duration.
 	// +optional
 	GarbageCollection *GarbageCollectionSpec `json:"garbageCollection,omitempty"`
+
+	// TraceArchival configures trace archival, which moves older trace span
+	// payloads from the SQL tracking store to a configured artifact location.
+	// When enabled, the operator creates a CronJob that runs the standalone
+	// archival module and mounts the archival config into the MLflow server
+	// so the UI can surface archival status. The server's built-in scheduler
+	// stays disabled; the CronJob handles execution externally.
+	// +optional
+	TraceArchival *TraceArchivalSpec `json:"traceArchival,omitempty"`
 }
 
 // CABundleConfigMapSpec specifies a ConfigMap containing CA certificates.
@@ -303,6 +317,59 @@ type GarbageCollectionSpec struct {
 	OlderThan *string `json:"olderThan,omitempty"`
 
 	// Resources for the garbage collection Job container.
+	// +optional
+	Resources *corev1.ResourceRequirements `json:"resources,omitempty"`
+}
+
+// TraceArchivalSpec configures trace archival via a CronJob that runs the
+// standalone archival module. The archival config is also mounted into the
+// MLflow server so the UI can surface archival status.
+type TraceArchivalSpec struct {
+	// Enabled toggles trace archival. When true, the operator creates a
+	// CronJob that runs the standalone archival module and mounts the
+	// archival config into the MLflow server for UI awareness.
+	// +kubebuilder:default=false
+	// +optional
+	Enabled bool `json:"enabled,omitempty"`
+
+	// Schedule is the cron expression for when archival runs
+	// (e.g., "*/5 * * * *" for every 5 minutes).
+	// Required when enabled is true.
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=256
+	// +optional
+	Schedule *string `json:"schedule,omitempty"`
+
+	// Location is the artifact repository URI where archived span payloads
+	// are stored. Supports s3://, gs://, wasbs://, file:// (file:// requires
+	// Storage). Required when enabled is true.
+	// +kubebuilder:validation:MaxLength=2048
+	// +optional
+	Location *string `json:"location,omitempty"`
+
+	// Retention is the age threshold after which span payloads are archived
+	// out of the tracking store. Uses the duration grammar <int><unit> where
+	// unit is m, h, or d. Examples: "30d", "12h", "360m".
+	// Required when enabled is true.
+	// +kubebuilder:validation:Pattern=`^\d+[mhd]$`
+	// +kubebuilder:validation:MaxLength=16
+	// +optional
+	Retention *string `json:"retention,omitempty"`
+
+	// MaxTracesPerPass limits the number of traces archived in a single pass.
+	// +kubebuilder:default=1000
+	// +kubebuilder:validation:Minimum=1
+	// +optional
+	MaxTracesPerPass *int32 `json:"maxTracesPerPass,omitempty"`
+
+	// LongRetentionAllowlist contains experiment IDs whose longer-than-broader
+	// retention values may be honored. Experiments not in this list use the
+	// broader server or workspace retention even if they set a longer value.
+	// +kubebuilder:validation:MaxItems=64
+	// +optional
+	LongRetentionAllowlist []string `json:"longRetentionAllowlist,omitempty"`
+
+	// Resources for the trace archival CronJob container.
 	// +optional
 	Resources *corev1.ResourceRequirements `json:"resources,omitempty"`
 }
