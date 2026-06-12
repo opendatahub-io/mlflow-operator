@@ -274,6 +274,30 @@ garbageCollection:
       cpu: 500m
       memory: 512Mi
 
+# Trace archival via a CronJob that runs the standalone archival module.
+# Moves older trace span payloads from the SQL tracking store to a configured
+# artifact location, reducing database storage costs while keeping traces
+# readable in the UI and APIs. The archival config is also mounted into the
+# MLflow server so the UI can surface archival status.
+traceArchival:
+  enabled: false
+  # Cron schedule expression (e.g. "0 */6 * * *" for every 6 hours).
+  # Required when enabled.
+  schedule: "0 */6 * * *"
+  # location: "s3://mlflow-trace-archive"
+  # retention: "30d"
+  maxTracesPerPass: 1000
+  longRetentionAllowlist: []
+  serviceAccount:
+    name: mlflow-trace-archival-sa
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
 # CA Bundle configuration for TLS verification
 # All .crt and .pem files in each mounted ConfigMap are included.
 caBundle:

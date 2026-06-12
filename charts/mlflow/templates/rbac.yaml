@@ -39,6 +39,11 @@ subjects:
   - kind: ServiceAccount
     name: {{ .Values.serviceAccount.name }}
     namespace: {{ .Values.namespace }}
+{{- if .Values.traceArchival.enabled }}
+  - kind: ServiceAccount
+    name: {{ .Values.traceArchival.serviceAccount.name }}
+    namespace: {{ .Values.namespace }}
+{{- end }}
 {{- if .Values.garbageCollection.enabled }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
