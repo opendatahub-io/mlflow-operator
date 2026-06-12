@@ -174,7 +174,7 @@ The standalone Helm chart does not orchestrate MLflow database migrations. Boots
 
 MLflow is deployed with the `kubernetes-auth` app enabled. The operator sets `MLFLOW_K8S_AUTH_AUTHORIZATION_MODE=self_subject_access_review`, so authorization checks are performed directly by MLflow using the caller's token. The MLflow server itself still runs under a shared `mlflow` ClusterRole and ClusterRoleBinding so the workspace provider can enumerate namespaces and watch the shared `mlflow-artifact-connection` secret plus `MLflowConfig` overrides across workspaces.
 
-The deployment always sets `MLFLOW_DISABLE_TELEMETRY=true` and `MLFLOW_SERVER_ENABLE_JOB_EXECUTION=false` to disable telemetry and job execution by default.
+The deployment always sets `MLFLOW_DISABLE_TELEMETRY=true` and `MLFLOW_SERVER_ENABLE_JOB_EXECUTION=false` to disable telemetry and server-side job execution. When trace archival is enabled, archival runs via a separate CronJob rather than the server's built-in scheduler; the server still receives the archival config so the UI can surface archival status.
 
 TLS is terminated inside the MLflow container using uvicorn options. Certificates come from the `mlflow-tls` secret, which is created automatically on OpenShift via the `service.beta.openshift.io/serving-cert-secret-name` annotation. If you need to provide your own certificates, place `tls.crt` and `tls.key` in a secret named `mlflow-tls` (or override `tls.secretName` in Helm values). On OpenShift, the operator sets `UVICORN_SSL_CIPHERS=PROFILE=SYSTEM` by default unless `spec.env` already defines that variable, so uvicorn follows the platform crypto policy, including FIPS-compatible TLS 1.2 and 1.3 cipher selection.
 
@@ -292,6 +292,37 @@ By default, finished migration Jobs remain visible for 24 hours before TTL clean
 
 During the migration flow, the operator resolves the final MLflow image, scales the MLflow Deployment to zero, waits for all MLflow replicas to disappear, runs a one-shot Job against the backend and registry stores, verifies that the migration image reports the supported MLflow version, restores the requested replica count, and updates `status.version` only after the post-migration rollout is ready.
 For ODH/RHOAI MLflow images that ship `mlflow.store.db.migration_gap`, that Job also runs the backend-only RHOAI `3.3 -> 3.4` gap repair before the generic MLflow migration logic.
+
+### Trace Archival
+
+The operator supports trace archival, which moves older trace span payloads from the SQL tracking store to a configured artifact location while keeping traces readable in the UI and APIs. Archival runs via a CronJob that executes the standalone archival module, following the same pattern as garbage collection.
+
+```yaml
+spec:
+  backendStoreUriFrom:
+    name: mlflow-db-credentials
+    key: backend-store-uri
+  serveArtifacts: true
+  artifactsDestination: "s3://mlflow-artifacts"
+  traceArchival:
+    enabled: true
+    schedule: "0 */6 * * *"
+    location: "s3://mlflow-trace-archive"
+    retention: "30d"
+    maxTracesPerPass: 1000
+    longRetentionAllowlist:
+      - "12345"
+```
+
+When `traceArchival.enabled` is true, the operator:
+- Generates a `mlflow-trace-archival-config` ConfigMap and mounts it into both the MLflow server (for UI awareness via `/server-info`) and the CronJob (for execution)
+- Creates a CronJob (`mlflow-trace-archival`) with `concurrencyPolicy: Forbid` that runs the standalone archival module on the configured schedule
+- The MLflow server's built-in scheduler stays disabled (`MLFLOW_SERVER_ENABLE_JOB_EXECUTION=false`); the CronJob handles archival externally, which avoids multi-replica coordination entirely
+- The CronJob uses the `mlflow-trace-archival-sa` ServiceAccount
+
+When trace archival is disabled or the CR is deleted, the operator cleans up the CronJob, ConfigMap, and ServiceAccount.
+
+See `config/samples/mlflow_v1_mlflow_trace_archival.yaml` for a complete example.
 
 ### CORS Configuration
 

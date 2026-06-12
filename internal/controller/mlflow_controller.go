@@ -161,6 +161,34 @@ func (r *MLflowReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		}
 	}
 
+	// Clean up trace archival resources when archival is disabled.
+	if !isTraceArchivalEnabled(mlflow) {
+		taSuffix := "-trace-archival" + getResourceSuffix(mlflow.Name)
+		taResources := []struct {
+			obj  client.Object
+			kind string
+			name string
+			ns   string
+		}{
+			{&batchv1.CronJob{}, "CronJob", ResourceName + taSuffix, targetNamespace},
+			{&corev1.ServiceAccount{}, "ServiceAccount", TraceArchivalServiceAccountName, targetNamespace},
+			{&corev1.ConfigMap{}, "ConfigMap", "mlflow-trace-archival-config" + getResourceSuffix(mlflow.Name), targetNamespace},
+		}
+		for _, res := range taResources {
+			existing := res.obj.DeepCopyObject().(client.Object)
+			existing.SetName(res.name)
+			existing.SetNamespace(res.ns)
+			if err := r.Delete(ctx, existing); err != nil {
+				if errors.IsNotFound(err) {
+					continue
+				}
+				log.Error(err, "Failed to delete trace archival resource", "kind", res.kind, "name", res.name)
+				return ctrl.Result{}, err
+			}
+			log.Info("Deleted trace archival resource", "kind", res.kind, "name", res.name)
+		}
+	}
+
 	// Validate user-provided CA bundle ConfigMap if specified
 	if mlflow.Spec.CABundleConfigMap != nil {
 		customCABundleConfigMap := &corev1.ConfigMap{}

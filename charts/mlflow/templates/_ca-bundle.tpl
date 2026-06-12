@@ -36,6 +36,73 @@ Usage: {{ include "mlflow.caBundleMountPaths" . }}
 {{- $paths | join " " -}}
 {{- end -}}
 
+{{/*
+Render CA bundle ConfigMap and combined output volumes.
+Usage: {{ include "mlflow.caBundleVolumes" . | nindent 8 }}
+*/}}
+{{- define "mlflow.caBundleVolumes" -}}
+{{- if .Values.caBundle.configMaps }}
+{{- range $i, $cm := .Values.caBundle.configMaps }}
+- name: ca-bundle-{{ $i }}
+  configMap:
+    name: {{ $cm.name }}
+    optional: true
+{{- end }}
+- name: combined-ca-bundle
+  emptyDir: {}
+{{- end }}
+{{- end -}}
+
+{{/*
+Render the init container that combines CA bundle sources into one file.
+Usage: {{ include "mlflow.caBundleInitContainers" . | nindent 6 }}
+*/}}
+{{- define "mlflow.caBundleInitContainers" -}}
+{{- if .Values.caBundle.configMaps }}
+initContainers:
+  - name: combine-ca-bundles
+    image: {{ .Values.image.name }}
+    {{- if .Values.image.imagePullPolicy }}
+    imagePullPolicy: {{ .Values.image.imagePullPolicy }}
+    {{- end }}
+    command:
+      - /bin/sh
+      - -c
+      - |
+        set -e
+{{ include "mlflow.caBundleFunctions" . | indent 8 }}
+        combine_ca_bundles
+    env:
+      - name: CA_BUNDLE_FILE_PATHS
+        value: {{ include "mlflow.caBundleFilePaths" . | quote }}
+      - name: CA_BUNDLE_MOUNT_PATHS
+        value: {{ include "mlflow.caBundleMountPaths" . | quote }}
+      - name: CA_BUNDLE_OUTPUT
+        value: {{ .Values.caBundle.outputPath | quote }}
+    volumeMounts:
+      - name: tmp
+        mountPath: /tmp
+      - name: combined-ca-bundle
+        mountPath: {{ dir .Values.caBundle.outputPath }}
+      {{- range $i, $cm := .Values.caBundle.configMaps }}
+      - name: ca-bundle-{{ $i }}
+        mountPath: {{ $cm.mountPath }}
+        readOnly: true
+      {{- end }}
+    {{- with .Values.securityContext }}
+    securityContext:
+      {{- toYaml . | nindent 6 }}
+    {{- end }}
+    resources:
+      requests:
+        cpu: 10m
+        memory: 16Mi
+      limits:
+        cpu: 100m
+        memory: 64Mi
+{{- end }}
+{{- end -}}
+
 {{- define "mlflow.caBundleFunctions" -}}
 # Compute checksum of CA bundle source files
 compute_checksum() {

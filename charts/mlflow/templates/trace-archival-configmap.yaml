@@ -1,0 +1,31 @@
+{{- if .Values.traceArchival.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mlflow-trace-archival-config{{ .Values.resourceSuffix }}
+  namespace: {{ .Values.namespace }}
+  labels:
+    app: mlflow{{ .Values.resourceSuffix }}
+    {{- with .Values.commonLabels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+data:
+  trace-archival.yaml: |
+    trace_archival:
+      enabled: true
+      {{- if .Values.traceArchival.location }}
+      location: {{ .Values.traceArchival.location | quote }}
+      {{- end }}
+      {{- if .Values.traceArchival.retention }}
+      retention: {{ .Values.traceArchival.retention | quote }}
+      {{- end }}
+      {{- if .Values.traceArchival.maxTracesPerPass }}
+      max_traces_per_pass: {{ .Values.traceArchival.maxTracesPerPass }}
+      {{- end }}
+      {{- if .Values.traceArchival.longRetentionAllowlist }}
+      long_retention_allowlist:
+        {{- range .Values.traceArchival.longRetentionAllowlist }}
+        - {{ . | quote }}
+        {{- end }}
+      {{- end }}
+{{- end }}

@@ -11,7 +11,7 @@ metadata:
 spec:
   podSelector:
     matchLabels:
-      app: mlflow{{ .Values.resourceSuffix }}
+      app.kubernetes.io/instance: mlflow{{ .Values.resourceSuffix }}
   policyTypes:
     - Ingress
     - Egress
