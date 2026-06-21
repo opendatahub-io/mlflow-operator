@@ -720,22 +720,6 @@ class MLflowDeployer:
                 "Waiting for PostgreSQL deployment to be available"
             )
 
-            # When TLS is enabled the secret may have been regenerated with a
-            # new CA. Restart the pod and wait for the rollout to complete so
-            # the new cert is mounted before MLflow tries to connect.
-            if self.args.postgres_tls:
-                self.run_command(
-                    f"kubectl rollout restart deployment/postgres-deployment "
-                    f"-n {self.args.namespace}",
-                    "Restarting PostgreSQL to pick up new TLS certs",
-                    capture_output=True,
-                )
-                self.run_command(
-                    f"kubectl rollout status deployment/postgres-deployment "
-                    f"--timeout=300s -n {self.args.namespace}",
-                    "Waiting for PostgreSQL rollout to complete"
-                )
-
         except Exception as e:
             print(f"❌ PostgreSQL deployment failed to become ready: {e}")
             self.debug_deployment("postgres-deployment", self.args.namespace)
@@ -1219,6 +1203,27 @@ class MLflowDeployer:
         if self.args.ca_bundle_path and self.args.ca_bundle_configmap:
             raise ValueError("--ca-bundle-path and --ca-bundle-configmap are mutually exclusive")
 
+        uses_postgres = (
+            self.args.backend_store == "postgres"
+            or self.args.registry_store == "postgres"
+        )
+        if uses_postgres and not self.args.skip_infrastructure:
+            unsupported = []
+            if self.args.postgres_user != "mlflow":
+                unsupported.append("--postgres-user")
+            if self.args.postgres_password != "mysecretpassword":
+                unsupported.append("--postgres-password")
+            if self.args.postgres_backend_db != "mydatabase":
+                unsupported.append("--postgres-backend-db")
+            if self.args.postgres_registry_db != "mydatabase":
+                unsupported.append("--postgres-registry-db")
+            if unsupported:
+                raise ValueError(
+                    "self-managed PostgreSQL uses fixed bootstrap settings "
+                    "(user=mlflow, password=mysecretpassword, db=mydatabase); "
+                    f"{', '.join(unsupported)} requires --skip-infrastructure"
+                )
+
         if self.args.skip_infrastructure:
             tls_flags = []
             if self.args.postgres_tls:
@@ -1350,8 +1355,8 @@ def main():
     parser.add_argument("--artifacts-destination", default="file:///mlflow/artifacts")
 
     # TLS flags — enable self-signed TLS for self-deployed infrastructure.
-    # Postgres generates its own cert at container startup (no external deps).
-    # SeaweedFS cert is generated on the host by this script via openssl and stored as a Secret.
+    # Postgres and SeaweedFS certs are generated on the host by this script
+    # via openssl and stored as Secrets before the Deployments are applied.
     parser.add_argument("--postgres-tls", action="store_true", default=False,
                        help="Enable TLS on the self-deployed PostgreSQL server.")
     parser.add_argument("--seaweedfs-tls", action="store_true", default=False,
@@ -1385,7 +1390,7 @@ def main():
                             "Default: 'verify-full' when --postgres-tls is set, 'disable' otherwise.")
     parser.add_argument("--postgres-host", default="")
     parser.add_argument("--postgres-port", default="5432")
-    parser.add_argument("--postgres-user", default="postgres")
+    parser.add_argument("--postgres-user", default="mlflow")
     parser.add_argument("--postgres-password", default="mysecretpassword")
     parser.add_argument("--postgres-backend-db", default="mydatabase")
     parser.add_argument("--postgres-registry-db", default="mydatabase")

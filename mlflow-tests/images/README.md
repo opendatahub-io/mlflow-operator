@@ -105,9 +105,9 @@ The script is configured entirely via environment variables. Variables can also 
 | `S3_ENDPOINT_URL` | _(unset)_ | S3 endpoint URL (`STORAGE_TYPE=s3` only). |
 | `DB_HOST` | _(auto)_ | PostgreSQL hostname (when either metadata store uses `postgres`). |
 | `DB_PORT` | `5432` | PostgreSQL port (when either metadata store uses `postgres`). |
-| `DB_USER` | `postgres` | PostgreSQL username (when either metadata store uses `postgres`). |
-| `DB_PASSWORD` | _(unset)_ | PostgreSQL password (when either metadata store uses `postgres`). |
-| `DB_NAME` | `mydatabase` | PostgreSQL database name (when either metadata store uses `postgres`). |
+| `DB_USER` | `mlflow` | PostgreSQL username. Custom values require reused/external PostgreSQL via `SKIP_INFRASTRUCTURE=true`. |
+| `DB_PASSWORD` | _(unset)_ | PostgreSQL password. Custom values require reused/external PostgreSQL via `SKIP_INFRASTRUCTURE=true`. |
+| `DB_NAME` | `mydatabase` | PostgreSQL database name. Custom values require reused/external PostgreSQL via `SKIP_INFRASTRUCTURE=true`. |
 | `DB_SSLMODE` | _(unset)_ | SSL mode for the PostgreSQL connection URI. |
 
 ### Infrastructure image overrides
