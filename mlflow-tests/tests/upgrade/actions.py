@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import os
 import tempfile
+import time
 
 import mlflow
 from mlflow.entities.span import NO_OP_SPAN_TRACE_ID
@@ -148,28 +149,26 @@ def action_create_upgrade_trace(test_context: TestContext) -> None:
     if not test_context.active_experiment_id:
         raise ValueError("active_experiment_id must be set before creating an upgrade trace")
 
-    with mlflow.tracing.context(
-        session_id=session_payload["session_id"],
-        user=session_payload["user"],
-    ):
-        inputs = dict(trace_payload["inputs"])
-        if "attachment_content" in trace_payload:
-            attachment_name = trace_payload["inputs"]["attachment_name"]
-            inputs["attachment"] = Attachment(
-                content_type="text/plain",
-                content_bytes=trace_payload["attachment_content"].encode("utf-8"),
-            )
-            test_context.upgrade_observed_state.setdefault("trace_attachment_names", {})[
-                trace_payload["trace_name"]
-            ] = attachment_name
-        span = test_context.user_client.start_trace(
-            name=trace_payload["trace_name"],
-            experiment_id=test_context.active_experiment_id,
+    inputs = dict(trace_payload["inputs"])
+    if "attachment_content" in trace_payload:
+        attachment_name = trace_payload["inputs"]["attachment_name"]
+        inputs["attachment"] = Attachment(
+            content_type="text/plain",
+            content_bytes=trace_payload["attachment_content"].encode("utf-8"),
         )
-        span.set_inputs(inputs)
-        span.set_outputs(trace_payload["outputs"])
-        span.end()
-
+        test_context.upgrade_observed_state.setdefault("trace_attachment_names", {})[
+            trace_payload["trace_name"]
+        ] = attachment_name
+    span = mlflow.start_span_no_context(
+        name=trace_payload["trace_name"],
+        inputs=inputs,
+        metadata={
+            "mlflow.trace.session": session_payload["session_id"],
+            "mlflow.trace.user": session_payload["user"],
+        },
+        experiment_id=test_context.active_experiment_id,
+    )
+    span.set_outputs(trace_payload["outputs"])
     trace_id = getattr(span, "request_id", None) or getattr(span, "trace_id", None)
     if trace_id is None:
         raise AssertionError(
@@ -179,6 +178,8 @@ def action_create_upgrade_trace(test_context: TestContext) -> None:
         raise AssertionError(
             f"Trace '{trace_payload['trace_name']}' returned a no-op span trace id"
         )
+    span.end()
+    mlflow.flush_trace_async_logging()
     test_context.current_trace_id = trace_id
     test_context.current_trace_name = trace_payload["trace_name"]
     test_context.upgrade_observed_state.setdefault("trace_ids", {})[trace_payload["trace_name"]] = (
@@ -193,42 +194,65 @@ def action_collect_upgrade_trace_observations(test_context: TestContext) -> None
     if experiment is None:
         raise ValueError(f"Experiment '{case['experiment_name']}' not found")
 
-    traces = test_context.user_client.search_traces(
-        experiment_ids=[experiment.experiment_id],
-        max_results=100,
-        flush=True,
-    )
+    expected_traces_by_session = {
+        session_payload["session_id"]: {
+            trace_payload["trace_name"] for trace_payload in session_payload["traces"]
+        }
+        for session_payload in case["sessions"]
+    }
+    expected_attachment_traces = {
+        trace_payload["trace_name"]
+        for session_payload in case["sessions"]
+        for trace_payload in session_payload["traces"]
+        if "attachment_content" in trace_payload
+    }
 
     observed_by_session = {}
     attachment_contents = {}
-    for trace in traces:
-        metadata = trace.info.trace_metadata or {}
-        session_id = metadata.get("mlflow.trace.session")
-        if not session_id or not trace.data.spans:
-            continue
-        root_span = trace.data.spans[0]
-        observed_by_session.setdefault(session_id, {})[root_span.name] = trace
-
-        attachment_ref = root_span.inputs.get("attachment")
-        parsed_ref = Attachment.parse_ref(attachment_ref) if attachment_ref else None
-        if parsed_ref is None:
-            continue
-
-        response = requests.get(
-            f"{get_mlflow_base_uri()}/ajax-api/3.0/mlflow/get-trace-artifact",
-            params={
-                "request_id": trace.info.trace_id,
-                "path": parsed_ref["attachment_id"],
-            },
-            headers={
-                "Authorization": f"Bearer {Config.K8_API_TOKEN}",
-                WORKSPACE_HEADER_NAME: test_context.active_workspace,
-            },
-            verify=get_requests_verify_value(),
-            timeout=Config.REQUEST_TIMEOUT,
+    for attempt in range(5):
+        traces = test_context.user_client.search_traces(
+            experiment_ids=[experiment.experiment_id],
+            max_results=100,
         )
-        response.raise_for_status()
-        attachment_contents[root_span.name] = response.content.decode("utf-8")
+
+        observed_by_session = {}
+        attachment_contents = {}
+        for trace in traces:
+            metadata = trace.info.trace_metadata or {}
+            session_id = metadata.get("mlflow.trace.session")
+            if not session_id or not trace.data.spans:
+                continue
+            root_span = trace.data.spans[0]
+            observed_by_session.setdefault(session_id, {})[root_span.name] = trace
+
+            attachment_ref = root_span.inputs.get("attachment")
+            parsed_ref = Attachment.parse_ref(attachment_ref) if attachment_ref else None
+            if parsed_ref is None:
+                continue
+
+            response = requests.get(
+                f"{get_mlflow_base_uri()}/ajax-api/3.0/mlflow/get-trace-artifact",
+                params={
+                    "request_id": trace.info.trace_id,
+                    "path": parsed_ref["attachment_id"],
+                },
+                headers={
+                    "Authorization": f"Bearer {Config.K8_API_TOKEN}",
+                    WORKSPACE_HEADER_NAME: test_context.active_workspace,
+                },
+                verify=get_requests_verify_value(),
+                timeout=Config.REQUEST_TIMEOUT,
+            )
+            response.raise_for_status()
+            attachment_contents[root_span.name] = response.content.decode("utf-8")
+
+        if all(
+            expected_trace_names.issubset(set(observed_by_session.get(session_id, {})))
+            for session_id, expected_trace_names in expected_traces_by_session.items()
+        ) and expected_attachment_traces.issubset(set(attachment_contents)):
+            break
+        if attempt < 4:
+            time.sleep(1)
 
     test_context.upgrade_observed_state["traces_by_session"] = observed_by_session
     test_context.upgrade_observed_state["trace_attachment_contents"] = attachment_contents
