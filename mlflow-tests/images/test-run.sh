@@ -799,6 +799,14 @@ run_suite() {
     uv run --project "$UV_PROJECT_DIR" --no-sync pytest --junit-xml="$results_file" "${PYTEST_ARGS[@]}" || suite_exit=$?
     cd "$SCRIPT_DIR"
 
+    if [ "$suite_exit" -ne 0 ]; then
+        if ! "$SCRIPT_DIR/collect-debug-logs.sh" \
+            --namespace "$NAMESPACE" \
+            --output-dir "${TEST_RESULTS_DIR}/debug"; then
+            echo "WARN: debug log collection failed for namespace '${NAMESPACE}'" >&2
+        fi
+    fi
+
     return "$suite_exit"
 }
 
