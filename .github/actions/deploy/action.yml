@@ -78,22 +78,22 @@ inputs:
     default: '5432'
 
   postgres_user:
-    description: 'PostgreSQL username'
+    description: 'Optional PostgreSQL username override for reused/external PostgreSQL'
     required: false
-    default: 'postgres'
+    default: ''
 
   postgres_password:
-    description: 'PostgreSQL password'
+    description: 'PostgreSQL password for reused/external PostgreSQL'
     required: false
     default: 'mysecretpassword'
 
   postgres_backend_db:
-    description: 'PostgreSQL database name for backend store'
+    description: 'PostgreSQL backend DB for reused/external PostgreSQL'
     required: false
     default: 'mydatabase'
 
   postgres_registry_db:
-    description: 'PostgreSQL database name for registry store'
+    description: 'PostgreSQL registry DB for reused/external PostgreSQL'
     required: false
     default: 'mydatabase'
 
@@ -176,7 +176,7 @@ runs:
           --artifacts-destination "${{ inputs.artifacts_destination }}" \
           --postgres-host "${{ inputs.postgres_host }}" \
           --postgres-port "${{ inputs.postgres_port }}" \
-          --postgres-user "${{ inputs.postgres_user }}" \
+          ${{ inputs.postgres_user != '' && format('--postgres-user {0}', inputs.postgres_user) || '' }} \
           --postgres-password "${{ inputs.postgres_password }}" \
           --postgres-backend-db "${{ inputs.postgres_backend_db }}" \
           --postgres-registry-db "${{ inputs.postgres_registry_db }}" \

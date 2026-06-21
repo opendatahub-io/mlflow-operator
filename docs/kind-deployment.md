@@ -146,9 +146,15 @@ The deployment script accepts the following parameters:
 - `--artifacts-destination`: Custom artifacts destination (default: `file:///mlflow/artifacts`)
 
 #### PostgreSQL Configuration
+
+When `deploy.py` self-deploys PostgreSQL, it uses fixed bootstrap settings:
+user `mlflow`, password `mysecretpassword`, and database `mydatabase`.
+Custom PostgreSQL connection overrides are only supported with
+`--skip-infrastructure`.
+
 - `--postgres-host`: PostgreSQL host (auto-configured for in-cluster deployment)
 - `--postgres-port`: PostgreSQL port (default: `5432`)
-- `--postgres-user`: PostgreSQL username (default: `postgres`)
+- `--postgres-user`: PostgreSQL username (default: `mlflow`)
 - `--postgres-password`: PostgreSQL password (default: `mysecretpassword`)
 - `--postgres-backend-db`: Backend database name (default: `mydatabase`)
 - `--postgres-registry-db`: Registry database name (default: `mydatabase`)

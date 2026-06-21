@@ -62,9 +62,13 @@ Storage:
 
   DB_HOST               PostgreSQL host   (when BACKEND_STORE=postgres and/or REGISTRY_STORE=postgres; default: auto)
   DB_PORT               PostgreSQL port   (default: 5432)
-  DB_USER               PostgreSQL user   (default: postgres)
-  DB_PASSWORD           PostgreSQL password
-  DB_NAME               PostgreSQL database name (default: mydatabase)
+  DB_USER               PostgreSQL user   (default: mlflow; custom values require
+                        reused/external PostgreSQL via SKIP_INFRASTRUCTURE=true)
+  DB_PASSWORD           PostgreSQL password (custom values require reused/external
+                        PostgreSQL via SKIP_INFRASTRUCTURE=true)
+  DB_NAME               PostgreSQL database name (default: mydatabase; custom
+                        values require reused/external PostgreSQL via
+                        SKIP_INFRASTRUCTURE=true)
   DB_SSLMODE            sslmode for the connection URI (default: 'verify-full' with TLS, 'disable' without)
 
 Infrastructure image overrides:
