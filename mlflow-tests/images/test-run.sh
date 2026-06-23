@@ -105,10 +105,12 @@ Skip / control flags:
                         Requires exactly one backend value; use ARTIFACT_BACKENDS=file
                         or STORAGE_TYPE=file (or another single backend) when preserving
                         a deployment for later inspection or reuse.
-  CLEANUP_REUSED_RESOURCES true|false — when SKIP_DEPLOYMENT=true and
-                        SKIP_CLEANUP=false, also remove the reused MLflow CR,
-                        harness-managed RBAC, and any self-deployed PostgreSQL /
-                        SeaweedFS infrastructure implied by the current env vars
+  CLEANUP_REUSED_RESOURCES true|false|on_success — when SKIP_DEPLOYMENT=true
+                        and SKIP_CLEANUP=false, also remove the reused MLflow
+                        CR, harness-managed RBAC, and any self-deployed
+                        PostgreSQL / SeaweedFS infrastructure implied by the
+                        current env vars. Use on_success to preserve resources
+                        after failures but clean them up after successful runs
                         (default: false)
   FAIL_FAST             true|false — stop after the first backend suite failure (default: true)
                         Set to false to run all backends even if one fails.
@@ -238,6 +240,7 @@ CLEANUP_REUSED_RESOURCES="${CLEANUP_REUSED_RESOURCES:-false}"
 FAIL_FAST="${FAIL_FAST:-true}"
 FORCE_PORT_FORWARD="${FORCE_PORT_FORWARD:-false}"
 SERVE_ARTIFACTS="${SERVE_ARTIFACTS:-${serve_artifacts:-true}}"
+OVERALL_EXIT=0
 
 ARTIFACT_BACKENDS_CONFIGURED=false
 STORAGE_TYPE_CONFIGURED=false
@@ -277,6 +280,14 @@ if [ "$SKIP_CLEANUP" = "true" ] && [ "$ARTIFACT_BACKEND_COUNT" -ne 1 ]; then
     echo "ERROR: SKIP_CLEANUP=true requires exactly one backend via ARTIFACT_BACKENDS or STORAGE_TYPE." >&2
     exit 1
 fi
+
+case "$CLEANUP_REUSED_RESOURCES" in
+    false|true|on_success) ;;
+    *)
+        echo "ERROR: CLEANUP_REUSED_RESOURCES must be one of: false, true, on_success." >&2
+        exit 1
+        ;;
+esac
 
 # Platform for infrastructure overlays: base|openshift.
 # Defaults to openshift only when the cluster actually exposes route resources;
@@ -418,6 +429,21 @@ cleanup_self_managed_infrastructure() {
     fi
 }
 
+should_cleanup_reused_resources() {
+    local cleanup_status="${1:-${OVERALL_EXIT:-0}}"
+    case "$CLEANUP_REUSED_RESOURCES" in
+        true)
+            return 0
+            ;;
+        on_success)
+            [ "$cleanup_status" -eq 0 ]
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
 # ─── Shared teardown (EXIT trap) ──────────────────────────────────────────────
 # Removes all resources created by this run: workspace namespaces (only those the
 # script itself created, not pre-existing ones), role bindings, the MLflow CR,
@@ -430,11 +456,11 @@ cleanup() {
     local should_cleanup_mlflow=false
     local should_cleanup_infrastructure=false
     local cleanup_internal_s3=false
-    if [ "$SKIP_DEPLOYMENT" != "true" ] || [ "$CLEANUP_REUSED_RESOURCES" = "true" ]; then
+    if [ "$SKIP_DEPLOYMENT" != "true" ] || should_cleanup_reused_resources; then
         should_cleanup_mlflow=true
     fi
     if [ "$SKIP_INFRASTRUCTURE" != "true" ]; then
-        if [ "$SKIP_DEPLOYMENT" != "true" ] || [ "$CLEANUP_REUSED_RESOURCES" = "true" ]; then
+        if [ "$SKIP_DEPLOYMENT" != "true" ] || should_cleanup_reused_resources; then
             should_cleanup_infrastructure=true
         fi
     fi
@@ -663,12 +689,13 @@ run_suite() {
     # Single-backend preserve/reuse flows still rely on the final EXIT cleanup semantics.
     local _suite_teardown_done=false
     _suite_teardown() {
+        local suite_status=$?
         "$_suite_teardown_done" && return
         _suite_teardown_done=true
         stop_port_forwards
 
         if [ "$SUITE_HAS_NEXT" = "true" ] && \
-           { [ "$SKIP_DEPLOYMENT" != "true" ] || [ "$CLEANUP_REUSED_RESOURCES" = "true" ]; }; then
+           { [ "$SKIP_DEPLOYMENT" != "true" ] || should_cleanup_reused_resources "$suite_status"; }; then
             echo "  Resetting suite state before the next backend..."
             kubectl delete mlflow "$MLFLOW_NAME" -n "$NAMESPACE" --ignore-not-found --wait --timeout=120s 2>/dev/null || true
 
@@ -807,7 +834,6 @@ run_suite() {
 TEST_RESULTS_DIR="${TEST_RESULTS_DIR:-/mlflow/results}"
 mkdir -p "$TEST_RESULTS_DIR"
 
-OVERALL_EXIT=0
 for suite_idx in "${!_resolved_backends[@]}"; do
     STORAGE_TYPE="${_resolved_backends[$suite_idx]}"
     [ -z "$STORAGE_TYPE" ] && continue

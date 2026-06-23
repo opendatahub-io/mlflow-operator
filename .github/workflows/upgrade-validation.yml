@@ -274,7 +274,8 @@ jobs:
             -v "${{ github.workspace }}/test-results:/mlflow/results:z" \
             -e DEPLOY_MLFLOW_OPERATOR=false \
             -e SKIP_DEPLOYMENT=true \
-            -e SKIP_CLEANUP=true \
+            -e SKIP_CLEANUP=false \
+            -e CLEANUP_REUSED_RESOURCES=on_success \
             -e NAMESPACE="${{ env.NAMESPACE }}" \
             -e MLFLOW_OPERATOR_IMAGE="${{ env.OPERATOR_RUNTIME_IMAGE }}" \
             -e MLFLOW_IMAGE="${{ env.MLFLOW_RUNTIME_IMAGE }}" \

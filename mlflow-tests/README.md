@@ -160,7 +160,7 @@ upgrade_test_workspace=mlflow-upgrade-test-workspace \
 bash images/test-run.sh -m post_upgrade
 ```
 
-Add `CLEANUP_REUSED_RESOURCES=true` only if you also want the harness to remove the reused `MLflow` CR, harness-managed RBAC, and any self-deployed PostgreSQL or SeaweedFS resources afterward. Leave both cleanup flags unset when the reused deployment depends on external S3 or PostgreSQL.
+Add `CLEANUP_REUSED_RESOURCES=true` only if you always want the harness to remove the reused `MLflow` CR, harness-managed RBAC, and any self-deployed PostgreSQL or SeaweedFS resources afterward. Use `CLEANUP_REUSED_RESOURCES=on_success` to keep failed post-upgrade runs available for debugging while still cleaning them up after success. These cleanup modes only take effect when `SKIP_CLEANUP=false`. Leave both cleanup flags unset when the reused deployment depends on external S3 or PostgreSQL.
 
 ### Test Markers
 
