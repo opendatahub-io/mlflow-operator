@@ -36,13 +36,14 @@ func TestMlflowToHelmValues_Image(t *testing.T) {
 		wantPullPolicy string // empty string means pullPolicy should not be set
 	}{
 		{
-			name: "image not configured - should use config defaults",
+			name: "image not configured - should use configured operator image",
 			mlflow: &mlflowv1.MLflow{
 				ObjectMeta: metav1.ObjectMeta{Name: "test"},
 				Spec: mlflowv1.MLflowSpec{
 					BackendStoreURI: ptr(testBackendStoreURI),
 				},
 			},
+			wantName: controllerTestMLflowImage,
 			// pullPolicy should not be set when not explicitly provided
 			wantPullPolicy: "",
 		},
@@ -75,10 +76,8 @@ func TestMlflowToHelmValues_Image(t *testing.T) {
 				t.Fatal("image not found in values or wrong type")
 			}
 
-			if tt.wantName != "" {
-				if got := image["name"].(string); got != tt.wantName {
-					t.Errorf("image.name = %v, want %v", got, tt.wantName)
-				}
+			if got := image["name"].(string); got != tt.wantName {
+				t.Errorf("image.name = %v, want %v", got, tt.wantName)
 			}
 
 			if tt.wantPullPolicy != "" {

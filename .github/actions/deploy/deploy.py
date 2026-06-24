@@ -9,6 +9,7 @@ storage backends (SQLite/PostgreSQL) and artifact storage (file/S3).
 import argparse
 import json
 import os
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -203,7 +204,7 @@ class MLflowDeployer:
         """Deploy MLflow operator using kustomize"""
         print("🚀 Deploying MLflow operator...")
 
-        # Update base params.env to set the correct namespace for the operator
+        # Update the Kind overlay params.env so the operator starts with explicit images.
         base_params_env = self.repo_root / "config" / "overlays" / "kind" / "params.env"
         print(f"📝 Updating operator namespace to '{self.args.namespace}' in {base_params_env}")
 
@@ -221,7 +222,14 @@ class MLflowDeployer:
         # Use the kind overlay with proper environment setup
         kind_overlay = self.repo_root / "config" / "overlays" / "kind"
 
-        cmd = f"cd {self.repo_root} && export NAMESPACE={self.args.namespace} && kustomize build {kind_overlay} | envsubst | kubectl apply -f -"
+        quoted_repo_root = shlex.quote(str(self.repo_root))
+        quoted_namespace = shlex.quote(self.args.namespace)
+        quoted_kind_overlay = shlex.quote(str(kind_overlay))
+        cmd = (
+            f"cd {quoted_repo_root} && "
+            f"export NAMESPACE={quoted_namespace} && "
+            f"kustomize build {quoted_kind_overlay} | envsubst | kubectl apply -f -"
+        )
         self.run_command(cmd, "Deploying MLflow operator")
 
         # Wait for operator to be ready (now in the correct namespace)

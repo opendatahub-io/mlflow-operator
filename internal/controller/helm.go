@@ -42,7 +42,6 @@ import (
 )
 
 const (
-	defaultMLflowImage     = "quay.io/opendatahub/mlflow:odh-stable"
 	defaultStorageSize     = "2Gi"
 	defaultBackendStoreURI = "sqlite:////mlflow/mlflow.db"
 	defaultArtifactsDest   = "file:///mlflow/artifacts"
@@ -237,9 +236,6 @@ func (h *HelmRenderer) mlflowToHelmValues(mlflow *mlflowv1.MLflow, namespace str
 
 	// Use config from environment variables as default, can be overridden by CR spec
 	mlflowImage := cfg.MLflowImage
-	if mlflowImage == "" {
-		mlflowImage = defaultMLflowImage
-	}
 	var imagePullPolicy *string
 
 	if mlflow.Spec.Image != nil {

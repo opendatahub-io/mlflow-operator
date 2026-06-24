@@ -49,6 +49,7 @@ import (
 	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	mlflowv1 "github.com/opendatahub-io/mlflow-operator/api/v1"
+	"github.com/opendatahub-io/mlflow-operator/internal/config"
 	"github.com/opendatahub-io/mlflow-operator/internal/controller"
 	// +kubebuilder:scaffold:imports
 )
@@ -57,6 +58,20 @@ var (
 	scheme   = runtime.NewScheme()
 	setupLog = ctrl.Log.WithName("setup")
 )
+
+func validateStartupConfig(namespace string, cfg *config.OperatorConfig, supportedMLflowVersion string) error {
+	if namespace == "" {
+		return fmt.Errorf("namespace cannot be empty")
+	}
+	if cfg.MLflowImage == "" {
+		return fmt.Errorf("MLFLOW_IMAGE must be specified")
+	}
+	if supportedMLflowVersion == "" {
+		return fmt.Errorf(
+			"SupportedMLflowVersion must be injected via build ldflags from config/component_metadata.yaml")
+	}
+	return nil
+}
 
 func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
@@ -96,17 +111,10 @@ func main() {
 	flag.Parse()
 
 	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
+	operatorConfig := config.GetConfig()
 
-	// Validate namespace flag
-	if namespace == "" {
-		setupLog.Error(fmt.Errorf("namespace cannot be empty"), "namespace must be specified")
-		os.Exit(1)
-	}
-	if controller.SupportedMLflowVersion == "" {
-		setupLog.Error(
-			fmt.Errorf("supported MLflow version is empty"),
-			"SupportedMLflowVersion must be injected via build ldflags from config/component_metadata.yaml",
-		)
+	if err := validateStartupConfig(namespace, operatorConfig, controller.SupportedMLflowVersion); err != nil {
+		setupLog.Error(err, "invalid startup configuration")
 		os.Exit(1)
 	}
 	setupLog.Info("Starting operator", "targetNamespace", namespace)

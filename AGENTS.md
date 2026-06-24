@@ -69,6 +69,8 @@ make generate
 
 **Note**: Always regenerate manifests and code after modifying API types. CI will verify that generated code is up-to-date.
 
+The operator now fails fast at startup when `MLFLOW_IMAGE` is empty. Checked-in manifests still set that environment variable for normal overlay-based installs, and `deploy.py` requires `--mlflow-image` when it is creating an `MLflow` custom resource.
+
 When bumping the supported MLflow version, update `config/component_metadata.yaml`, then rerun the version-alignment verification. The Makefile injects `SupportedMLflowVersion` from that metadata via Go `-ldflags`; the test harness and test image read the same value through `scripts/print_supported_mlflow_version.py`. Top-level `scripts/` is preferred for developer-maintenance helpers like this; `test/scripts/` is reserved for test validation helpers.
 
 ## Deployment Modes
@@ -240,7 +242,7 @@ make test-e2e-full
 
 `make test-e2e` expects an already-running Kubernetes cluster and does not create one.
 `make test-e2e-full` creates a Kind cluster (`KIND_CLUSTER`, default `mlflow`), builds/loads the image, and runs e2e tests.
-`make test-e2e-upgrade` runs the upgrade-focused e2e suite against an existing cluster and expects `MLFLOW_SEED_IMAGE` to point at a known-good MLflow `3.10.1` seed image. The default is pinned to the ODH release 1.1 digest (`v3.10.1+rhaiv.3`) so the upgrade path does not depend on rebuilding an intermediate seed image during test setup. The GitHub workflow deploys a `3.10.1`-compatible operator image plus a running MLflow `3.10.1` instance, and the upgrade Ginkgo test then scales the operator down, clears the MLflow image override, switches the operator Deployment to the current image, and scales the operator back up before verifying the operator-managed migration flow.
+`make test-e2e-upgrade` runs the upgrade-focused e2e suite against an existing cluster and expects `MLFLOW_SEED_IMAGE` to point at a known-good MLflow `3.10.1` seed image plus `MLFLOW_RUNTIME_IMAGE` to point at the current target MLflow image. The seed default is pinned to the ODH release 1.1 digest (`v3.10.1+rhaiv.3`) so the upgrade path does not depend on rebuilding an intermediate seed image during test setup. The GitHub workflow deploys a `3.10.1`-compatible operator image plus a running MLflow `3.10.1` instance, and the upgrade Ginkgo test then scales the operator down, repins the MLflow CR to the current runtime image, switches the operator Deployment to the current image, and scales the operator back up before verifying the operator-managed migration flow.
 Cluster cleanup is a separate step:
 
 ```bash
@@ -254,7 +256,9 @@ Quick workflow:
 make test-e2e-full
 
 # Upgrade-focused e2e run against an existing cluster
-make test-e2e-upgrade MLFLOW_SEED_IMAGE=quay.io/opendatahub/mlflow@sha256:ad51bbd7f770491da88dc1db3b3c84f7471d25c48026ecb385180b63b18f4c64
+make test-e2e-upgrade \
+  MLFLOW_SEED_IMAGE=quay.io/opendatahub/mlflow@sha256:ad51bbd7f770491da88dc1db3b3c84f7471d25c48026ecb385180b63b18f4c64 \
+  MLFLOW_RUNTIME_IMAGE=localhost/mlflow-runtime:ci
 
 # Cleanup when done
 make cleanup-kind-cluster
