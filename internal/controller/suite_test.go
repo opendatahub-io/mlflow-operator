@@ -50,6 +50,8 @@ var (
 	k8sClient client.Client
 )
 
+const controllerTestMLflowImage = "quay.io/example/mlflow:test"
+
 func mustNewGCRBACWatchCache() crcache.Cache {
 	gcCache, err := NewGCRBACWatchCache(cfg, scheme.Scheme)
 	Expect(err).NotTo(HaveOccurred())
@@ -60,6 +62,12 @@ func TestControllers(t *testing.T) {
 	RegisterFailHandler(Fail)
 
 	RunSpecs(t, "Controller Suite")
+}
+
+func init() {
+	if err := os.Setenv("MLFLOW_IMAGE", controllerTestMLflowImage); err != nil {
+		panic(err)
+	}
 }
 
 var _ = BeforeSuite(func() {

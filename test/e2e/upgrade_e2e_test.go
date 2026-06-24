@@ -21,6 +21,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 	"time"
 
@@ -103,6 +104,8 @@ var _ = Describe("Upgrade", Ordered, Label("upgrade"), func() {
 		if seedImage == "" {
 			seedImage = upgradeSeedImage
 		}
+		runtimeImage := os.Getenv("MLFLOW_RUNTIME_IMAGE")
+		Expect(runtimeImage).NotTo(BeEmpty(), "upgrade tests require MLFLOW_RUNTIME_IMAGE")
 		By("verifying the seeded 3.10.1 deployment is running before the upgrade starts")
 		mlflow := &mlflowv1.MLflow{}
 		Eventually(func(g Gomega) {
@@ -133,10 +136,13 @@ var _ = Describe("Upgrade", Ordered, Label("upgrade"), func() {
 		scaledToZeroCh, scaledToZeroErrCh := watchDeploymentScaledToZero(watchCtx, clientset, "mlflow")
 		upgradeStartedAt := time.Now()
 
-		By("removing the explicit 3.10.1 image override while the operator is stopped")
+		By("switching the MLflow CR pin from the seeded image to the current runtime image while the operator is stopped")
 		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: "mlflow"}, mlflow)).To(Succeed())
 		before := mlflow.DeepCopy()
-		mlflow.Spec.Image = nil
+		if mlflow.Spec.Image == nil {
+			mlflow.Spec.Image = &mlflowv1.ImageConfig{}
+		}
+		mlflow.Spec.Image.Image = ptrTo(runtimeImage)
 		Expect(k8sClient.Patch(ctx, mlflow, client.MergeFrom(before))).To(Succeed())
 
 		By("upgrading the operator deployment to the current image and scaling it back up")
@@ -199,7 +205,7 @@ var _ = Describe("Upgrade", Ordered, Label("upgrade"), func() {
 		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: "mlflow", Namespace: namespace}, deployment)).To(Succeed())
 		Expect(deployment.Spec.Replicas).NotTo(BeNil())
 		Expect(*deployment.Spec.Replicas).To(Equal(int32(1)))
-		Expect(currentMLflowImage(deployment)).NotTo(Equal(seedImage))
+		Expect(currentMLflowImage(deployment)).To(Equal(runtimeImage))
 
 		By("verifying the metadata store reached the current Alembic head")
 		schemaCheckLogs := runSchemaVerificationJob(ctx, k8sClient, clientset, currentMLflowImage(deployment), mlflow)

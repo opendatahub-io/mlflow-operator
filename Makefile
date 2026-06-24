@@ -193,6 +193,8 @@ BACKEND_STORE ?= sqlite
 REGISTRY_STORE ?= sqlite
 ARTIFACT_STORAGE ?= file
 SERVE_ARTIFACTS ?= true
+MLFLOW_IMAGE ?= quay.io/opendatahub/mlflow:odh-stable
+export MLFLOW_IMAGE
 
 .PHONY: install
 install: manifests kustomize ## Install CRDs into the K8s cluster specified in ~/.kube/config.
@@ -238,10 +240,12 @@ deploy-to-platform: manifests kustomize ## Deploy to Open Data Hub or Red Hat Op
 
 .PHONY: deploy-kind
 deploy-kind: ## Deploy MLflow operator and instance to a Kind cluster with configurable storage backends. See docs/kind-deployment.md for details.
+	@test -n "$$MLFLOW_IMAGE" || { echo "Error: MLFLOW_IMAGE must be set"; exit 1; }
 	@echo "Deploying MLflow operator to Kind cluster..."
-	@echo "Configuration: namespace=$(KIND_NAMESPACE), backend=$(BACKEND_STORE), registry=$(REGISTRY_STORE), artifacts=$(ARTIFACT_STORAGE)"
+	@echo "Configuration: namespace=$(KIND_NAMESPACE), image=$$MLFLOW_IMAGE, backend=$(BACKEND_STORE), registry=$(REGISTRY_STORE), artifacts=$(ARTIFACT_STORAGE)"
 	./.github/actions/deploy/deploy.py \
 		--namespace $(KIND_NAMESPACE) \
+		--mlflow-image "$$MLFLOW_IMAGE" \
 		--backend-store $(BACKEND_STORE) \
 		--registry-store $(REGISTRY_STORE) \
 		--artifact-storage $(ARTIFACT_STORAGE) \
@@ -262,13 +266,14 @@ help-kind: ## Show Kind deployment configuration options
 	@echo "  REGISTRY_STORE    - Registry store type: sqlite, postgres (default: sqlite)"
 	@echo "  ARTIFACT_STORAGE  - Artifact storage type: file, s3 (default: file)"
 	@echo "  SERVE_ARTIFACTS   - Whether to serve artifacts: true, false (default: true)"
+	@echo "  MLFLOW_IMAGE      - MLflow container image (default: quay.io/opendatahub/mlflow:odh-stable)"
 	@echo ""
 	@echo "Examples:"
-	@echo "  make deploy-kind                                    # Deploy with defaults (SQLite + File)"
-	@echo "  make deploy-kind BACKEND_STORE=postgres            # PostgreSQL backend"
-	@echo "  make deploy-kind ARTIFACT_STORAGE=s3               # S3 artifacts with SeaweedFS"
-	@echo "  make deploy-kind BACKEND_STORE=postgres ARTIFACT_STORAGE=s3  # Full setup"
-	@echo "  make deploy-kind KIND_NAMESPACE=my-mlflow          # Custom namespace"
+	@echo "  make deploy-kind"
+	@echo "  make deploy-kind BACKEND_STORE=postgres"
+	@echo "  make deploy-kind ARTIFACT_STORAGE=s3"
+	@echo "  make deploy-kind BACKEND_STORE=postgres ARTIFACT_STORAGE=s3"
+	@echo "  MLFLOW_IMAGE=my-registry/mlflow:custom-tag make deploy-kind KIND_NAMESPACE=my-mlflow"
 	@echo ""
 	@echo "For advanced usage, see docs/kind-deployment.md or use the script directly:"
 	@echo "  ./.github/actions/deploy/deploy.py --help"

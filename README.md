@@ -103,14 +103,8 @@ For local development and testing, you can deploy the MLflow operator to a Kind 
 # Deploy with default configuration (SQLite + file storage)
 make deploy-kind
 
-# Deploy with PostgreSQL backend
-make deploy-kind BACKEND_STORE=postgres REGISTRY_STORE=postgres
-
-# Deploy with S3 storage (using SeaweedFS)
-make deploy-kind ARTIFACT_STORAGE=s3
-
-# Deploy with full production-like setup
-make deploy-kind BACKEND_STORE=postgres REGISTRY_STORE=postgres ARTIFACT_STORAGE=s3
+# Override the default MLflow image when needed
+MLFLOW_IMAGE=my-registry/mlflow:custom-tag make deploy-kind
 ```
 
 For detailed instructions, advanced configuration options, and troubleshooting, see the [Kind Deployment Guide](docs/kind-deployment.md).
@@ -274,7 +268,7 @@ Use `spec.migration.mode` to control operator-managed database migration orchest
 
 Operator-managed migration only supports documented SQL metadata store URIs for the backend and registry stores: `sqlite://` and `postgresql://`. Inline `file://` backend or registry metadata URIs are intentionally rejected, and `file://` metadata stores are not supported for operator-managed migration.
 
-If `spec.image.image` overrides the default image, the operator still uses that image for the migration Job. This supports hotfix and test images, but it also means the operator does not prevalidate the custom image's migration runtime contract before scale-down, so an incompatible custom image can still fail after the MLflow Deployment has been scaled down and cause downtime.
+If `spec.image.image` overrides the operator-configured image, the operator still uses that image for the migration Job. This supports hotfix and test images, but it also means the operator does not prevalidate the custom image's migration runtime contract before scale-down, so an incompatible custom image can still fail after the MLflow Deployment has been scaled down and cause downtime.
 
 The operator keeps Kubernetes Job retries finite, but it automatically recreates fresh migration Jobs after a short delay for retryable failures such as transient database connectivity issues. Terminal failures, such as version mismatches, unsupported metadata store URIs, or known Alembic revision-resolution errors, stop automatic retries and instruct the admin to use `mlflow.opendatahub.io/force-migrate` after fixing the issue.
 

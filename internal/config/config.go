@@ -53,7 +53,6 @@ func GetConfig() *OperatorConfig {
 		_, mlflowURLConfigured := os.LookupEnv("MLFLOW_URL")
 
 		// Set defaults (these can be overridden by env vars)
-		v.SetDefault("MLFLOW_IMAGE", "quay.io/opendatahub/mlflow:odh-stable")
 		v.SetDefault("GATEWAY_NAME", "data-science-gateway")
 		v.SetDefault("MLFLOW_URL", DefaultMLflowURL)
 		v.SetDefault("SECTION_TITLE", "MLflow")
