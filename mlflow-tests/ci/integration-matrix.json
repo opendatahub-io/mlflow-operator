@@ -1,0 +1,40 @@
+{
+  "k8s_version": ["v1.34.0"],
+  "serve_artifacts": ["true", "false"],
+  "artifact_backends": ["file", "s3"],
+  "backend_store": ["sqlite", "postgres"],
+  "registry_store": ["sqlite", "postgres"],
+  "include": [
+    {
+      "k8s_version": "v1.29.0",
+      "backend_store": "sqlite",
+      "artifact_backends": "file",
+      "serve_artifacts": "true",
+      "registry_store": "sqlite",
+      "workspace_label_selector": "{\"matchLabels\":{\"mlflow-enabled\":\"true\"}}"
+    },
+    {
+      "k8s_version": "v1.29.0",
+      "backend_store": "postgres",
+      "artifact_backends": "s3",
+      "serve_artifacts": "false",
+      "registry_store": "postgres"
+    },
+    {
+      "k8s_version": "v1.34.0",
+      "backend_store": "postgres",
+      "artifact_backends": "file,s3",
+      "serve_artifacts": "true",
+      "registry_store": "postgres"
+    },
+    {
+      "k8s_version": "v1.34.0",
+      "backend_store": "postgres",
+      "artifact_backends": "s3",
+      "serve_artifacts": "true",
+      "registry_store": "postgres",
+      "postgres_tls": "true",
+      "seaweedfs_tls": "true"
+    }
+  ]
+}

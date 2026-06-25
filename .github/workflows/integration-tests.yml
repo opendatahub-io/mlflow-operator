@@ -2,34 +2,38 @@ name: MLflow Runtime Integration Tests
 
 # This workflow owns push, pull request, and manual MLflow runtime validation.
 # The scheduled ODH default-image alignment check lives in verify-mlflow-version-alignment.yml.
+#
+# Sync note: the integration-test matrix lives in mlflow-tests/ci/integration-matrix.json
+# and is also consumed by opendatahub-io/mlflow .github/workflows/operator-integration-tests.yml.
+# Keep env vars, action versions, and script calls in sync across both files.
 
 env:
-  NAMESPACE: 'opendatahub'
-  INTEGRATION_CLUSTER_NAME: 'mlflow'
-  PYTEST_ARGS: '-v --tb=short --strict-markers --disable-warnings'
-  AWS_ACCESS_KEY_ID: 'minio'
-  AWS_SECRET_ACCESS_KEY: 'minio123'
-  AWS_S3_BUCKET: 'mlpipeline'
-  MLFLOW_RUNTIME_ARTIFACT: 'mlflow-runtime-image'
-  MLFLOW_RUNTIME_IMAGE: 'localhost/mlflow-runtime:ci'
-  MLFLOW_TESTS_RUNTIME_ARTIFACT: 'mlflow-tests-image'
-  MLFLOW_TESTS_RUNTIME_IMAGE: 'localhost/mlflow-tests:ci'
-  OPERATOR_RUNTIME_ARTIFACT: 'mlflow-operator-image'
-  OPERATOR_RUNTIME_IMAGE: 'localhost/mlflow-operator:ci'
+  NAMESPACE: opendatahub
+  INTEGRATION_CLUSTER_NAME: mlflow
+  PYTEST_ARGS: "-v --tb=short --strict-markers --disable-warnings"
+  AWS_ACCESS_KEY_ID: minio
+  AWS_SECRET_ACCESS_KEY: minio123
+  AWS_S3_BUCKET: mlpipeline
+  MLFLOW_RUNTIME_ARTIFACT: mlflow-runtime-image
+  MLFLOW_RUNTIME_IMAGE: localhost/mlflow-runtime:ci
+  MLFLOW_TESTS_RUNTIME_ARTIFACT: mlflow-tests-image
+  MLFLOW_TESTS_RUNTIME_IMAGE: localhost/mlflow-tests:ci
+  OPERATOR_RUNTIME_ARTIFACT: mlflow-operator-image
+  OPERATOR_RUNTIME_IMAGE: localhost/mlflow-operator:ci
 
 on:
   workflow_call:
     inputs:
       mlflow_repository:
-        description: 'Repository to build MLflow image from (e.g., opendatahub-io/mlflow)'
+        description: "Repository to build MLflow image from (e.g., opendatahub-io/mlflow)"
         type: string
         required: false
-        default: ''
+        default: ""
       mlflow_ref:
-        description: 'Git ref to checkout for MLflow build (e.g., refs/pull/42/merge)'
+        description: "Git ref to checkout for MLflow build (e.g., refs/pull/42/merge)"
         type: string
         required: false
-        default: ''
+        default: ""
 
   push:
     branches:
@@ -37,26 +41,47 @@ on:
 
   pull_request:
 
+defaults:
+  run:
+    shell: bash
+
 jobs:
+  load-ci-config:
+    permissions:
+      contents: read
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: ${{ inputs.mlflow_repository && format('{0}/mlflow-operator', github.repository_owner) || github.repository }}
+          sparse-checkout: mlflow-tests/ci
+          persist-credentials: false
+
+      - name: Load integration test matrix
+        id: matrix
+        run: echo "matrix=$(jq -c . mlflow-tests/ci/integration-matrix.json)" >> "$GITHUB_OUTPUT"
+
   build-mlflow-runtime-image:
     permissions:
       contents: read
-    name: Build MLflow runtime image
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     outputs:
       source_repository: ${{ steps.configure.outputs.source_repository }}
       source_ref: ${{ steps.configure.outputs.source_ref }}
     steps:
       - name: Resolve MLflow source build settings
         id: configure
-        shell: bash
         env:
           REPOSITORY_OWNER: ${{ github.repository_owner }}
           TARGET_REF: ${{ github.base_ref || github.ref_name }}
           MLFLOW_REPOSITORY: ${{ inputs.mlflow_repository }}
           MLFLOW_REF: ${{ inputs.mlflow_ref }}
         run: |
-          # Build from source when called with explicit MLflow inputs
           if [[ -n "$MLFLOW_REPOSITORY" && -n "$MLFLOW_REF" ]]; then
             SOURCE_REPOSITORY="$MLFLOW_REPOSITORY"
             SOURCE_REF="$MLFLOW_REF"
@@ -67,12 +92,6 @@ jobs:
               SOURCE_REPOSITORY="opendatahub-io/mlflow"
             fi
 
-            # Build the MLflow branch that corresponds to the operator branch under test.
-            # Examples:
-            # - ODH PR to operator main -> opendatahub-io/mlflow master
-            # - ODH PR to operator release-3.4 -> opendatahub-io/mlflow release-3.4
-            # - RHDS PR to operator main -> red-hat-data-services/mlflow main
-            # - RHDS PR to operator rhoai-3.4 -> red-hat-data-services/mlflow rhoai-3.4
             if [[ "$REPOSITORY_OWNER" == "opendatahub-io" && "$TARGET_REF" == "main" ]]; then
               SOURCE_REF="master"
             else
@@ -84,7 +103,7 @@ jobs:
           echo "source_ref=$SOURCE_REF" >> "$GITHUB_OUTPUT"
 
       - name: Checkout MLflow source
-        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           repository: ${{ steps.configure.outputs.source_repository }}
           ref: ${{ steps.configure.outputs.source_ref }}
@@ -92,8 +111,7 @@ jobs:
           persist-credentials: false
 
       - name: Resolve MLflow Dockerfile
-        id: resolve-mlflow-dockerfile
-        shell: bash
+        id: dockerfile
         run: |
           if [[ -f mlflow-upstream/Dockerfile.konflux ]]; then
             echo "path=mlflow-upstream/Dockerfile.konflux" >> "$GITHUB_OUTPUT"
@@ -102,35 +120,35 @@ jobs:
           fi
 
       - name: Build MLflow image archive
-        shell: bash
+        env:
+          DOCKERFILE: ${{ steps.dockerfile.outputs.path }}
         run: |
           mkdir -p runtime-image
-          docker build -f "${{ steps.resolve-mlflow-dockerfile.outputs.path }}" -t "${{ env.MLFLOW_RUNTIME_IMAGE }}" mlflow-upstream
-          docker save -o "runtime-image/${{ env.MLFLOW_RUNTIME_ARTIFACT }}.tar" "${{ env.MLFLOW_RUNTIME_IMAGE }}"
+          docker build -f "$DOCKERFILE" -t "$MLFLOW_RUNTIME_IMAGE" mlflow-upstream
+          docker save -o "runtime-image/${MLFLOW_RUNTIME_ARTIFACT}.tar" "$MLFLOW_RUNTIME_IMAGE"
 
       - name: Upload MLflow image artifact
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: ${{ env.MLFLOW_RUNTIME_ARTIFACT }}
           path: runtime-image/${{ env.MLFLOW_RUNTIME_ARTIFACT }}.tar
           retention-days: 1
+          if-no-files-found: error
 
   build-mlflow-operator-image:
     permissions:
       contents: read
-    name: Build MLflow operator image
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - name: Checkout operator repository
-        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          # Override to the operator repo when called from another repo
           repository: ${{ inputs.mlflow_repository && format('{0}/mlflow-operator', github.repository_owner) || github.repository }}
           persist-credentials: false
 
       - name: Resolve operator Dockerfile
-        id: resolve-operator-dockerfile
-        shell: bash
+        id: dockerfile
         run: |
           if [[ -f Dockerfile.konflux ]]; then
             echo "path=Dockerfile.konflux" >> "$GITHUB_OUTPUT"
@@ -139,144 +157,115 @@ jobs:
           fi
 
       - name: Build MLflow operator image archive
-        shell: bash
+        env:
+          DOCKERFILE: ${{ steps.dockerfile.outputs.path }}
         run: |
           mkdir -p operator-image
-          docker build -f "${{ steps.resolve-operator-dockerfile.outputs.path }}" -t "${{ env.OPERATOR_RUNTIME_IMAGE }}" .
-          docker save -o "operator-image/${{ env.OPERATOR_RUNTIME_ARTIFACT }}.tar" "${{ env.OPERATOR_RUNTIME_IMAGE }}"
+          docker build -f "$DOCKERFILE" -t "$OPERATOR_RUNTIME_IMAGE" .
+          docker save -o "operator-image/${OPERATOR_RUNTIME_ARTIFACT}.tar" "$OPERATOR_RUNTIME_IMAGE"
 
       - name: Upload MLflow operator image artifact
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: ${{ env.OPERATOR_RUNTIME_ARTIFACT }}
           path: operator-image/${{ env.OPERATOR_RUNTIME_ARTIFACT }}.tar
           retention-days: 1
+          if-no-files-found: error
 
   build-mlflow-tests-image:
     permissions:
       contents: read
-    name: Build MLflow tests image
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - name: Checkout operator repository
-        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          # Override to the operator repo when called from another repo
           repository: ${{ inputs.mlflow_repository && format('{0}/mlflow-operator', github.repository_owner) || github.repository }}
           persist-credentials: false
 
       - name: Build MLflow tests image archive
-        shell: bash
         run: |
           mkdir -p test-image
-          docker build -f mlflow-tests/images/Dockerfile.konflux -t "${{ env.MLFLOW_TESTS_RUNTIME_IMAGE }}" .
-          docker save -o "test-image/${{ env.MLFLOW_TESTS_RUNTIME_ARTIFACT }}.tar" "${{ env.MLFLOW_TESTS_RUNTIME_IMAGE }}"
+          docker build -f mlflow-tests/images/Dockerfile.konflux -t "$MLFLOW_TESTS_RUNTIME_IMAGE" .
+          docker save -o "test-image/${MLFLOW_TESTS_RUNTIME_ARTIFACT}.tar" "$MLFLOW_TESTS_RUNTIME_IMAGE"
 
       - name: Upload MLflow tests image artifact
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: ${{ env.MLFLOW_TESTS_RUNTIME_ARTIFACT }}
           path: test-image/${{ env.MLFLOW_TESTS_RUNTIME_ARTIFACT }}.tar
           retention-days: 1
+          if-no-files-found: error
 
   integration-tests:
-    needs: [build-mlflow-runtime-image, build-mlflow-operator-image, build-mlflow-tests-image]
+    needs:
+      [
+        load-ci-config,
+        build-mlflow-runtime-image,
+        build-mlflow-operator-image,
+        build-mlflow-tests-image,
+      ]
     permissions:
       contents: read
     runs-on: ubuntu-latest
     timeout-minutes: 45
     strategy:
-      matrix:
-        k8s_version: ["v1.34.0"]
-        serve_artifacts: ["true", "false"]
-        artifact_backends: ["file", "s3"]
-        backend_store: ["sqlite", "postgres"]
-        registry_store: ["sqlite", "postgres"]
-        include:
-          - k8s_version: "v1.29.0"
-            backend_store: "sqlite"
-            artifact_backends: "file"
-            serve_artifacts: "true"
-            registry_store: "sqlite"
-            workspace_label_selector: '{"matchLabels":{"mlflow-enabled":"true"}}'
-          - k8s_version: "v1.29.0"
-            backend_store: "postgres"
-            artifact_backends: "s3"
-            serve_artifacts: "false"
-            registry_store: "postgres"
-          # Jenkins runs multiple backend suites in one test-run.sh invocation; keep
-          # this row so CI exercises the same file -> s3 reuse path.
-          - k8s_version: "v1.34.0"
-            backend_store: "postgres"
-            artifact_backends: "file,s3"
-            serve_artifacts: "true"
-            registry_store: "postgres"
-          # TLS variant — validates MLflow connects to postgres + s3 over TLS.
-          # Only serve_artifacts=true so the test runner doesn't need direct
-          # TLS access to the backends (MLflow proxies everything).
-          - k8s_version: "v1.34.0"
-            backend_store: "postgres"
-            artifact_backends: "s3"
-            serve_artifacts: "true"
-            registry_store: "postgres"
-            postgres_tls: "true"
-            seaweedfs_tls: "true"
+      matrix: ${{ fromJSON(needs.load-ci-config.outputs.matrix) }}
       fail-fast: false
-    name: MLflow Integration tests - K8sVersion=${{ matrix.k8s_version }} serve_artifacts=${{ matrix.serve_artifacts }} artifact_backends=${{ matrix.artifact_backends }} backend_store=${{ matrix.backend_store }} registry_store=${{ matrix.registry_store }} postgres_tls=${{ matrix.postgres_tls || 'false' }} seaweedfs_tls=${{ matrix.seaweedfs_tls || 'false' }}
+    name: Integration tests - K8s=${{ matrix.k8s_version }} artifacts=${{ matrix.artifact_backends }} backend=${{ matrix.backend_store }} registry=${{ matrix.registry_store }}
 
     steps:
       - name: Checkout operator repository
-        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          # Override to the operator repo when called from another repo
           repository: ${{ inputs.mlflow_repository && format('{0}/mlflow-operator', github.repository_owner) || github.repository }}
           persist-credentials: false
 
       - name: Free up disk space
-        uses: kubeflow/pipelines/.github/actions/github-disk-cleanup@3004f974b571840bdb1ed6362c520d3cf566e9c0 # master
+        run: |
+          sudo apt-get remove -y --purge 'liblldb-*' || true
+          sudo apt-get autoremove -y || true
+          docker system prune -af || true
 
       - name: Create k8s Kind Cluster
         uses: helm/kind-action@a1b0e391336a6ee6713a0583f8c6240d70863de3 # v1.12.0
-        id: cluster-create
         with:
           version: v0.29.0
           node_image: kindest/node:${{ matrix.k8s_version }}
           cluster_name: ${{ env.INTEGRATION_CLUSTER_NAME }}
-          registry: 'true'
+          registry: "true"
 
       - name: Download MLflow operator image artifact
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: ${{ env.OPERATOR_RUNTIME_ARTIFACT }}
           path: operator-image
 
       - name: Load MLflow operator image into Kind cluster
-        shell: bash
         run: |
-          docker load -i "operator-image/${{ env.OPERATOR_RUNTIME_ARTIFACT }}.tar"
-          kind load docker-image "${{ env.OPERATOR_RUNTIME_IMAGE }}" --name "${{ env.INTEGRATION_CLUSTER_NAME }}"
+          docker load -i "operator-image/${OPERATOR_RUNTIME_ARTIFACT}.tar"
+          kind load docker-image "$OPERATOR_RUNTIME_IMAGE" --name "$INTEGRATION_CLUSTER_NAME"
 
       - name: Download MLflow runtime image artifact
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: ${{ env.MLFLOW_RUNTIME_ARTIFACT }}
           path: runtime-image
 
       - name: Load MLflow runtime image into Kind cluster
-        shell: bash
         run: |
-          docker load -i "runtime-image/${{ env.MLFLOW_RUNTIME_ARTIFACT }}.tar"
-          kind load docker-image "${{ env.MLFLOW_RUNTIME_IMAGE }}" --name "${{ env.INTEGRATION_CLUSTER_NAME }}"
+          docker load -i "runtime-image/${MLFLOW_RUNTIME_ARTIFACT}.tar"
+          kind load docker-image "$MLFLOW_RUNTIME_IMAGE" --name "$INTEGRATION_CLUSTER_NAME"
 
       - name: Download MLflow tests image artifact
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: ${{ env.MLFLOW_TESTS_RUNTIME_ARTIFACT }}
           path: test-image
 
       - name: Load MLflow tests image
-        shell: bash
-        run: docker load -i "test-image/${{ env.MLFLOW_TESTS_RUNTIME_ARTIFACT }}.tar"
+        run: docker load -i "test-image/${MLFLOW_TESTS_RUNTIME_ARTIFACT}.tar"
 
       - name: Run integration tests
         id: run-tests
@@ -289,123 +278,80 @@ jobs:
           POSTGRES_TLS: ${{ matrix.postgres_tls || 'false' }}
           SEAWEEDFS_TLS: ${{ matrix.seaweedfs_tls || 'false' }}
           WORKSPACE_LABEL_SELECTOR: ${{ matrix.workspace_label_selector || '' }}
-        run: |
-          mkdir -p test-results
-          set +e
-          docker run --rm --network host \
-            -v "$HOME/.kube:/mlflow/.kube:ro,z" \
-            -v "${{ github.workspace }}/test-results:/mlflow/results:z" \
-            -e DEPLOY_MLFLOW_OPERATOR=false \
-            -e NAMESPACE="${{ env.NAMESPACE }}" \
-            -e MLFLOW_OPERATOR_IMAGE="${{ env.OPERATOR_RUNTIME_IMAGE }}" \
-            -e MLFLOW_IMAGE="${{ env.MLFLOW_RUNTIME_IMAGE }}" \
-            -e BACKEND_STORE="${BACKEND_STORE}" \
-            -e REGISTRY_STORE="${REGISTRY_STORE}" \
-            -e ARTIFACT_BACKENDS="${ARTIFACT_BACKENDS}" \
-            -e SERVE_ARTIFACTS="${SERVE_ARTIFACTS}" \
-            -e AWS_ACCESS_KEY_ID="${{ env.AWS_ACCESS_KEY_ID }}" \
-            -e AWS_SECRET_ACCESS_KEY="${{ env.AWS_SECRET_ACCESS_KEY }}" \
-            -e AWS_S3_BUCKET="${{ env.AWS_S3_BUCKET }}" \
-            -e BUCKET="${{ env.AWS_S3_BUCKET }}" \
-            -e WORKSPACE_LABEL_SELECTOR="${WORKSPACE_LABEL_SELECTOR}" \
-            -e POSTGRES_TLS="${POSTGRES_TLS}" \
-            -e SEAWEEDFS_TLS="${SEAWEEDFS_TLS}" \
-            -e TEST_RESULTS_DIR="/mlflow/results" \
-            "${{ env.MLFLOW_TESTS_RUNTIME_IMAGE }}" \
-            ${{ env.PYTEST_ARGS }}
-
-          TEST_EXIT_CODE=$?
-          set -e
-          echo "test_exit_code=$TEST_EXIT_CODE" >> "$GITHUB_OUTPUT"
-
-          if [ $TEST_EXIT_CODE -eq 0 ]; then
-            echo "✅ All integration tests passed!"
-          else
-            echo "❌ Some integration tests failed (exit code: $TEST_EXIT_CODE)"
-          fi
-
-          exit $TEST_EXIT_CODE
+          TEST_RESULTS_DIR: test-results
+        run: mlflow-tests/images/run-integration-tests.sh
 
       - name: Upload test results
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        id: upload-report
-        if: (!cancelled())
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        if: "!cancelled()"
         with:
           name: integration-test-results-${{ matrix.k8s_version }}-${{ matrix.backend_store }}-${{ matrix.registry_store }}-${{ matrix.artifact_backends }}-${{ matrix.serve_artifacts }}-postgres_tls_${{ matrix.postgres_tls || 'false' }}-seaweedfs_tls_${{ matrix.seaweedfs_tls || 'false' }}
           path: test-results/
           retention-days: 30
+          if-no-files-found: warn
 
-      - name: Generate test summary
-        uses: kubeflow/pipelines/.github/actions/junit-summary@3004f974b571840bdb1ed6362c520d3cf566e9c0 # master
-        if: (!cancelled())
-        with:
-          xml_files: test-results/*.xml
+      - name: Collect debug logs
+        if: failure() && !cancelled()
         continue-on-error: true
+        run: |
+          mlflow-tests/images/collect-debug-logs.sh \
+            --namespace "$NAMESPACE" \
+            --output-dir debug-logs
 
-      - name: Collect integration debug logs
-        id: collect-logs
-        if: ${{ failure() && !cancelled() }}
-        continue-on-error: true
-        uses: ./.github/actions/collect-debug-logs
-        with:
-          debug_namespace: ${{ env.NAMESPACE }}
-
-      - name: Upload integration debug logs
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        if: ${{ failure() && !cancelled() }}
+      - name: Upload debug logs
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        if: failure() && !cancelled()
         with:
           name: debug-logs-${{ matrix.k8s_version }}-${{ matrix.backend_store }}-${{ matrix.registry_store }}-${{ matrix.artifact_backends }}-${{ matrix.serve_artifacts }}-postgres_tls_${{ matrix.postgres_tls || 'false' }}-seaweedfs_tls_${{ matrix.seaweedfs_tls || 'false' }}
           path: debug-logs/
           retention-days: 7
+          if-no-files-found: warn
 
-      - name: Mark workflow failure if test step failed
+      - name: Mark workflow failure if tests failed
         if: steps.run-tests.outcome != 'success' && !cancelled()
-        shell: bash
         run: exit 1
 
   verify-built-mlflow-version-alignment:
-    if: ${{ !inputs.mlflow_repository && github.event_name != 'workflow_dispatch' && github.repository_owner == 'red-hat-data-services' }}
+    if: "!inputs.mlflow_repository && github.event_name != 'workflow_dispatch' && github.repository_owner == 'red-hat-data-services'"
     needs: build-mlflow-runtime-image
     permissions:
       contents: read
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - name: Checkout repository
-        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
 
       - name: Download MLflow runtime image artifact
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: ${{ env.MLFLOW_RUNTIME_ARTIFACT }}
           path: runtime-image
 
       - name: Load built MLflow image
-        shell: bash
-        run: docker load -i "runtime-image/${{ env.MLFLOW_RUNTIME_ARTIFACT }}.tar"
+        run: docker load -i "runtime-image/${MLFLOW_RUNTIME_ARTIFACT}.tar"
 
       - name: Verify built MLflow image version alignment
-        shell: bash
         run: |
           python3 test/scripts/verify_mlflow_version_alignment.py \
-            --mlflow-image "${{ env.MLFLOW_RUNTIME_IMAGE }}"
+            --mlflow-image "$MLFLOW_RUNTIME_IMAGE"
 
   verify-default-mlflow-version-alignment:
-    if: ${{ !inputs.mlflow_repository && github.event_name != 'workflow_dispatch' && github.repository_owner == 'opendatahub-io' && (github.ref_name == 'main' || github.base_ref == 'main') }}
+    if: "!inputs.mlflow_repository && github.event_name != 'workflow_dispatch' && github.repository_owner == 'opendatahub-io' && (github.ref_name == 'main' || github.base_ref == 'main')"
     permissions:
       contents: read
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - name: Checkout repository
-        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
 
       - name: Verify default MLflow image version alignment
-        shell: bash
         run: |
           python3 test/scripts/verify_mlflow_version_alignment.py \
             --params-env config/base/params.env \
             --params-env config/overlays/kind/params.env
-
