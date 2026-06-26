@@ -402,6 +402,10 @@ MLflow coverage is split between:
 - Go end-to-end tests in `test/e2e/`, including the operator-managed upgrade flow
 - Python integration tests in `mlflow-tests/`
 
+For a repo-level map of Red Hat OpenShift AI MLflow fork validation, including
+Jenkins shift-left smoke and upgrade coverage, see the
+[RHOAI MLflow Fork Testing Guide](docs/rhoai-mlflow-testing.md).
+
 `mlflow-tests` also includes opt-in upgrade-phase pytest modules under:
 
 - `mlflow-tests/tests/upgrade/pre_upgrade/`
@@ -418,6 +422,9 @@ This repository keeps a repo-local operator-chaos knowledge model at `chaos/know
 This workflow is intentionally offline and asset-focused. It fails fast when validation, command execution, or breaking knowledge/CRD changes are detected, and logs the relevant operator-chaos output directly in the failing step. Update `chaos/knowledge/mlflow.yaml` whenever the stable RHOAI controller topology, default chart-managed MLflow resources, or checked-in MLflow CRD shape changes in ways that should affect upgrade modeling.
 
 This does not replace the existing runtime upgrade coverage. Continue to use `make test-e2e-upgrade` and the `upgrade-tests` job in `.github/workflows/upgrade-validation.yml` for live migration validation.
+The [RHOAI MLflow Fork Testing Guide](docs/rhoai-mlflow-testing.md) also
+captures how this offline gate fits alongside Jenkins shift-left and the live
+runtime and upgrade workflows.
 
 ## Troubleshooting
 

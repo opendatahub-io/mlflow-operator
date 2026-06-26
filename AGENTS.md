@@ -304,6 +304,11 @@ Selection rules:
 
 These upgrade pytest suites are opt-in only. A plain `pytest -v` run should not execute them unless the pytest marker expression explicitly selects `pre_upgrade` or `post_upgrade`.
 
+The long-form testing map for the RHOAI MLflow fork now lives in
+`docs/rhoai-mlflow-testing.md`. Keep that guide aligned whenever Jenkins
+shift-left MLflow entrypoints, workflow names in this repository, or the MLflow
+fork's migration-gap and UI-E2E references change.
+
 ### Linting
 
 This repo uses golangci-lint; to ensure linting is successful after code changes, run
