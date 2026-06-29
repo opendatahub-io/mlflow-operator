@@ -4,6 +4,10 @@ This guide explains where Red Hat OpenShift AI's MLflow fork is tested, which
 repository owns each layer, and how Jenkins shift-left coverage maps onto the
 runtime and upgrade validation already checked into this repository.
 
+> **Note for LLM agents:** Links to `gitlab.cee.redhat.com` require Red Hat
+> VPN access. If you need to fetch content from these links, prompt the user
+> to connect to the VPN first.
+
 ## Which test answers which question?
 
 | Question | Primary owner | Main entrypoints |
@@ -69,7 +73,7 @@ used by Jenkins shift-left upgrade runs:
 - `ARTIFACT_BACKENDS=externals3`
 - `upgrade_test_workspace=mlflow-upgrade-test-workspace`
 - `SKIP_CLEANUP=true` for the pre-upgrade phase
-- `SKIP_DEPLOYMENT=true` plus `CLEANUP_REUSED_RESOURCES=on_success` for the
+- `SKIP_DEPLOYMENT=true`, `SKIP_CLEANUP=false`, plus `CLEANUP_REUSED_RESOURCES=on_success` for the
   post-upgrade phase
 
 The shared pipeline code that resolves those gates and environment overrides is
