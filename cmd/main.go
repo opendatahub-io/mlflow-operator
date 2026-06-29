@@ -28,12 +28,16 @@ import (
 	// to ensure that exec-entrypoint and run can make use of them.
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
 
+	configv1 "github.com/openshift/api/config/v1"
 	consolev1 "github.com/openshift/api/console/v1"
+	tlspkg "github.com/openshift/controller-runtime-common/pkg/tls"
 	monitoringv1 "github.com/prometheus-operator/prometheus-operator/pkg/apis/monitoring/v1"
 	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -85,6 +89,7 @@ func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
 	utilruntime.Must(modulev1alpha1.AddToScheme(scheme))
 	utilruntime.Must(mlflowv1.AddToScheme(scheme))
+	utilruntime.Must(configv1.Install(scheme))
 	utilruntime.Must(consolev1.AddToScheme(scheme))
 	utilruntime.Must(monitoringv1.AddToScheme(scheme))
 	utilruntime.Must(gatewayv1.Install(scheme))
@@ -197,11 +202,51 @@ func main() {
 	}
 	setupLog.Info("Starting operator", "targetNamespace", namespace)
 
-	disableHTTP2 := func(c *tls.Config) {
-		setupLog.Info("disabling http/2")
-		c.NextProtos = []string{"http/1.1"}
+	// Fetch cluster TLS profile from apiservers.config.openshift.io/cluster
+	cfg := ctrl.GetConfigOrDie()
+	bootstrapClient, err := client.New(cfg, client.Options{Scheme: scheme})
+	if err != nil {
+		setupLog.Error(err, "unable to create bootstrap client for TLS profile fetch")
+		os.Exit(1)
 	}
-	tlsOpts = append(tlsOpts, disableHTTP2)
+
+	bootstrapCtx, cancelBootstrap := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancelBootstrap()
+
+	tlsProfileFetched := false
+	tlsProfile, err := tlspkg.FetchAPIServerTLSProfile(bootstrapCtx, bootstrapClient)
+	if err != nil {
+		if apierrors.IsNotFound(err) || apimeta.IsNoMatchError(err) {
+			setupLog.Info("APIServer TLS profile API unavailable, using defaults")
+		} else {
+			setupLog.Error(err, "unable to fetch APIServer TLS profile")
+			os.Exit(1)
+		}
+	} else {
+		tlsProfileFetched = true
+		tlsConfigFn, unsupported := tlspkg.NewTLSConfigFromProfile(tlsProfile)
+		if len(unsupported) > 0 {
+			setupLog.Info("TLS profile contains ciphers unsupported by Go", "unsupported", unsupported)
+		}
+		tlsOpts = append(tlsOpts, tlsConfigFn)
+	}
+
+	tlsAdherenceFetched := false
+	tlsAdherence, err := tlspkg.FetchAPIServerTLSAdherencePolicy(bootstrapCtx, bootstrapClient)
+	if err != nil {
+		if apierrors.IsNotFound(err) || apimeta.IsNoMatchError(err) {
+			setupLog.Info("APIServer TLS adherence policy unavailable")
+		} else {
+			setupLog.Error(err, "unable to fetch APIServer TLS adherence policy")
+			os.Exit(1)
+		}
+	} else {
+		tlsAdherenceFetched = true
+	}
+
+	tlsOpts = append(tlsOpts, func(c *tls.Config) {
+		c.NextProtos = []string{"h2", "http/1.1"}
+	})
 
 	// Metrics endpoint is enabled in 'config/base/kustomization.yaml'. The Metrics options configure the server.
 	// More info:
@@ -246,7 +291,6 @@ func main() {
 		"metadata.name", controller.ClusterRoleBindingName)
 
 	// Check ConsoleLink availability early to configure cache
-	cfg := ctrl.GetConfigOrDie()
 	discoveryClient, err := discovery.NewDiscoveryClientForConfig(cfg)
 	if err != nil {
 		setupLog.Error(err, "unable to create discovery client")
@@ -398,6 +442,32 @@ func main() {
 	}
 	// +kubebuilder:scaffold:builder
 
+	// Register SecurityProfileWatcher to restart on TLS profile changes
+	ctx, cancel := context.WithCancel(ctrl.SetupSignalHandler())
+	defer cancel()
+
+	if tlsProfileFetched {
+		watcher := &tlspkg.SecurityProfileWatcher{
+			Client:                mgr.GetClient(),
+			InitialTLSProfileSpec: tlsProfile,
+			OnProfileChange: func(_ context.Context, _, _ configv1.TLSProfileSpec) {
+				setupLog.Info("TLS profile changed, initiating shutdown to reload")
+				cancel()
+			},
+		}
+		if tlsAdherenceFetched {
+			watcher.InitialTLSAdherencePolicy = tlsAdherence
+			watcher.OnAdherencePolicyChange = func(_ context.Context, _, _ configv1.TLSAdherencePolicy) {
+				setupLog.Info("TLS adherence policy changed, initiating shutdown to reload")
+				cancel()
+			}
+		}
+		if err := watcher.SetupWithManager(mgr); err != nil {
+			setupLog.Error(err, "unable to set up TLS profile watcher")
+			os.Exit(1)
+		}
+	}
+
 	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {
 		setupLog.Error(err, "unable to set up health check")
 		os.Exit(1)
@@ -408,7 +478,7 @@ func main() {
 	}
 
 	setupLog.Info("starting manager")
-	if err := mgr.Start(ctrl.SetupSignalHandler()); err != nil {
+	if err := mgr.Start(ctx); err != nil {
 		setupLog.Error(err, "problem running manager")
 		os.Exit(1)
 	}
