@@ -76,7 +76,7 @@ type MLflowOperatorStatus struct {
 	ObservedGeneration int64  `json:"observedGeneration,omitempty"`
 	// +listType=map
 	// +listMapKey=type
-	Conditions                 []metav1.Condition `json:"conditions,omitempty"`
+	Conditions                 []Condition `json:"conditions,omitempty"`
 	MLflowOperatorCommonStatus `json:",inline"`
 }
 
@@ -96,11 +96,11 @@ type MLflowOperator struct {
 	Status MLflowOperatorStatus `json:"status,omitempty"`
 }
 
-func (c *MLflowOperator) GetConditions() []metav1.Condition {
-	return append([]metav1.Condition(nil), c.Status.Conditions...)
+func (c *MLflowOperator) GetConditions() []Condition {
+	return append([]Condition(nil), c.Status.Conditions...)
 }
 
-func (c *MLflowOperator) SetConditions(conditions []metav1.Condition) {
+func (c *MLflowOperator) SetConditions(conditions []Condition) {
 	c.Status.Conditions = append(conditions[:0:0], conditions...)
 }
 

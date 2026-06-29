@@ -181,7 +181,7 @@ func TestEnsureMLflowOperatorReadyPassesWhenModuleReady(t *testing.T) {
 	module.Name = modulev1alpha1.MLflowOperatorInstanceName
 	module.Generation = 2
 	module.Status.ObservedGeneration = 2
-	module.Status.Conditions = []metav1.Condition{{
+	module.Status.Conditions = []modulev1alpha1.Condition{{
 		Type:   readyConditionType,
 		Status: metav1.ConditionTrue,
 		Reason: readyReason,
@@ -232,7 +232,7 @@ func TestEnsureMLflowOperatorReadyPreservesAvailabilityWhenModuleDeletionBlocked
 	module.DeletionTimestamp = &now
 	module.Finalizers = []string{mlflowOperatorFinalizer}
 	module.Status.ObservedGeneration = 4
-	module.Status.Conditions = []metav1.Condition{{
+	module.Status.Conditions = []modulev1alpha1.Condition{{
 		Type:    readyConditionType,
 		Status:  metav1.ConditionFalse,
 		Reason:  mlflowInstancesReason,

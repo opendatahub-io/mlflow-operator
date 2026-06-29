@@ -154,7 +154,7 @@ func moduleDependencyStatus(module *modulev1alpha1.MLflowOperator) (bool, string
 		)
 	}
 
-	readyCondition := apimeta.FindStatusCondition(module.Status.Conditions, readyConditionType)
+	readyCondition := findModuleStatusCondition(module.Status.Conditions)
 	if readyCondition == nil {
 		return false, "MLflowOperatorNotReady", "Waiting for MLflowOperator to report Ready before reconciling MLflow custom resources"
 	}

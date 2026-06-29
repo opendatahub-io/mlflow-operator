@@ -7,7 +7,6 @@ import (
 	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -66,7 +65,7 @@ func TestMLflowOperatorReconcileAddsFinalizerAndReadyStatus(t *testing.T) {
 		t.Fatalf("get module after second reconcile: %v", err)
 	}
 
-	ready := apimeta.FindStatusCondition(module.Status.Conditions, readyConditionType)
+	ready := findModuleStatusCondition(module.Status.Conditions)
 	if ready == nil {
 		t.Fatalf("expected Ready condition, got none")
 	}
@@ -127,7 +126,7 @@ func TestMLflowOperatorReconcileBlocksReadyUntilRequiredProjectedFieldsExist(t *
 		t.Fatalf("get module after reconcile: %v", err)
 	}
 
-	ready := apimeta.FindStatusCondition(module.Status.Conditions, readyConditionType)
+	ready := findModuleStatusCondition(module.Status.Conditions)
 	if ready == nil {
 		t.Fatalf("expected Ready condition, got none")
 	}
@@ -186,7 +185,7 @@ func TestMLflowOperatorReconcileAllowsOptionalGatewayDomainToBeEmpty(t *testing.
 		t.Fatalf("get module after reconcile: %v", err)
 	}
 
-	ready := apimeta.FindStatusCondition(module.Status.Conditions, readyConditionType)
+	ready := findModuleStatusCondition(module.Status.Conditions)
 	if ready == nil || ready.Status != metav1.ConditionTrue {
 		t.Fatalf("expected Ready=True without gateway domain when required projected fields exist, got %#v", ready)
 	}
@@ -233,7 +232,7 @@ func TestMLflowOperatorDeletionBlockedWhenMLflowInstancesExist(t *testing.T) {
 		t.Fatalf("expected finalizer to remain while MLflow instances exist")
 	}
 
-	ready := apimeta.FindStatusCondition(module.Status.Conditions, readyConditionType)
+	ready := findModuleStatusCondition(module.Status.Conditions)
 	if ready == nil {
 		t.Fatalf("expected Ready condition while deletion is blocked")
 	}

@@ -22,7 +22,6 @@ import (
 	"strings"
 
 	apiequality "k8s.io/apimachinery/pkg/api/equality"
-	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -141,7 +140,7 @@ func (r *MLflowOperatorReconciler) updateModuleStatus(
 	updated := module.DeepCopy()
 	updated.Status.Phase = phaseForReadyCondition(status)
 	updated.Status.ObservedGeneration = updated.Generation
-	apimeta.SetStatusCondition(&updated.Status.Conditions, metav1.Condition{
+	setModuleStatusCondition(&updated.Status.Conditions, modulev1alpha1.Condition{
 		Type:               readyConditionType,
 		Status:             status,
 		Reason:             reason,
