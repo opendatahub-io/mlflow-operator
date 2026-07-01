@@ -110,6 +110,11 @@ spec:
           emptyDir:
             sizeLimit: 100Mi
         {{- end }}
+        {{- if .Values.traceArchival.enabled }}
+        - name: trace-archival-config
+          configMap:
+            name: mlflow-trace-archival-config{{ .Values.resourceSuffix }}
+        {{- end }}
       {{- if .Values.caBundle.configMaps }}
       # Init container that creates initial combined CA bundle
       initContainers:
@@ -196,6 +201,10 @@ spec:
               value: "true"
             - name: MLFLOW_SERVER_ENABLE_JOB_EXECUTION
               value: "false"
+            {{- if .Values.traceArchival.enabled }}
+            - name: MLFLOW_TRACE_ARCHIVAL_CONFIG
+              value: "/etc/mlflow/trace-archival.yaml"
+            {{- end }}
             - name: MLFLOW_BACKEND_STORE_URI
               {{- if .Values.mlflow.backendStoreUriFrom }}
               valueFrom:
@@ -285,6 +294,11 @@ spec:
             {{- if .Values.metrics.enabled }}
             - name: metrics
               mountPath: /prometheus
+            {{- end }}
+            {{- if .Values.traceArchival.enabled }}
+            - name: trace-archival-config
+              mountPath: /etc/mlflow
+              readOnly: true
             {{- end }}
           livenessProbe:
             httpGet:

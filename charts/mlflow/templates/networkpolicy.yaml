@@ -11,7 +11,7 @@ metadata:
 spec:
   podSelector:
     matchLabels:
-      app: mlflow{{ .Values.resourceSuffix }}
+      component: mlflow
   policyTypes:
     - Ingress
     - Egress

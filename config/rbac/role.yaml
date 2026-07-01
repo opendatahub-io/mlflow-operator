@@ -114,6 +114,19 @@ rules:
   - update
 - apiGroups:
   - rbac.authorization.k8s.io
+  resourceNames:
+  - mlflow-gc
+  resources:
+  - clusterrolebindings
+  verbs:
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - rbac.authorization.k8s.io
   resources:
   - clusterrolebindings
   - clusterroles
@@ -138,7 +151,6 @@ rules:
   resourceNames:
   - mlflow-gc
   resources:
-  - clusterrolebindings
   - clusterroles
   verbs:
   - delete

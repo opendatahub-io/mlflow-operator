@@ -359,7 +359,13 @@ The `config/samples/` directory contains example MLflow custom resource configur
    - Shows MLflow image by digest
    - Includes instructions for obtaining digests
 
-6. **mlflow_v1_mlflowconfig.yaml** - Namespace artifact storage override
+6. **mlflow_v1_mlflow_trace_archival.yaml** - Trace archival configuration
+   - PostgreSQL for metadata, S3 for artifacts and trace archive
+   - CronJob runs the standalone trace archival module on a schedule
+   - Archival config mounted into the MLflow server for UI awareness
+   - Configures archival location, retention, schedule, and max traces per pass
+
+7. **mlflow_v1_mlflowconfig.yaml** - Namespace artifact storage override
    - Override artifact storage with custom bucket and path
    - Example of namespace-specific artifact configuration
    - Requires Secret with S3 credentials in the same namespace

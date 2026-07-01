@@ -29,6 +29,8 @@ const (
 	ServiceAccountName = "mlflow-sa"
 	// GCServiceAccountName is the name of the service account for the GC CronJob
 	GCServiceAccountName = "mlflow-gc-sa"
+	// TraceArchivalServiceAccountName is the name of the service account for the trace archival CronJob
+	TraceArchivalServiceAccountName = "mlflow-trace-archival-sa"
 	// TLSSecretName is the default name for the TLS secret used by the MLflow server
 	TLSSecretName = "mlflow-tls"
 	// StaticPrefix is the URL prefix for MLflow when deployed via the operator
