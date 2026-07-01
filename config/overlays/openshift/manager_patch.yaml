@@ -21,3 +21,4 @@ spec:
         - name: metrics-cert
           secret:
             secretName: controller-manager-metrics-tls
+            optional: true
