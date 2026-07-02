@@ -345,6 +345,31 @@ func main() {
 		setupLog.Info("ServiceMonitor CRD not available, skipping cache configuration")
 	}
 
+	// Conditionally configure namespace RBAC controller cache entries
+	authAvailable := false
+	if operatorConfig.EnableNamespaceRBAC {
+		var err error
+		authAvailable, err = controller.IsAuthAvailable(discoveryClient)
+		if err != nil {
+			setupLog.Error(err, "Failed to check Auth CRD availability")
+			os.Exit(1)
+		}
+		if !authAvailable {
+			setupLog.Error(nil, "Namespace RBAC controller enabled but Auth CRD not available in cluster")
+			os.Exit(1)
+		}
+		setupLog.Info("Auth CRD available, adding RoleBinding to cache with cluster-wide scope")
+		managedRBLabelSelector := labels.SelectorFromSet(labels.Set{
+			controller.NamespaceRBACLabelKey: "true",
+		})
+		byObjectCache[&rbacv1.RoleBinding{}] = cache.ByObject{
+			Label: managedRBLabelSelector,
+			Namespaces: map[string]cache.Config{
+				cache.AllNamespaces: {},
+			},
+		}
+	}
+
 	if operatorConfig.EnableMLflowOperatorModuleController {
 		setupLog.Info(
 			"MLflowOperator controller enabled; waiting for required CRD before controller setup",
@@ -440,6 +465,27 @@ func main() {
 		}
 	} else {
 		setupLog.Info("MLflowOperator controller disabled; keeping legacy module ownership path inactive")
+	}
+	if operatorConfig.EnableNamespaceRBAC && authAvailable {
+		authWatchCache, err := controller.NewAuthWatchCache(cfg, scheme)
+		if err != nil {
+			setupLog.Error(err, "unable to create Auth watch cache")
+			os.Exit(1)
+		}
+		if err := mgr.Add(authWatchCache); err != nil {
+			setupLog.Error(err, "unable to add Auth watch cache")
+			os.Exit(1)
+		}
+		if err := (&controller.NamespaceRBACReconciler{
+			Client:         mgr.GetClient(),
+			Scheme:         mgr.GetScheme(),
+			AuthWatchCache: authWatchCache,
+		}).SetupWithManager(mgr); err != nil {
+			setupLog.Error(err, "unable to create controller", "controller", "NamespaceRBAC")
+			os.Exit(1)
+		}
+	} else if !operatorConfig.EnableNamespaceRBAC {
+		setupLog.Info("Namespace RBAC controller disabled")
 	}
 	// +kubebuilder:scaffold:builder
 

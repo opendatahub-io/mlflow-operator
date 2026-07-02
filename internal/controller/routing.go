@@ -40,6 +40,7 @@ var consoleLinkIconSVG []byte
 const (
 	ServiceMonitorCRDName = "ServiceMonitor"
 	MLflowOperatorCRDName = "MLflowOperator"
+	AuthCRDName           = "Auth"
 )
 
 // IsConsoleLinkAvailable checks if ConsoleLink CRD is available in the cluster using discovery API
@@ -149,6 +150,32 @@ func IsMLflowOperatorAvailable(discoveryClient discovery.DiscoveryInterface) (bo
 	}
 
 	log.V(1).Info(fmt.Sprintf("%s CRD not found in resource list", MLflowOperatorCRDName))
+	return false, nil
+}
+
+// IsAuthAvailable checks if the Auth CRD (services.platform.opendatahub.io) is available in the cluster using discovery API
+func IsAuthAvailable(discoveryClient discovery.DiscoveryInterface) (bool, error) {
+	ctx := context.Background()
+	log := logf.FromContext(ctx)
+
+	gv := schema.GroupVersion{Group: "services.platform.opendatahub.io", Version: "v1alpha1"}
+	resourceList, err := discoveryClient.ServerResourcesForGroupVersion(gv.String())
+	if err != nil {
+		if errors.IsNotFound(err) || discovery.IsGroupDiscoveryFailedError(err) {
+			log.V(1).Info(fmt.Sprintf("%s CRD not available in cluster", AuthCRDName))
+			return false, nil
+		}
+		return false, fmt.Errorf("failed to check for %s availability: %w", AuthCRDName, err)
+	}
+
+	for _, resource := range resourceList.APIResources {
+		if resource.Kind == AuthCRDName {
+			log.V(1).Info(fmt.Sprintf("%s CRD is available in cluster", AuthCRDName))
+			return true, nil
+		}
+	}
+
+	log.V(1).Info(fmt.Sprintf("%s CRD not found in resource list", AuthCRDName))
 	return false, nil
 }
 

@@ -48,6 +48,8 @@ type OperatorConfig struct {
 	MLflowURLConfigured bool
 	// SectionTitle is the title for the ConsoleLink section in OpenShift console
 	SectionTitle string
+	// EnableNamespaceRBAC turns on the namespace RBAC controller for workspace RoleBindings
+	EnableNamespaceRBAC bool
 }
 
 var (
@@ -76,6 +78,7 @@ func loadConfig(v *viper.Viper, lookupEnv envLookupFn) *OperatorConfig {
 		MLflowURL:                            v.GetString("MLFLOW_URL"),
 		MLflowURLConfigured:                  mlflowURLConfigured,
 		SectionTitle:                         v.GetString("SECTION_TITLE"),
+		EnableNamespaceRBAC:                  v.GetBool("ENABLE_NAMESPACE_RBAC"),
 	}
 }
 
@@ -93,6 +96,7 @@ func GetConfig() *OperatorConfig {
 		v.SetDefault("APPLICATIONS_NAMESPACE", "")
 		v.SetDefault("ENABLE_MLFLOW_OPERATOR_MODULE_CONTROLLER", false)
 		v.SetDefault("MLFLOW_OPERATOR_MODULE_CONTROLLER_CRD_WAIT_TIMEOUT", DefaultMLflowOperatorCRDWaitTimeout)
+		v.SetDefault("ENABLE_NAMESPACE_RBAC", false)
 
 		instance = loadConfig(v, os.LookupEnv)
 	})
