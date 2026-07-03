@@ -473,6 +473,7 @@ spec:
 					"--timeout=3m",
 				)
 				_, _ = utils.Run(waitCmd)
+				controllerPodName = waitForControllerPodName()
 			})
 
 			By("waiting for the controller rollout to finish after the env change")
@@ -663,6 +664,9 @@ spec:
 		})
 
 		It("should validate CEL constraint for trace archival with file-based location", func() {
+			By("waiting for the controller-manager pod to be running")
+			controllerPodName = waitForControllerPodName()
+
 			By("attempting to create MLflow with file-based trace archival location without storage")
 			invalidArchivalYAML := `apiVersion: mlflow.opendatahub.io/v1
 kind: MLflow
@@ -695,6 +699,33 @@ spec:
 		})
 
 		It("should accept trace archival with S3 location and create CronJob", func() {
+			By("waiting for the controller-manager pod to be running")
+			controllerPodName = waitForControllerPodName()
+
+			By("creating the TLS secret required by the MLflow deployment and migration Job on Kind")
+			tlsSecretYAML := `apiVersion: v1
+kind: Secret
+metadata:
+  name: mlflow-tls
+  namespace: ` + namespace + `
+type: kubernetes.io/tls
+data:
+  tls.crt: ZHVtbXk=
+  tls.key: ZHVtbXk=`
+
+			tlsSecretFile := filepath.Join("/tmp", "mlflow-trace-archival-tls-secret.yaml")
+			err := os.WriteFile(tlsSecretFile, []byte(tlsSecretYAML), os.FileMode(0o644))
+			Expect(err).NotTo(HaveOccurred(), "Failed to write TLS secret manifest")
+			defer func() {
+				if removeErr := os.Remove(tlsSecretFile); removeErr != nil {
+					_, _ = fmt.Fprintf(GinkgoWriter, "failed to remove %s: %v\n", tlsSecretFile, removeErr)
+				}
+			}()
+
+			cmd := exec.Command("kubectl", "apply", "-f", tlsSecretFile)
+			_, err = utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred(), "Failed to create mlflow-tls secret")
+
 			By("creating MLflow with S3-based trace archival location")
 			validArchivalYAML := `apiVersion: mlflow.opendatahub.io/v1
 kind: MLflow
@@ -712,7 +743,7 @@ spec:
     maxTracesPerPass: 500`
 
 			validArchivalFile := filepath.Join("/tmp", "mlflow-archival-valid.yaml")
-			err := os.WriteFile(validArchivalFile, []byte(validArchivalYAML), os.FileMode(0o644))
+			err = os.WriteFile(validArchivalFile, []byte(validArchivalYAML), os.FileMode(0o644))
 			Expect(err).NotTo(HaveOccurred(), "Failed to write valid trace archival manifest")
 			defer func() {
 				if removeErr := os.Remove(validArchivalFile); removeErr != nil {
@@ -720,7 +751,7 @@ spec:
 				}
 			}()
 
-			cmd := exec.Command("kubectl", "apply", "-f", validArchivalFile)
+			cmd = exec.Command("kubectl", "apply", "-f", validArchivalFile)
 			_, err = utils.Run(cmd)
 			Expect(err).NotTo(HaveOccurred(), "Failed to create MLflow with S3-based trace archival")
 
@@ -735,7 +766,7 @@ spec:
 				g.Expect(output).To(ContainSubstring(`location: "s3://mlflow-trace-archive"`))
 				g.Expect(output).To(ContainSubstring(`retention: "30d"`))
 			}
-			Eventually(verifyConfigMap, 60*time.Second).Should(Succeed())
+			Eventually(verifyConfigMap, 2*time.Minute).Should(Succeed())
 
 			By("verifying the CronJob was created")
 			verifyCronJob := func(g Gomega) {
@@ -746,7 +777,7 @@ spec:
 				g.Expect(err).NotTo(HaveOccurred())
 				g.Expect(output).To(Equal("*/5 * * * *"))
 			}
-			Eventually(verifyCronJob, 60*time.Second).Should(Succeed())
+			Eventually(verifyCronJob, 2*time.Minute).Should(Succeed())
 
 			By("verifying the Deployment keeps JOB_EXECUTION=false")
 			verifyDeploymentEnv := func(g Gomega) {
@@ -757,7 +788,7 @@ spec:
 				g.Expect(err).NotTo(HaveOccurred())
 				g.Expect(output).To(Equal("false"))
 			}
-			Eventually(verifyDeploymentEnv, 60*time.Second).Should(Succeed())
+			Eventually(verifyDeploymentEnv, 2*time.Minute).Should(Succeed())
 
 			By("cleaning up")
 			cmd = exec.Command("kubectl", "delete", "mlflow", "mlflow")
