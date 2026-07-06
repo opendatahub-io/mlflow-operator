@@ -1,0 +1,101 @@
+name: Bug Report
+description: Report a bug in the Open Data Hub / Red Hat OpenShift AI MLflow Operator
+title: "[BUG] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a bug in `opendatahub-io/mlflow-operator`.
+
+        Please include enough detail for agent-assisted debugging: reproduction steps, expected behavior, actual behavior, environment details, and logs or error output.
+
+        Helpful diagnostics often include:
+        - the `MLflow` or `MLflowConfig` custom resource involved
+        - operator logs
+        - `kubectl describe` output
+        - Kubernetes events from the affected namespace
+  - type: dropdown
+    id: affected_area
+    attributes:
+      label: Which area best matches the bug?
+      options:
+        - Operator reconciliation / controller behavior
+        - MLflow or MLflowConfig validation / defaults
+        - Helm chart rendering / templates
+        - Install, upgrade, or kustomize manifests
+        - Managed MLflow deployment behavior
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment and version details
+      description: Share the environment where you saw the bug. Redact secrets.
+      value: |
+        - MLflow Operator version, image, release, or commit:
+        - Deployment method (bundle, kustomize overlay, local `make deploy`, other):
+        - OpenShift / Kubernetes version:
+        - Managed MLflow image/version (if known):
+        - Namespace(s) involved:
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Provide the shortest sequence of steps that reliably reproduces the bug.
+      placeholder: |
+        1. Apply ...
+        2. Create ...
+        3. Wait for ...
+        4. Observe ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: Describe what you expected the operator or managed deployment to do.
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: Describe what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: resources
+    attributes:
+      label: Relevant custom resource or manifest snippets
+      description: Paste the relevant `MLflow`, `MLflowConfig`, Helm values, or manifest fragments. Redact secrets.
+      render: yaml
+      placeholder: |
+        apiVersion: mlflow.opendatahub.io/v1
+        kind: MLflow
+        metadata:
+          name: example
+        spec:
+          ...
+    validations:
+      required: false
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs, events, or error output
+      description: Paste relevant operator logs, Kubernetes events, `kubectl describe` output, or exact error messages. If there are no logs, write `N/A`.
+      render: shell
+      placeholder: |
+        {"level":"error","msg":"reconcile failed",...}
+    validations:
+      required: true
+  - type: textarea
+    id: extra
+    attributes:
+      label: Additional context
+      description: Share screenshots, links to failing CI, repro repos, or any other context that would help.
+    validations:
+      required: false

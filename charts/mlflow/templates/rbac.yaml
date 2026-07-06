@@ -1,0 +1,83 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: mlflow
+  labels:
+    app: mlflow
+    {{- with .Values.commonLabels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+rules:
+  # Required for MLflow workspaces feature to enumerate available namespaces
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["get", "list", "watch"]
+  # Required for namespace-specific artifact storage credentials
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames: ["mlflow-artifact-connection"]
+    verbs: ["get", "list", "watch"]
+  # Required for workspace-aware configuration lookups
+  - apiGroups: ["mlflow.kubeflow.org"]
+    resources: ["mlflowconfigs"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: mlflow
+  labels:
+    app: mlflow
+    {{- with .Values.commonLabels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: mlflow
+subjects:
+  - kind: ServiceAccount
+    name: {{ .Values.serviceAccount.name }}
+    namespace: {{ .Values.namespace }}
+{{- if .Values.traceArchival.enabled }}
+  - kind: ServiceAccount
+    name: {{ .Values.traceArchival.serviceAccount.name }}
+    namespace: {{ .Values.namespace }}
+{{- end }}
+{{- if .Values.garbageCollection.enabled }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: mlflow-gc{{ .Values.resourceSuffix }}
+  labels:
+    app: mlflow-gc{{ .Values.resourceSuffix }}
+    {{- with .Values.commonLabels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+rules:
+  # `mlflow gc` deletes metadata directly from the backend store, but proxied artifact
+  # deletion still goes through the MLflow server and is authorized as experiments/update.
+  # Long term, rework `mlflow gc` to resolve backing storage and delete artifacts directly.
+  - apiGroups: ["mlflow.kubeflow.org"]
+    resources: ["experiments"]
+    verbs: ["get", "list", "update"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: mlflow-gc{{ .Values.resourceSuffix }}
+  labels:
+    app: mlflow-gc{{ .Values.resourceSuffix }}
+    {{- with .Values.commonLabels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: mlflow-gc{{ .Values.resourceSuffix }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ .Values.garbageCollection.serviceAccount.name }}
+    namespace: {{ .Values.namespace }}
+{{- end }}

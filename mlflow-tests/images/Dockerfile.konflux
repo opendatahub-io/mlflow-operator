@@ -1,0 +1,74 @@
+# Konflux-compatible Dockerfile for MLflow integration test image.
+# Uses ubi-minimal for smaller image size. Non-hermetic (downloads at build time).
+
+FROM registry.access.redhat.com/ubi9/ubi-minimal:9.7
+
+ENV KUBECONFIG=/mlflow/.kube/config
+ENV DEPLOY_PY=/mlflow/.github/actions/deploy/deploy.py
+
+USER root
+
+ARG OC_VERSION=4.18.3
+ARG KUSTOMIZE_VERSION=5.8.0
+ARG TARGETARCH=amd64
+
+RUN microdnf install -y --setopt=tsflags=nodocs \
+      python3.12 python3.12-pip \
+      tar gzip git findutils gettext && \
+    microdnf clean all && \
+    ln -sf /usr/bin/python3.12 /usr/bin/python3
+
+RUN case "${TARGETARCH}" in \
+      amd64)  oc_archive="openshift-client-linux-${OC_VERSION}.tar.gz" ;; \
+      arm64)  oc_archive="openshift-client-linux-arm64-${OC_VERSION}.tar.gz" ;; \
+      *) echo "Unsupported TARGETARCH '${TARGETARCH}' for oc client download" >&2; exit 1 ;; \
+    esac && \
+    curl -fsSL "https://mirror.openshift.com/pub/openshift-v4/clients/ocp/${OC_VERSION}/${oc_archive}" \
+      -o /tmp/oc-client.tar.gz && \
+    tar -xf /tmp/oc-client.tar.gz -C /tmp && \
+    cp /tmp/oc /usr/local/bin/oc && \
+    cp /tmp/kubectl /usr/local/bin/kubectl && \
+    rm -f /tmp/oc-client.tar.gz /tmp/oc /tmp/kubectl
+
+RUN case "${TARGETARCH}" in \
+      amd64|arm64) kustomize_arch="${TARGETARCH}" ;; \
+      *) echo "Unsupported TARGETARCH '${TARGETARCH}' for kustomize download" >&2; exit 1 ;; \
+    esac && \
+    curl -fsSL "https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize/v${KUSTOMIZE_VERSION}/kustomize_v${KUSTOMIZE_VERSION}_linux_${kustomize_arch}.tar.gz" \
+      -o /tmp/kustomize.tar.gz && \
+    tar -xf /tmp/kustomize.tar.gz -C /usr/local/bin && \
+    rm -f /tmp/kustomize.tar.gz
+
+RUN pip3.12 install --no-cache-dir uv==0.9.7
+
+RUN mkdir -p /mlflow && chown 1001:0 /mlflow
+
+USER 1001
+
+ENV HOME=/mlflow
+
+EXPOSE 8080
+
+WORKDIR /mlflow
+
+COPY --chown=1001:1001 ./mlflow-tests/uv.lock        ./mlflow-tests/
+COPY --chown=1001:1001 ./mlflow-tests/pyproject.toml ./mlflow-tests/
+COPY --chown=1001:1001 ./mlflow-tests/README.md      ./mlflow-tests/
+COPY --chown=1001:1001 ./mlflow-tests/src            ./mlflow-tests/src
+
+RUN cd mlflow-tests && VIRTUAL_ENV="" uv sync --locked
+
+COPY --chown=1001:1001 .github/actions/deploy/deploy.py ./.github/actions/deploy/deploy.py
+COPY --chown=1001:1001 ./config ./config
+COPY --chown=1001:1001 ./scripts ./scripts
+COPY --chown=1001:1001 ./mlflow-tests ./mlflow-tests
+
+RUN NORMALIZED_MLFLOW_VERSION="$(python3 /mlflow/scripts/print_supported_mlflow_version.py --component-metadata /mlflow/config/component_metadata.yaml --normalized)" && \
+    printf 'if [ -z "${MLFLOW_TEST_SUPPORTED_VERSION:-}" ]; then export MLFLOW_TEST_SUPPORTED_VERSION=%s; fi\n' "${NORMALIZED_MLFLOW_VERSION}" > /mlflow/mlflow-tests/.bash_env
+
+# Non-interactive bash entrypoints source BASH_ENV, which lets the image expose the
+# derived supported MLflow version even when the image is executed directly outside
+# the test-run.sh harness (for example from Jenkins jobs).
+ENV BASH_ENV=/mlflow/mlflow-tests/.bash_env
+
+ENTRYPOINT ["bash", "mlflow-tests/images/test-run.sh"]

@@ -1,0 +1,359 @@
+# Image URL to use all building/pushing image targets
+# Using localhost for local development and CI with kind clusters
+IMG ?= localhost/mlflow-operator:latest
+
+# Get the currently used golang install path (in GOPATH/bin, unless GOBIN is set)
+# GOTOOLCHAIN=local prevents auto-downloading a newer Go toolchain during Makefile
+# evaluation, which would print download noise and break targets that capture stdout.
+ifeq (,$(shell GOTOOLCHAIN=local go env GOBIN))
+GOBIN=$(shell GOTOOLCHAIN=local go env GOPATH)/bin
+else
+GOBIN=$(shell GOTOOLCHAIN=local go env GOBIN)
+endif
+
+# CONTAINER_TOOL defines the container tool to be used for building images.
+# Be aware that the target commands are only tested with Docker which is
+# scaffolded by default. However, you might want to replace it to use other
+# tools. (i.e. podman)
+CONTAINER_TOOL ?= docker
+
+# CGO_ENABLED controls whether CGO is enabled during the build.
+# Default is 1 (enabled) for FIPS compliance. Set to 0 for local builds on
+# Apple Silicon when cross-compiling to linux/amd64.
+CGO_ENABLED ?= 1
+
+# Setting SHELL to bash allows bash commands to be executed by recipes.
+# Options are set to exit when a recipe line exits non-zero or a piped command fails.
+SHELL = /usr/bin/env bash -o pipefail
+.SHELLFLAGS = -ec
+
+SUPPORTED_MLFLOW_VERSION := $(shell python3 scripts/print_supported_mlflow_version.py --component-metadata config/component_metadata.yaml)
+SUPPORTED_MLFLOW_VERSION_OVERRIDE ?=
+EFFECTIVE_SUPPORTED_MLFLOW_VERSION = $(if $(strip $(SUPPORTED_MLFLOW_VERSION_OVERRIDE)),$(strip $(SUPPORTED_MLFLOW_VERSION_OVERRIDE)),$(strip $(SUPPORTED_MLFLOW_VERSION)))
+SUPPORTED_MLFLOW_VERSION_LDFLAG = -X github.com/opendatahub-io/mlflow-operator/internal/controller.SupportedMLflowVersion=$(EFFECTIVE_SUPPORTED_MLFLOW_VERSION)
+API_MODULE_DIR ?= api
+
+.PHONY: all
+all: build
+
+##@ General
+
+# The help target prints out all targets with their descriptions organized
+# beneath their categories. The categories are represented by '##@' and the
+# target descriptions by '##'. The awk command is responsible for reading the
+# entire set of makefiles included in this invocation, looking for lines of the
+# file as xyz: ## something, and then pretty-format the target and help. Then,
+# if there's a line with ##@ something, that gets pretty-printed as a category.
+# More info on the usage of ANSI control characters for terminal formatting:
+# https://en.wikipedia.org/wiki/ANSI_escape_code#SGR_parameters
+# More info on the awk command:
+# http://linuxcommand.org/lc3_adv_awk.php
+
+.PHONY: help
+help: ## Display this help.
+	@awk 'BEGIN {FS = ":.*##"; printf "\nUsage:\n  make \033[36m<target>\033[0m\n"} /^[a-zA-Z_0-9-]+:.*?##/ { printf "  \033[36m%-15s\033[0m %s\n", $$1, $$2 } /^##@/ { printf "\n\033[1m%s\033[0m\n", substr($$0, 5) } ' $(MAKEFILE_LIST)
+
+.PHONY: print-supported-mlflow-version
+print-supported-mlflow-version: ## Print the supported MLflow version from component metadata.
+	@test -n "$(EFFECTIVE_SUPPORTED_MLFLOW_VERSION)"
+	@printf '%s\n' "$(EFFECTIVE_SUPPORTED_MLFLOW_VERSION)"
+
+##@ Development
+
+.PHONY: manifests
+manifests: controller-gen ## Generate WebhookConfiguration, ClusterRole and CustomResourceDefinition objects.
+	"$(CONTROLLER_GEN)" rbac:roleName=manager-role webhook paths="./internal/controller"
+	(cd "$(API_MODULE_DIR)" && "$(CONTROLLER_GEN)" crd paths="./..." output:crd:artifacts:config=../config/crd/bases)
+
+.PHONY: generate
+generate: controller-gen ## Generate code containing DeepCopy, DeepCopyInto, and DeepCopyObject method implementations.
+	(cd "$(API_MODULE_DIR)" && "$(CONTROLLER_GEN)" object:headerFile="../hack/boilerplate.go.txt" paths="./...")
+
+.PHONY: fmt
+fmt: ## Run go fmt against code.
+	go fmt ./...
+
+.PHONY: vet
+vet: ## Run go vet against code.
+	go vet ./...
+
+.PHONY: test
+test: manifests generate fmt vet setup-envtest ## Run tests.
+	KUBEBUILDER_ASSETS="$(shell "$(ENVTEST)" use $(ENVTEST_K8S_VERSION) --bin-dir "$(LOCALBIN)" -p path)" go test -ldflags "$(SUPPORTED_MLFLOW_VERSION_LDFLAG)" $$(go list ./... | grep -v /e2e) -coverprofile cover.out
+
+# E2E test configuration
+KIND_CLUSTER ?= mlflow
+E2E_IMG ?= localhost/mlflow-operator:v0.0.1
+# MLflow ODH release 1.1 image with MLflow v3.10.1+rhaiv.3.
+MLFLOW_SEED_IMAGE ?= quay.io/opendatahub/mlflow@sha256:ad51bbd7f770491da88dc1db3b3c84f7471d25c48026ecb385180b63b18f4c64
+
+.PHONY: setup-kind-cluster
+setup-kind-cluster: ## Create a Kind cluster for e2e tests if it doesn't exist
+	@if $(KIND) get clusters 2>/dev/null | grep -q "^$(KIND_CLUSTER)$$"; then \
+		echo "Kind cluster '$(KIND_CLUSTER)' already exists."; \
+	else \
+		echo "Creating Kind cluster '$(KIND_CLUSTER)'..."; \
+		$(KIND) create cluster --name $(KIND_CLUSTER); \
+	fi
+
+.PHONY: build-and-load-image
+build-and-load-image: ## Build the operator image and load it into the Kind cluster
+	@echo "Building operator image $(E2E_IMG)..."
+	$(MAKE) docker-build IMG=$(E2E_IMG)
+	@echo "Loading image into Kind cluster '$(KIND_CLUSTER)'..."
+	$(KIND) load docker-image $(E2E_IMG) --name $(KIND_CLUSTER)
+
+.PHONY: test-e2e
+test-e2e: manifests generate fmt vet ## Run the e2e tests against an existing Kubernetes cluster.
+	IMG=$(E2E_IMG) go test -ldflags "$(SUPPORTED_MLFLOW_VERSION_LDFLAG)" ./test/e2e/ -v -ginkgo.v -ginkgo.label-filter='!upgrade'
+
+.PHONY: test-e2e-upgrade
+test-e2e-upgrade: manifests generate fmt vet ## Run the upgrade-focused e2e tests against an existing Kubernetes cluster.
+	IMG=$(E2E_IMG) go test -ldflags "$(SUPPORTED_MLFLOW_VERSION_LDFLAG)" ./test/e2e/ -v -ginkgo.v -ginkgo.label-filter='upgrade' -args -upgrade-seed-image='$(MLFLOW_SEED_IMAGE)'
+
+.PHONY: test-e2e-full
+test-e2e-full: setup-kind-cluster build-and-load-image test-e2e ## Run the complete e2e workflow: setup cluster, build/load image, and run tests.
+
+.PHONY: cleanup-kind-cluster
+cleanup-kind-cluster: ## Delete the Kind cluster used for e2e tests
+	@if $(KIND) get clusters 2>/dev/null | grep -q "^$(KIND_CLUSTER)$$"; then \
+		echo "Deleting Kind cluster '$(KIND_CLUSTER)'..."; \
+		$(KIND) delete cluster --name $(KIND_CLUSTER); \
+	else \
+		echo "Kind cluster '$(KIND_CLUSTER)' does not exist."; \
+	fi
+
+.PHONY: validate-samples
+validate-samples: manifests ## Validate sample CRs against the CRD (requires kubectl access to a cluster)
+	@echo "Running sample validation script..."
+	@bash test/scripts/validate-samples.sh
+
+.PHONY: verify-manifests
+verify-manifests: kustomize ## Verify that all manifest builds succeed (requires helm)
+	@echo "Running manifest verification script..."
+	@bash test/scripts/verify-manifests.sh
+
+.PHONY: lint
+lint: golangci-lint ## Run golangci-lint linter
+	"$(GOLANGCI_LINT)" run
+
+.PHONY: lint-fix
+lint-fix: golangci-lint ## Run golangci-lint linter and perform fixes
+	"$(GOLANGCI_LINT)" run --fix
+
+.PHONY: lint-config
+lint-config: golangci-lint ## Verify golangci-lint linter configuration
+	"$(GOLANGCI_LINT)" config verify
+
+##@ Build
+
+.PHONY: build
+build: manifests generate fmt vet ## Build manager binary.
+	go build -ldflags "$(SUPPORTED_MLFLOW_VERSION_LDFLAG)" -o bin/manager cmd/main.go
+
+.PHONY: run
+run: manifests generate fmt vet ## Run a controller from your host.
+	go run -ldflags "$(SUPPORTED_MLFLOW_VERSION_LDFLAG)" ./cmd/main.go
+
+# If you wish to build the manager image targeting other platforms you can use the --platform flag.
+# (i.e. docker build --platform linux/arm64). However, you must enable docker buildKit for it.
+# More info: https://docs.docker.com/develop/develop-images/build_enhancements/
+.PHONY: docker-build
+docker-build: ## Build docker image with the manager.
+	$(CONTAINER_TOOL) build --build-arg SUPPORTED_MLFLOW_VERSION_OVERRIDE="$(SUPPORTED_MLFLOW_VERSION_OVERRIDE)" -t ${IMG} .
+
+.PHONY: docker-push
+docker-push: ## Push docker image with the manager.
+	$(CONTAINER_TOOL) push ${IMG}
+
+# PLATFORMS defines the target platforms for the manager image be built to provide support to multiple
+# architectures. (i.e. make docker-buildx IMG=myregistry/mypoperator:0.0.1). To use this option you need to:
+# - be able to use docker buildx. More info: https://docs.docker.com/build/buildx/
+# - have enabled BuildKit. More info: https://docs.docker.com/develop/develop-images/build_enhancements/
+# - be able to push the image to your registry (i.e. if you do not set a valid value via IMG=<myregistry/image:<tag>> then the export will fail)
+# To adequately provide solutions that are compatible with multiple platforms, you should consider using this option.
+PLATFORMS ?= linux/arm64,linux/amd64,linux/s390x,linux/ppc64le
+.PHONY: docker-buildx
+docker-buildx: ## Build and push docker image for the manager for cross-platform support
+	# copy existing Dockerfile and insert --platform=${BUILDPLATFORM} into Dockerfile.cross, and preserve the original Dockerfile
+	sed -e '1 s/\(^FROM\)/FROM --platform=\$$\{BUILDPLATFORM\}/; t' -e ' 1,// s//FROM --platform=\$$\{BUILDPLATFORM\}/' Dockerfile > Dockerfile.cross
+	- $(CONTAINER_TOOL) buildx create --name mlflow-operator-builder
+	$(CONTAINER_TOOL) buildx use mlflow-operator-builder
+	- $(CONTAINER_TOOL) buildx build --push --platform=$(PLATFORMS) --build-arg CGO_ENABLED=$(CGO_ENABLED) --build-arg SUPPORTED_MLFLOW_VERSION_OVERRIDE="$(SUPPORTED_MLFLOW_VERSION_OVERRIDE)" --tag ${IMG} -f Dockerfile.cross .
+	- $(CONTAINER_TOOL) buildx rm mlflow-operator-builder
+	rm Dockerfile.cross
+
+##@ Deployment
+
+ifndef ignore-not-found
+  ignore-not-found = false
+endif
+
+# Kind deployment configuration
+KIND_NAMESPACE ?= opendatahub
+BACKEND_STORE ?= sqlite
+REGISTRY_STORE ?= sqlite
+ARTIFACT_STORAGE ?= file
+SERVE_ARTIFACTS ?= true
+MLFLOW_IMAGE ?= quay.io/opendatahub/mlflow:odh-stable
+export MLFLOW_IMAGE
+
+.PHONY: install
+install: manifests kustomize ## Install CRDs into the K8s cluster specified in ~/.kube/config.
+	@out="$$( "$(KUSTOMIZE)" build config/crd 2>/dev/null || true )"; \
+	if [ -n "$$out" ]; then echo "$$out" | "$(KUBECTL)" apply -f -; else echo "No CRDs to install; skipping."; fi
+
+.PHONY: uninstall
+uninstall: manifests kustomize ## Uninstall CRDs from the K8s cluster specified in ~/.kube/config. Call with ignore-not-found=true to ignore resource not found errors during deletion.
+	@out="$$( "$(KUSTOMIZE)" build config/crd 2>/dev/null || true )"; \
+	if [ -n "$$out" ]; then echo "$$out" | "$(KUBECTL)" delete --ignore-not-found=$(ignore-not-found) -f -; else echo "No CRDs to delete; skipping."; fi
+
+.PHONY: deploy
+deploy: manifests kustomize ## Deploy controller to the K8s cluster specified in ~/.kube/config.
+	cd config/manager && "$(KUSTOMIZE)" edit set image controller=${IMG}
+	"$(KUSTOMIZE)" build config/overlays/dev | "$(KUBECTL)" apply -f -
+
+.PHONY: undeploy
+undeploy: kustomize ## Undeploy controller from the K8s cluster specified in ~/.kube/config. Call with ignore-not-found=true to ignore resource not found errors during deletion.
+	"$(KUSTOMIZE)" build config/overlays/dev | "$(KUBECTL)" delete --ignore-not-found=$(ignore-not-found) -f -
+
+# Platform deployment configuration
+ODH_GATEWAY_NAME ?= data-science-gateway
+ODH_GATEWAY_NAMESPACE ?= openshift-ingress
+PLATFORM ?= odh
+
+.PHONY: deploy-to-platform
+deploy-to-platform: manifests kustomize ## Deploy to Open Data Hub or Red Hat OpenShift AI platform. Requires ODH/RHOAI to be already installed.
+	@echo "Fetching gateway hostname from cluster..."
+	@GATEWAY_HOST=$$($(KUBECTL) get gateway $(ODH_GATEWAY_NAME) -n $(ODH_GATEWAY_NAMESPACE) -o jsonpath='{.status.addresses[0].value}' 2>/dev/null) || \
+		{ echo "Error: Could not find gateway '$(ODH_GATEWAY_NAME)' in namespace '$(ODH_GATEWAY_NAMESPACE)'."; \
+		  echo "Make sure Open Data Hub or Red Hat OpenShift AI is installed and the gateway is created."; \
+		  exit 1; }; \
+	if [ -z "$$GATEWAY_HOST" ]; then \
+		echo "Error: Gateway hostname is empty. Check that the gateway is properly configured."; \
+		exit 1; \
+	fi; \
+	echo "Found gateway hostname: $$GATEWAY_HOST"; \
+	echo "Updating mlflow-url in config/base/params.env..."; \
+	sed -i.bak 's|^mlflow-url=.*|mlflow-url=https://'"$$GATEWAY_HOST"'|' config/base/params.env && rm -f config/base/params.env.bak; \
+	echo "Updated mlflow-url to: https://$$GATEWAY_HOST"
+	cd config/manager && "$(KUSTOMIZE)" edit set image controller=${IMG}
+	"$(KUSTOMIZE)" build config/overlays/$(PLATFORM) | "$(KUBECTL)" apply -f -
+
+.PHONY: deploy-kind
+deploy-kind: ## Deploy MLflow operator and instance to a Kind cluster with configurable storage backends. See docs/kind-deployment.md for details.
+	@test -n "$$MLFLOW_IMAGE" || { echo "Error: MLFLOW_IMAGE must be set"; exit 1; }
+	@echo "Deploying MLflow operator to Kind cluster..."
+	@echo "Configuration: namespace=$(KIND_NAMESPACE), image=$$MLFLOW_IMAGE, backend=$(BACKEND_STORE), registry=$(REGISTRY_STORE), artifacts=$(ARTIFACT_STORAGE)"
+	./.github/actions/deploy/deploy.py \
+		--namespace $(KIND_NAMESPACE) \
+		--mlflow-image "$$MLFLOW_IMAGE" \
+		--backend-store $(BACKEND_STORE) \
+		--registry-store $(REGISTRY_STORE) \
+		--artifact-storage $(ARTIFACT_STORAGE) \
+		--serve-artifacts $(SERVE_ARTIFACTS)
+
+.PHONY: undeploy-kind
+undeploy-kind: ## Remove MLflow deployment from Kind cluster
+	@echo "Removing MLflow deployment from namespace $(KIND_NAMESPACE)..."
+	-$(KUBECTL) delete mlflow mlflow -n $(KIND_NAMESPACE)
+	-$(KUBECTL) delete namespace $(KIND_NAMESPACE)
+
+.PHONY: help-kind
+help-kind: ## Show Kind deployment configuration options
+	@echo ""
+	@echo "Kind Deployment Configuration:"
+	@echo "  KIND_NAMESPACE    - Kubernetes namespace (default: opendatahub)"
+	@echo "  BACKEND_STORE     - Backend store type: sqlite, postgres (default: sqlite)"
+	@echo "  REGISTRY_STORE    - Registry store type: sqlite, postgres (default: sqlite)"
+	@echo "  ARTIFACT_STORAGE  - Artifact storage type: file, s3 (default: file)"
+	@echo "  SERVE_ARTIFACTS   - Whether to serve artifacts: true, false (default: true)"
+	@echo "  MLFLOW_IMAGE      - MLflow container image (default: quay.io/opendatahub/mlflow:odh-stable)"
+	@echo ""
+	@echo "Examples:"
+	@echo "  make deploy-kind"
+	@echo "  make deploy-kind BACKEND_STORE=postgres"
+	@echo "  make deploy-kind ARTIFACT_STORAGE=s3"
+	@echo "  make deploy-kind BACKEND_STORE=postgres ARTIFACT_STORAGE=s3"
+	@echo "  MLFLOW_IMAGE=my-registry/mlflow:custom-tag make deploy-kind KIND_NAMESPACE=my-mlflow"
+	@echo ""
+	@echo "For advanced usage, see docs/kind-deployment.md or use the script directly:"
+	@echo "  ./.github/actions/deploy/deploy.py --help"
+
+##@ Dependencies
+
+## Location to install dependencies to
+LOCALBIN ?= $(shell pwd)/bin
+$(LOCALBIN):
+	mkdir -p "$(LOCALBIN)"
+
+## Tool Binaries
+KUBECTL ?= kubectl
+KIND ?= kind
+KUSTOMIZE ?= $(LOCALBIN)/kustomize
+CONTROLLER_GEN ?= $(LOCALBIN)/controller-gen
+ENVTEST ?= $(LOCALBIN)/setup-envtest
+GOLANGCI_LINT = $(LOCALBIN)/golangci-lint
+
+## Tool Versions
+KUSTOMIZE_VERSION ?= v5.7.1
+CONTROLLER_TOOLS_VERSION ?= v0.19.0
+
+#ENVTEST_VERSION is the version of controller-runtime release branch to fetch the envtest setup script (i.e. release-0.20)
+ENVTEST_VERSION ?= $(shell v='$(call gomodver,sigs.k8s.io/controller-runtime)'; \
+  [ -n "$$v" ] || { echo "Set ENVTEST_VERSION manually (controller-runtime replace has no tag)" >&2; exit 1; }; \
+  printf '%s\n' "$$v" | sed -E 's/^v?([0-9]+)\.([0-9]+).*/release-\1.\2/')
+
+#ENVTEST_K8S_VERSION is the version of Kubernetes to use for setting up ENVTEST binaries (i.e. 1.31)
+ENVTEST_K8S_VERSION ?= $(shell v='$(call gomodver,k8s.io/api)'; \
+  [ -n "$$v" ] || { echo "Set ENVTEST_K8S_VERSION manually (k8s.io/api replace has no tag)" >&2; exit 1; }; \
+  printf '%s\n' "$$v" | sed -E 's/^v?[0-9]+\.([0-9]+).*/1.\1/')
+
+GOLANGCI_LINT_VERSION ?= v2.5.0
+.PHONY: kustomize
+kustomize: $(KUSTOMIZE) ## Download kustomize locally if necessary.
+$(KUSTOMIZE): $(LOCALBIN)
+	$(call go-install-tool,$(KUSTOMIZE),sigs.k8s.io/kustomize/kustomize/v5,$(KUSTOMIZE_VERSION))
+
+.PHONY: controller-gen
+controller-gen: $(CONTROLLER_GEN) ## Download controller-gen locally if necessary.
+$(CONTROLLER_GEN): $(LOCALBIN)
+	$(call go-install-tool,$(CONTROLLER_GEN),sigs.k8s.io/controller-tools/cmd/controller-gen,$(CONTROLLER_TOOLS_VERSION))
+
+.PHONY: setup-envtest
+setup-envtest: envtest ## Download the binaries required for ENVTEST in the local bin directory.
+	@echo "Setting up envtest binaries for Kubernetes version $(ENVTEST_K8S_VERSION)..."
+	@"$(ENVTEST)" use $(ENVTEST_K8S_VERSION) --bin-dir "$(LOCALBIN)" -p path || { \
+		echo "Error: Failed to set up envtest binaries for version $(ENVTEST_K8S_VERSION)."; \
+		exit 1; \
+	}
+
+.PHONY: envtest
+envtest: $(ENVTEST) ## Download setup-envtest locally if necessary.
+$(ENVTEST): $(LOCALBIN)
+	$(call go-install-tool,$(ENVTEST),sigs.k8s.io/controller-runtime/tools/setup-envtest,$(ENVTEST_VERSION))
+
+.PHONY: golangci-lint
+golangci-lint: $(GOLANGCI_LINT) ## Download golangci-lint locally if necessary.
+$(GOLANGCI_LINT): $(LOCALBIN)
+	$(call go-install-tool,$(GOLANGCI_LINT),github.com/golangci/golangci-lint/v2/cmd/golangci-lint,$(GOLANGCI_LINT_VERSION))
+
+# go-install-tool will 'go install' any package with custom target and name of binary, if it doesn't exist
+# $1 - target path with name of binary
+# $2 - package url which can be installed
+# $3 - specific version of package
+define go-install-tool
+@[ -f "$(1)-$(3)" ] && [ "$$(readlink -- "$(1)" 2>/dev/null)" = "$(1)-$(3)" ] || { \
+set -e; \
+package=$(2)@$(3) ;\
+echo "Downloading $${package}" ;\
+rm -f "$(1)" ;\
+GOBIN="$(LOCALBIN)" go install $${package} ;\
+mv "$(LOCALBIN)/$$(basename "$(1)")" "$(1)-$(3)" ;\
+} ;\
+ln -sf "$$(realpath "$(1)-$(3)")" "$(1)"
+endef
+
+define gomodver
+$(shell go list -m -f '{{if .Replace}}{{.Replace.Version}}{{else}}{{.Version}}{{end}}' $(1) 2>/dev/null)
+endef

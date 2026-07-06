@@ -1,0 +1,776 @@
+/*
+Copyright 2025.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
+package controller
+
+import (
+	"bytes"
+	"fmt"
+	"io"
+	"net/url"
+	"path/filepath"
+	"strings"
+
+	"helm.sh/helm/v3/pkg/chart"
+	"helm.sh/helm/v3/pkg/chart/loader"
+	"helm.sh/helm/v3/pkg/chartutil"
+	"helm.sh/helm/v3/pkg/engine"
+	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/util/intstr"
+	"k8s.io/apimachinery/pkg/util/yaml"
+	logf "sigs.k8s.io/controller-runtime/pkg/log"
+
+	mlflowv1 "github.com/opendatahub-io/mlflow-operator/api/v1"
+	"github.com/opendatahub-io/mlflow-operator/internal/config"
+)
+
+const (
+	defaultStorageSize     = "2Gi"
+	defaultBackendStoreURI = "sqlite:////mlflow/mlflow.db"
+	defaultArtifactsDest   = "file:///mlflow/artifacts"
+	uvicornSSLCiphersEnv   = "UVICORN_SSL_CIPHERS"
+	uvicornSystemCiphers   = "PROFILE=SYSTEM"
+)
+
+var helmLog = logf.Log.WithName("helm")
+
+// CA bundle mount paths - used for mounting platform and custom CA ConfigMaps
+const (
+	systemCAPath    = "/etc/pki/tls/certs/ca-bundle.crt"
+	caPlatformMount = "/etc/pki/tls/certs/platform"
+	caCustomMount   = "/etc/pki/tls/certs/custom"
+
+	serviceCABundleConfigMapName = "openshift-service-ca.crt"
+	serviceCABundleConfigMapKey  = "service-ca.crt"
+)
+
+// getResourceSuffix returns the suffix used by most per-instance MLflow resources.
+// Returns empty string for CR named "mlflow", otherwise returns "-{crname}".
+// Shared server RBAC objects keep static names, while most namespaced resources
+// and GC RBAC objects are named as "mlflow{{ suffix }}".
+func getResourceSuffix(mlflowName string) string {
+	if mlflowName == ResourceName {
+		return ""
+	}
+	return "-" + mlflowName
+}
+
+// buildCORSAllowedOrigins returns a comma-separated list of allowed CORS origins
+// combining safe defaults with any user-specified extra origins from the CR spec.
+func buildCORSAllowedOrigins(mlflow *mlflowv1.MLflow, namespace string, cfg *config.OperatorConfig) string {
+	serviceName := ResourceName + getResourceSuffix(mlflow.Name)
+	const servicePort = 8443
+
+	corsOrigins := []string{
+		fmt.Sprintf("https://%s:%d", serviceName, servicePort),
+		fmt.Sprintf("https://%s.%s.svc:%d", serviceName, namespace, servicePort),
+		fmt.Sprintf("https://%s.%s.svc.cluster.local:%d", serviceName, namespace, servicePort),
+		"localhost:*",
+		"127.0.0.1:*",
+	}
+
+	if cfg.MLflowURL != "" {
+		if u, err := url.Parse(cfg.MLflowURL); err == nil && u.Scheme != "" && u.Host != "" {
+			origin := u.Scheme + "://" + u.Host
+			corsOrigins = append(corsOrigins, origin)
+		}
+	}
+
+	for _, o := range mlflow.Spec.ExtraAllowedOrigins {
+		o = strings.TrimSpace(o)
+		if o == "" || strings.Contains(o, ",") {
+			continue
+		}
+		corsOrigins = append(corsOrigins, o)
+	}
+
+	return strings.Join(corsOrigins, ",")
+}
+
+// HelmRenderer handles rendering of Helm charts
+type HelmRenderer struct {
+	chartPath string
+}
+
+// RenderOptions contains additional context needed for rendering
+type RenderOptions struct {
+	// PlatformTrustedCABundleExists indicates if the platform CA bundle ConfigMap exists in the target namespace
+	PlatformTrustedCABundleExists bool
+	// IsOpenShift indicates if the cluster is an OpenShift platform (detected via ConsoleLink CRD availability).
+	// When true, the operator configures service-ca-based TLS verification for Prometheus metrics scraping.
+	IsOpenShift bool
+	// ServiceMonitorAvailable indicates if the ServiceMonitor CRD (monitoring.coreos.com/v1) is available.
+	// When false, metrics.enabled is set to false to prevent rendering the ServiceMonitor manifest.
+	ServiceMonitorAvailable bool
+}
+
+// NewHelmRenderer creates a new HelmRenderer
+func NewHelmRenderer(chartPath string) *HelmRenderer {
+	return &HelmRenderer{
+		chartPath: chartPath,
+	}
+}
+
+// RenderChart renders the Helm chart with the given values.
+func (h *HelmRenderer) RenderChart(
+	mlflow *mlflowv1.MLflow,
+	namespace string,
+	opts RenderOptions,
+	cfg *config.OperatorConfig,
+) ([]*unstructured.Unstructured, error) {
+	// Load the Helm chart
+	loadedChart, err := loader.Load(h.chartPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load chart: %w", err)
+	}
+
+	values, err := h.mlflowToHelmValues(mlflow, namespace, opts, cfg)
+	if err != nil {
+		return nil, fmt.Errorf("failed to convert MLflow spec to Helm values: %w", err)
+	}
+
+	// Render the chart
+	rendered, err := h.renderTemplates(loadedChart, values, namespace)
+	if err != nil {
+		return nil, fmt.Errorf("failed to render templates: %w", err)
+	}
+
+	migrationNetworkPolicy := buildMigrationNetworkPolicy(mlflow, namespace)
+	migrationNetworkPolicyMap, err := runtime.DefaultUnstructuredConverter.ToUnstructured(migrationNetworkPolicy)
+	if err != nil {
+		return nil, fmt.Errorf("failed to convert migration NetworkPolicy: %w", err)
+	}
+	rendered = append(rendered, &unstructured.Unstructured{Object: migrationNetworkPolicyMap})
+
+	return rendered, nil
+}
+
+// isTraceArchivalEnabled returns true when trace archival is configured and enabled.
+func isTraceArchivalEnabled(mlflow *mlflowv1.MLflow) bool {
+	return mlflow.Spec.TraceArchival != nil && mlflow.Spec.TraceArchival.Enabled
+}
+
+// mlflowToHelmValues converts MLflow CR spec to Helm values
+func (h *HelmRenderer) mlflowToHelmValues(
+	mlflow *mlflowv1.MLflow,
+	namespace string,
+	opts RenderOptions,
+	cfg *config.OperatorConfig,
+) (map[string]interface{}, error) {
+	values := make(map[string]interface{})
+
+	values["namespace"] = namespace
+
+	// Resource suffix for unique naming - empty string for singleton "mlflow" CR, "-<name>" for others.
+	// Shared server RBAC objects keep static names, while most namespaced resources and GC RBAC
+	// objects still use "mlflow{{ .Values.resourceSuffix }}".
+	values["resourceSuffix"] = getResourceSuffix(mlflow.Name)
+
+	values["commonLabels"] = map[string]interface{}{
+		"component": "mlflow",
+	}
+
+	if len(mlflow.Spec.PodLabels) > 0 {
+		podLabels := make(map[string]interface{})
+		for k, v := range mlflow.Spec.PodLabels {
+			podLabels[k] = v
+		}
+		values["podLabels"] = podLabels
+	}
+
+	if len(mlflow.Spec.PodAnnotations) > 0 {
+		podAnnotations := make(map[string]interface{})
+		for k, v := range mlflow.Spec.PodAnnotations {
+			podAnnotations[k] = v
+		}
+		values["podAnnotations"] = podAnnotations
+	}
+
+	effectiveCfg := config.GetConfig()
+	if cfg != nil {
+		// Callers can pass a reconcile-scoped config that already applied modular overrides.
+		effectiveCfg = cfg
+	}
+	tlsSecretName := TLSSecretName
+
+	tlsValues := map[string]interface{}{
+		"secretName": tlsSecretName,
+	}
+	if opts.IsOpenShift {
+		tlsValues["defaultMode"] = 416 // 0640 — group-readable; OpenShift SCC assigns fsGroup
+	} else {
+		tlsValues["defaultMode"] = 420 // 0644 — world-readable; no fsGroup on vanilla K8s
+	}
+
+	values["tls"] = tlsValues
+
+	// CA bundle configuration - build list of file paths and ConfigMap volume mounts
+	// The init container/sidecar will:
+	//   1. Include all files from caBundle.filePaths (system CA is always first)
+	//   2. Glob *.crt and *.pem files from each ConfigMap mount path
+	// Mount paths are derived from configMaps in the template via mlflow.caBundleMountPaths
+	var caConfigMaps []map[string]interface{}
+	var caFilePaths []string
+
+	// Always include system CA bundle first
+	caFilePaths = append(caFilePaths, systemCAPath)
+
+	// Add platform CA bundle if detected
+	if opts.PlatformTrustedCABundleExists {
+		caConfigMaps = append(caConfigMaps, map[string]interface{}{
+			"name":      PlatformTrustedCABundleConfigMapName,
+			"mountPath": caPlatformMount,
+		})
+	}
+
+	// Add user-provided CA bundle if specified
+	if mlflow.Spec.CABundleConfigMap != nil {
+		caConfigMaps = append(caConfigMaps, map[string]interface{}{
+			"name":      mlflow.Spec.CABundleConfigMap.Name,
+			"mountPath": caCustomMount,
+		})
+	}
+
+	values["caBundle"] = map[string]interface{}{
+		"configMaps": caConfigMaps,
+		"filePaths":  caFilePaths,
+	}
+
+	// Use config from environment variables as default, can be overridden by CR spec
+	mlflowImage := effectiveCfg.MLflowImage
+	var imagePullPolicy *string
+
+	if mlflow.Spec.Image != nil {
+		if mlflow.Spec.Image.Image != nil {
+			mlflowImage = *mlflow.Spec.Image.Image
+		}
+		if mlflow.Spec.Image.ImagePullPolicy != nil {
+			policy := string(*mlflow.Spec.Image.ImagePullPolicy)
+			imagePullPolicy = &policy
+		}
+	}
+
+	imageValues := map[string]interface{}{
+		"name": mlflowImage,
+	}
+	if imagePullPolicy != nil {
+		imageValues["imagePullPolicy"] = *imagePullPolicy
+	}
+	values["image"] = imageValues
+
+	replicas := int32(1)
+	if mlflow.Spec.Replicas != nil {
+		replicas = *mlflow.Spec.Replicas
+	}
+	values["replicaCount"] = replicas
+
+	if mlflow.Spec.Resources != nil {
+		resourcesMap, err := runtime.DefaultUnstructuredConverter.ToUnstructured(mlflow.Spec.Resources)
+		if err != nil {
+			return nil, fmt.Errorf("failed to convert resources: %w", err)
+		}
+		values["resources"] = resourcesMap
+	}
+
+	// Storage - only enabled if explicitly configured
+	// This allows users to use remote storage (S3, PostgreSQL, etc.) without PVC
+	storageEnabled := false
+	storageSize := defaultStorageSize
+	storageClassName := ""
+	accessMode := string(corev1.ReadWriteOnce)
+
+	if mlflow.Spec.Storage != nil {
+		// If Storage is specified, enable it
+		storageEnabled = true
+
+		// Extract size from Resources.Requests[storage]
+		if mlflow.Spec.Storage.Resources.Requests != nil {
+			if storageQuantity, ok := mlflow.Spec.Storage.Resources.Requests[corev1.ResourceStorage]; ok {
+				storageSize = storageQuantity.String()
+			}
+		}
+
+		// Extract storage class name
+		if mlflow.Spec.Storage.StorageClassName != nil {
+			storageClassName = *mlflow.Spec.Storage.StorageClassName
+		}
+
+		// Extract the first access mode from an array (we only use one for simplicity)
+		if len(mlflow.Spec.Storage.AccessModes) > 0 {
+			accessMode = string(mlflow.Spec.Storage.AccessModes[0])
+		}
+	}
+
+	values["storage"] = map[string]interface{}{
+		"enabled":          storageEnabled,
+		"size":             storageSize,
+		"storageClassName": storageClassName,
+		"accessMode":       accessMode,
+	}
+
+	backendStoreURI := ""
+	artifactsDest := defaultArtifactsDest
+
+	// BackendStoreURI: prefer secret ref over direct value
+	var backendStoreURIFrom map[string]interface{}
+	if mlflow.Spec.BackendStoreURIFrom != nil {
+		backendStoreURIFrom = map[string]interface{}{
+			"secretKeyRef": map[string]interface{}{
+				"name": mlflow.Spec.BackendStoreURIFrom.Name,
+				"key":  mlflow.Spec.BackendStoreURIFrom.Key,
+			},
+		}
+		if mlflow.Spec.BackendStoreURIFrom.Optional != nil {
+			backendStoreURIFrom["secretKeyRef"].(map[string]interface{})["optional"] = *mlflow.Spec.BackendStoreURIFrom.Optional
+		}
+	} else if mlflow.Spec.BackendStoreURI != nil {
+		backendStoreURI = *mlflow.Spec.BackendStoreURI
+	} else {
+		// Preserve the legacy implicit SQLite default for already-stored CRs that
+		// predate the explicit backendStoreUri validation. New creates and updates
+		// are still required to set backendStoreUri or backendStoreUriFrom by admission.
+		backendStoreURI = defaultBackendStoreURI
+	}
+
+	// RegistryStoreURI: defaults to backendStoreUri when omitted (per API contract)
+	// Prefer secret ref over direct value
+	var registryStoreURIFrom map[string]interface{}
+	registryStoreURI := backendStoreURI // Default to backend URI when provided
+	if mlflow.Spec.RegistryStoreURIFrom != nil {
+		registryStoreURIFrom = map[string]interface{}{
+			"secretKeyRef": map[string]interface{}{
+				"name": mlflow.Spec.RegistryStoreURIFrom.Name,
+				"key":  mlflow.Spec.RegistryStoreURIFrom.Key,
+			},
+		}
+		if mlflow.Spec.RegistryStoreURIFrom.Optional != nil {
+			registryStoreURIFrom["secretKeyRef"].(map[string]interface{})["optional"] = *mlflow.Spec.RegistryStoreURIFrom.Optional
+		}
+	} else if mlflow.Spec.RegistryStoreURI != nil {
+		registryStoreURI = *mlflow.Spec.RegistryStoreURI
+	} else if backendStoreURIFrom != nil {
+		// Registry isn't set, but backend uses secret ref - use the same secret for registry
+		registryStoreURIFrom = backendStoreURIFrom
+	}
+	// Otherwise registryStoreURI already defaults to backendStoreURI
+
+	if mlflow.Spec.ArtifactsDestination != nil {
+		artifactsDest = *mlflow.Spec.ArtifactsDestination
+	}
+
+	// DefaultArtifactRoot: only set if user explicitly specifies it. This is required when
+	// serveArtifacts is false.
+	// When unset, MLflow uses intelligent defaults when serveArtifacts is true:
+	var defaultArtifactRoot string
+	if mlflow.Spec.DefaultArtifactRoot != nil {
+		defaultArtifactRoot = *mlflow.Spec.DefaultArtifactRoot
+	}
+
+	// Wildcard to allow all hosts
+	allowedHosts := []string{"*"}
+
+	// Defaults to false, but MUST be true when using file-based artifact storage
+	serveArtifacts := false
+	if mlflow.Spec.ServeArtifacts != nil {
+		serveArtifacts = *mlflow.Spec.ServeArtifacts
+	}
+
+	workers := int32(1)
+	if mlflow.Spec.Workers != nil {
+		workers = *mlflow.Spec.Workers
+	}
+
+	var workspaceLabelSelector string
+	if mlflow.Spec.WorkspaceLabelSelector != nil {
+		selector, err := metav1.LabelSelectorAsSelector(mlflow.Spec.WorkspaceLabelSelector)
+		if err != nil {
+			return nil, fmt.Errorf("invalid workspaceLabelSelector: %w", err)
+		}
+		workspaceLabelSelector = selector.String()
+	}
+
+	mlflowConfig := map[string]interface{}{
+		"backendStoreUri":      backendStoreURI,
+		"registryStoreUri":     registryStoreURI,
+		"artifactsDestination": artifactsDest,
+		"defaultArtifactRoot":  defaultArtifactRoot,
+		"enableWorkspaces":     true,
+		"workspaceStoreUri":    "kubernetes://",
+		"serveArtifacts":       serveArtifacts,
+		"workers":              workers,
+		"port":                 8443,
+		"allowedHosts":         allowedHosts,
+		"staticPrefix":         StaticPrefix, // Hardcoded for operator deployments
+	}
+
+	if workspaceLabelSelector != "" {
+		mlflowConfig["workspaceLabelSelector"] = workspaceLabelSelector
+	}
+
+	// Add secret references if provided
+	if backendStoreURIFrom != nil {
+		mlflowConfig["backendStoreUriFrom"] = backendStoreURIFrom
+	}
+	if registryStoreURIFrom != nil {
+		mlflowConfig["registryStoreUriFrom"] = registryStoreURIFrom
+	}
+
+	mlflowConfig["corsAllowedOrigins"] = buildCORSAllowedOrigins(mlflow, namespace, effectiveCfg)
+
+	values["mlflow"] = mlflowConfig
+
+	envCapacity := len(mlflow.Spec.Env)
+	if opts.IsOpenShift {
+		envCapacity++
+	}
+	env := make([]interface{}, 0, envCapacity)
+	hasCustomUvicornSSLCiphers := false
+
+	// Add custom env vars from spec
+	for i, e := range mlflow.Spec.Env {
+		if opts.IsOpenShift && e.Name == uvicornSSLCiphersEnv {
+			hasCustomUvicornSSLCiphers = true
+			helmLog.Info("MLflow CR overrides the default OpenShift uvicorn SSL ciphers",
+				"name", mlflow.Name,
+				"namespace", namespace,
+				"envVar", uvicornSSLCiphersEnv,
+			)
+		}
+		envMap, err := runtime.DefaultUnstructuredConverter.ToUnstructured(&e)
+		if err != nil {
+			return nil, fmt.Errorf("failed to convert env[%d]: %w", i, err)
+		}
+		env = append(env, envMap)
+	}
+
+	if opts.IsOpenShift && !hasCustomUvicornSSLCiphers {
+		env = append(env, map[string]interface{}{
+			"name":  uvicornSSLCiphersEnv,
+			"value": uvicornSystemCiphers,
+		})
+	}
+
+	values["env"] = env
+
+	if len(mlflow.Spec.EnvFrom) > 0 {
+		envFrom := make([]interface{}, 0, len(mlflow.Spec.EnvFrom))
+		for i, ef := range mlflow.Spec.EnvFrom {
+			envFromMap, err := runtime.DefaultUnstructuredConverter.ToUnstructured(&ef)
+			if err != nil {
+				return nil, fmt.Errorf("failed to convert envFrom[%d]: %w", i, err)
+			}
+			envFrom = append(envFrom, envFromMap)
+		}
+		values["envFrom"] = envFrom
+	}
+
+	serviceAccountName := ServiceAccountName
+	if mlflow.Spec.ServiceAccountName != nil {
+		serviceAccountName = *mlflow.Spec.ServiceAccountName
+	}
+	values["serviceAccount"] = map[string]interface{}{
+		"create": true,
+		"name":   serviceAccountName,
+	}
+
+	// Add OpenShift service-ca annotation for automatic cert provisioning
+	serviceAnnotations := map[string]interface{}{
+		"service.beta.openshift.io/serving-cert-secret-name": tlsSecretName,
+	}
+
+	values["service"] = map[string]interface{}{
+		"type":        "ClusterIP",
+		"port":        8443,
+		"annotations": serviceAnnotations,
+	}
+
+	// Metrics configuration - only enabled when the ServiceMonitor CRD is present in the cluster.
+	// On OpenShift, configure service-ca-based TLS verification for Prometheus scraping.
+	// On non-OpenShift clusters, fall back to insecureSkipVerify.
+	metricsConfig := map[string]interface{}{
+		"enabled": opts.ServiceMonitorAvailable,
+	}
+	if opts.IsOpenShift {
+		serviceName := "mlflow" + getResourceSuffix(mlflow.Name)
+		serverName := fmt.Sprintf("%s.%s.svc", serviceName, namespace)
+		metricsConfig["tlsConfig"] = map[string]interface{}{
+			"ca": map[string]interface{}{
+				"configMap": map[string]interface{}{
+					"name": serviceCABundleConfigMapName,
+					"key":  serviceCABundleConfigMapKey,
+				},
+			},
+			"serverName": serverName,
+		}
+	} else {
+		metricsConfig["tlsConfig"] = map[string]interface{}{
+			"insecureSkipVerify": true,
+		}
+	}
+	values["metrics"] = metricsConfig
+
+	if mlflow.Spec.PodSecurityContext != nil {
+		// Convert PodSecurityContext to map
+		// For now, we'll pass through the whole object as-is
+		// Helm templates will handle the YAML marshaling
+		values["podSecurityContext"] = mlflow.Spec.PodSecurityContext
+	} else {
+		values["podSecurityContext"] = map[string]interface{}{
+			"runAsNonRoot": true,
+			"seccompProfile": map[string]interface{}{
+				"type": "RuntimeDefault",
+			},
+		}
+	}
+
+	if mlflow.Spec.SecurityContext != nil {
+		values["securityContext"] = mlflow.Spec.SecurityContext
+	} else {
+		values["securityContext"] = map[string]interface{}{
+			"allowPrivilegeEscalation": false,
+			"readOnlyRootFilesystem":   true,
+			"capabilities": map[string]interface{}{
+				"drop": []string{"ALL"},
+			},
+		}
+	}
+
+	if len(mlflow.Spec.NodeSelector) > 0 {
+		values["nodeSelector"] = mlflow.Spec.NodeSelector
+	} else {
+		values["nodeSelector"] = map[string]string{}
+	}
+
+	if len(mlflow.Spec.Tolerations) > 0 {
+		values["tolerations"] = mlflow.Spec.Tolerations
+	} else {
+		values["tolerations"] = []corev1.Toleration{}
+	}
+
+	if len(mlflow.Spec.ResourceClaims) > 0 {
+		values["resourceClaims"] = mlflow.Spec.ResourceClaims
+	} else {
+		values["resourceClaims"] = []corev1.PodResourceClaim{}
+	}
+
+	if mlflow.Spec.Affinity != nil {
+		values["affinity"] = mlflow.Spec.Affinity
+	} else {
+		values["affinity"] = map[string]interface{}{}
+	}
+
+	egressRules := make([]interface{}, 0, len(mlflow.Spec.NetworkPolicyEgressRules))
+	for i, rule := range mlflow.Spec.NetworkPolicyEgressRules {
+		ruleMap, err := runtime.DefaultUnstructuredConverter.ToUnstructured(&rule)
+		if err != nil {
+			return nil, fmt.Errorf("failed to convert networkPolicyEgressRules[%d]: %w", i, err)
+		}
+		egressRules = append(egressRules, ruleMap)
+	}
+	additionalEgressRules := make([]interface{}, 0, len(mlflow.Spec.NetworkPolicyAdditionalEgressRules))
+	for i, rule := range mlflow.Spec.NetworkPolicyAdditionalEgressRules {
+		ruleMap, err := runtime.DefaultUnstructuredConverter.ToUnstructured(&rule)
+		if err != nil {
+			return nil, fmt.Errorf("failed to convert networkPolicyAdditionalEgressRules[%d]: %w", i, err)
+		}
+		additionalEgressRules = append(additionalEgressRules, ruleMap)
+	}
+	values["networkPolicy"] = map[string]interface{}{
+		"egressRules":           egressRules,
+		"additionalEgressRules": additionalEgressRules,
+	}
+
+	// Garbage collection - disabled unless explicitly configured in the CR
+	gcValues := map[string]interface{}{
+		"enabled": false,
+	}
+	if mlflow.Spec.GarbageCollection != nil {
+		gcValues["enabled"] = true
+		gcValues["schedule"] = mlflow.Spec.GarbageCollection.Schedule
+		gcValues["serviceAccount"] = map[string]interface{}{
+			"name": GCServiceAccountName,
+		}
+		if mlflow.Spec.GarbageCollection.OlderThan != nil {
+			gcValues["olderThan"] = *mlflow.Spec.GarbageCollection.OlderThan
+		}
+		if mlflow.Spec.GarbageCollection.Resources != nil {
+			resourcesMap, err := runtime.DefaultUnstructuredConverter.ToUnstructured(mlflow.Spec.GarbageCollection.Resources)
+			if err != nil {
+				return nil, fmt.Errorf("failed to convert garbageCollection.resources: %w", err)
+			}
+			gcValues["resources"] = resourcesMap
+		}
+	}
+	values["garbageCollection"] = gcValues
+
+	// Trace archival - disabled unless explicitly configured in the CR.
+	// When enabled, the operator creates a CronJob that runs the standalone
+	// archival module and mounts the config into the MLflow Deployment so the
+	// UI can surface archival status.
+	taValues := map[string]interface{}{
+		"enabled": false,
+	}
+	if isTraceArchivalEnabled(mlflow) {
+		taValues["enabled"] = true
+		if mlflow.Spec.TraceArchival.Schedule != nil {
+			taValues["schedule"] = *mlflow.Spec.TraceArchival.Schedule
+		}
+		taValues["serviceAccount"] = map[string]interface{}{
+			"name": TraceArchivalServiceAccountName,
+		}
+		if mlflow.Spec.TraceArchival.Location != nil {
+			taValues["location"] = *mlflow.Spec.TraceArchival.Location
+		}
+		if mlflow.Spec.TraceArchival.Retention != nil {
+			taValues["retention"] = *mlflow.Spec.TraceArchival.Retention
+		}
+		if mlflow.Spec.TraceArchival.MaxTracesPerPass != nil {
+			taValues["maxTracesPerPass"] = *mlflow.Spec.TraceArchival.MaxTracesPerPass
+		}
+		if len(mlflow.Spec.TraceArchival.LongRetentionAllowlist) > 0 {
+			allowlist := make([]interface{}, len(mlflow.Spec.TraceArchival.LongRetentionAllowlist))
+			for i, id := range mlflow.Spec.TraceArchival.LongRetentionAllowlist {
+				allowlist[i] = id
+			}
+			taValues["longRetentionAllowlist"] = allowlist
+		}
+		if mlflow.Spec.TraceArchival.Resources != nil {
+			resourcesMap, err := runtime.DefaultUnstructuredConverter.ToUnstructured(mlflow.Spec.TraceArchival.Resources)
+			if err != nil {
+				return nil, fmt.Errorf("failed to convert traceArchival.resources: %w", err)
+			}
+			taValues["resources"] = resourcesMap
+		}
+	}
+	values["traceArchival"] = taValues
+
+	return values, nil
+}
+
+func buildMigrationNetworkPolicy(mlflow *mlflowv1.MLflow, namespace string) *networkingv1.NetworkPolicy {
+	udp := corev1.ProtocolUDP
+	tcp := corev1.ProtocolTCP
+	port53 := intstr.FromInt32(53)
+	port5353 := intstr.FromInt32(5353)
+	port5432 := intstr.FromInt32(5432)
+	port3306 := intstr.FromInt32(3306)
+
+	egressRules := []networkingv1.NetworkPolicyEgressRule{
+		{
+			Ports: []networkingv1.NetworkPolicyPort{
+				{Protocol: &udp, Port: &port53},
+				{Protocol: &tcp, Port: &port53},
+				{Protocol: &udp, Port: &port5353},
+				{Protocol: &tcp, Port: &port5353},
+			},
+		},
+		{
+			Ports: []networkingv1.NetworkPolicyPort{
+				{Protocol: &tcp, Port: &port5432},
+				{Protocol: &tcp, Port: &port3306},
+			},
+		},
+	}
+	if len(mlflow.Spec.NetworkPolicyAdditionalEgressRules) > 0 {
+		egressRules = append(egressRules, mlflow.Spec.NetworkPolicyAdditionalEgressRules...)
+	}
+
+	return &networkingv1.NetworkPolicy{
+		TypeMeta: metav1.TypeMeta{
+			APIVersion: "networking.k8s.io/v1",
+			Kind:       "NetworkPolicy",
+		},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      fmt.Sprintf("%s%s-migration", ResourceName, getResourceSuffix(mlflow.Name)),
+			Namespace: namespace,
+			Labels: map[string]string{
+				"component": "mlflow-migration",
+			},
+		},
+		Spec: networkingv1.NetworkPolicySpec{
+			PodSelector: metav1.LabelSelector{
+				MatchLabels: map[string]string{
+					"component": "mlflow-migration",
+				},
+			},
+			PolicyTypes: []networkingv1.PolicyType{
+				networkingv1.PolicyTypeIngress,
+				networkingv1.PolicyTypeEgress,
+			},
+			Ingress: []networkingv1.NetworkPolicyIngressRule{},
+			Egress:  egressRules,
+		},
+	}
+}
+
+// renderTemplates renders the Helm templates with the given values
+func (h *HelmRenderer) renderTemplates(c *chart.Chart, values map[string]interface{}, namespace string) ([]*unstructured.Unstructured, error) {
+	// Create release options
+	releaseOptions := chartutil.ReleaseOptions{
+		Name:      "mlflow",
+		Namespace: namespace,
+		IsInstall: true,
+	}
+
+	// Generate values with built-in objects
+	valuesToRender, err := chartutil.ToRenderValues(c, values, releaseOptions, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to prepare values: %w", err)
+	}
+
+	// Render templates
+	renderedTemplates, err := engine.Render(c, valuesToRender)
+	if err != nil {
+		return nil, fmt.Errorf("failed to render templates: %w", err)
+	}
+
+	// Parse rendered YAML into unstructured objects
+	var objects []*unstructured.Unstructured
+	for name, content := range renderedTemplates {
+		// Skip empty files and notes
+		if len(content) == 0 || filepath.Base(name) == "NOTES.txt" {
+			continue
+		}
+
+		// Parse YAML documents (may contain multiple documents separated by ---)
+		decoder := yaml.NewYAMLToJSONDecoder(bytes.NewBufferString(content))
+		for {
+			obj := &unstructured.Unstructured{}
+			err := decoder.Decode(obj)
+			if err != nil {
+				// io.EOF is expected - it means we've reached the end of the YAML stream
+				if err == io.EOF {
+					break
+				}
+				// Any other error is a real problem (e.g., malformed YAML)
+				return nil, fmt.Errorf("failed to decode template %s: %w", name, err)
+			}
+
+			// Skip empty objects
+			if len(obj.Object) == 0 {
+				continue
+			}
+
+			objects = append(objects, obj)
+		}
+	}
+
+	return objects, nil
+}

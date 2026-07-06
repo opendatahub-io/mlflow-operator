@@ -1,0 +1,75 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: mlflow{{ .Values.resourceSuffix }}
+  namespace: {{ .Values.namespace }}
+  labels:
+    app: mlflow{{ .Values.resourceSuffix }}
+    {{- with .Values.commonLabels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/instance: mlflow{{ .Values.resourceSuffix }}
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - ports:
+        - protocol: TCP
+          port: {{ .Values.mlflow.port }}
+      from:
+        - podSelector: {}
+        # MLflow is a cluster-wide service accessed by the ODH/RHOAI gateway,
+        # dashboard, and Prometheus from varying namespaces depending on
+        # deployment mode. All traffic requires a valid Kubernetes auth token,
+        # so cluster-internal reachability on this port is acceptable.
+        - namespaceSelector: {}
+  egress:
+    {{- if .Values.networkPolicy.egressRules }}
+    {{- toYaml .Values.networkPolicy.egressRules | nindent 4 }}
+    {{- else }}
+    # DNS resolution (port 53 is the Service port; 5353 is the CoreDNS
+    # target port used by OpenShift — OVN-Kubernetes evaluates egress rules
+    # after DNAT, so both ports must be allowed)
+    - ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+        - protocol: UDP
+          port: 5353
+        - protocol: TCP
+          port: 5353
+    # HTTPS (443, 6443, 8443). Left unrestricted by destination because
+    # MLflow commonly reaches services outside pod/service CIDRs: the
+    # Kubernetes API server (host-network), external object stores
+    # (S3, GCS, Azure Blob), and external databases over TLS.
+    - ports:
+        - protocol: TCP
+          port: 443
+        - protocol: TCP
+          port: 6443
+        - protocol: TCP
+          port: 8443
+    # PostgreSQL
+    - ports:
+        - protocol: TCP
+          port: 5432
+    # MySQL
+    - ports:
+        - protocol: TCP
+          port: 3306
+    # S3-compatible object storage (MinIO on 9000, SeaweedFS on 8333, SeaweedFS HTTPS on 8334)
+    - ports:
+        - protocol: TCP
+          port: 9000
+        - protocol: TCP
+          port: 8333
+        - protocol: TCP
+          port: 8334
+    {{- end }}
+    {{- with .Values.networkPolicy.additionalEgressRules }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}

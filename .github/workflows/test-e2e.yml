@@ -1,0 +1,56 @@
+name: E2E Tests
+
+on:
+  push:
+    branches:
+      - 'main'
+  pull_request:
+    paths:
+      - '.github/**'
+      - 'cmd/**'
+      - 'config/**'
+      - 'test/**'
+      - 'Dockerfile'
+      - 'go.mod'
+      - 'go.sum'
+      - 'Makefile'
+
+env:
+  IMG: "localhost/mlflow-operator:v0.0.1"
+  CLUSTER_NAME: "mlflow"
+
+jobs:
+  test-e2e:
+    permissions:
+      contents: read
+    name: Run Kind e2e suite
+    runs-on: ubuntu-latest
+    steps:
+      - name: Clone the code
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      - name: Setup Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+
+      - name: Create Kind cluster
+        uses: ./.github/actions/create-cluster
+        with:
+          cluster_name: ${{ env.CLUSTER_NAME }}
+          k8s_version: "v1.34.0"
+
+      - name: Build operator image
+        run: make docker-build IMG=${{ env.IMG }}
+
+      - name: Load image into Kind cluster
+        run: kind load docker-image ${{ env.IMG }} --name ${{ env.CLUSTER_NAME }}
+
+      - name: Run e2e tests
+        run: |
+          go mod tidy
+          make test-e2e
+        env:
+          IMG: ${{ env.IMG }}

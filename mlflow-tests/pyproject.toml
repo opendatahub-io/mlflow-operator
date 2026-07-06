@@ -1,0 +1,49 @@
+[project]
+name = "mlflow-tests"
+version = "0.1.0"
+description = "Comprehensive MLflow testing with Kubernetes integration"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "kubernetes>=35,<37",
+    "mlflow>=3.11",
+    "pytest>=9.0.2",
+    "boto3>=1.42.40",
+    "pydantic>=2.0.0",
+    "psycopg2-binary>=2.9.11",
+    "pyyaml>=6.0.3",
+    "packaging>=25.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.metadata]
+allow-direct-references = true
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/mlflow_tests"]
+
+[tool.uv]
+package = true
+
+[tool.pytest.ini_options]
+markers = [
+    "smoke: Fast sanity-check tests suitable for pre-merge smoke runs",
+    "Artifacts: Test artifact operations and S3 storage verification",
+    "Experiments: Test experiment RBAC and management operations",
+    "Models: Test registered model RBAC and management operations",
+    "Traces: Test trace RBAC and direct trace-ingestion behavior",
+    "Workspaces: Test Kubernetes workspace discovery and filtering",
+    "pre_upgrade: Seed static MLflow state before an upgrade",
+    "post_upgrade: Validate static MLflow state after an upgrade",
+]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+log_cli = true
+log_cli_level = "DEBUG"
+log_cli_format = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+log_cli_date_format = "%Y-%m-%d %H:%M:%S"

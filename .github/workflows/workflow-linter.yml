@@ -1,0 +1,32 @@
+name: Workflow Linter
+on:
+  push:
+    branches:
+      - 'main'
+  pull_request:
+    paths:
+      - '.github/**'
+
+jobs:
+  actionlint:
+    permissions:
+      contents: read
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      # actionlint requires Go to run.
+      - name: Setup Go 🛠️
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version: '1.24.7' # Use a recent, supported Go version
+
+      - name: Install actionlint
+        run: go install github.com/rhysd/actionlint/cmd/actionlint@f5adaf2a03a0a2557568caae2546fa04a05460dc
+
+      # actionlint automatically finds all workflow files in .github/workflows/
+      - name: Run actionlint
+        run: actionlint -color

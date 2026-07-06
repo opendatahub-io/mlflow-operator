@@ -1,0 +1,21 @@
+name: "Collect Kubernetes debug logs"
+description: "Collect namespace-scoped MLflow operator debug artifacts into a directory"
+
+inputs:
+  debug_namespace:
+    description: "Namespace to inspect for MLflow operator resources"
+    required: true
+  output_dir:
+    description: "Directory where debug artifacts are written"
+    required: false
+    default: "debug-logs"
+
+runs:
+  using: "composite"
+  steps:
+    - name: Collect debug logs
+      shell: bash
+      run: |
+        "${{ github.workspace }}/mlflow-tests/images/collect-debug-logs.sh" \
+            --namespace "${{ inputs.debug_namespace }}" \
+            --output-dir "${{ inputs.output_dir }}"
