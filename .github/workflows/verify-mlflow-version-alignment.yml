@@ -24,4 +24,4 @@ jobs:
         run: |
           python3 test/scripts/verify_mlflow_version_alignment.py \
             --params-env config/base/params.env \
-            --params-env config/overlays/kind/params.env
+            --params-env .github/test-infra/overlays/kind/params.env

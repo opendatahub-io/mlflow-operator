@@ -27,5 +27,6 @@
 !mlflow-tests/
 mlflow-tests/.venv/
 !.github/actions/deploy
+!.github/test-infra
 !config
 !scripts/

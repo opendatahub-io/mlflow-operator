@@ -4,4 +4,4 @@ kind: Kustomization
 # Development overlay - uses base without operator image replacement
 # This allows 'kustomize edit set image' to work for local development and CI
 resources:
-  - ../../base
+  - ../../../../config/base

@@ -59,6 +59,7 @@ COPY --chown=1001:1001 ./mlflow-tests/src            ./mlflow-tests/src
 RUN cd mlflow-tests && VIRTUAL_ENV="" uv sync --locked
 
 COPY --chown=1001:1001 .github/actions/deploy/deploy.py ./.github/actions/deploy/deploy.py
+COPY --chown=1001:1001 .github/test-infra ./.github/test-infra
 COPY --chown=1001:1001 ./config ./config
 COPY --chown=1001:1001 ./scripts ./scripts
 COPY --chown=1001:1001 ./mlflow-tests ./mlflow-tests

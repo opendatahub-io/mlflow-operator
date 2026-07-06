@@ -73,6 +73,8 @@ Deploy the operator:
 make deploy IMG=<some-registry>/mlflow-operator:tag
 ```
 
+`make deploy` uses the local-development overlay in `.github/test-infra/overlays/dev`. Shipped operator manifests for standalone and ODH/RHOAI installs remain under `config/`.
+
 > **NOTE**: If you encounter RBAC errors, you may need cluster-admin privileges.
 
 **Option 3: Deploy to Open Data Hub or Red Hat OpenShift AI platform**
@@ -120,6 +122,8 @@ make deploy-kind
 # Override the default MLflow image when needed
 MLFLOW_IMAGE=my-registry/mlflow:custom-tag make deploy-kind
 ```
+
+The Kind/PostgreSQL/SeaweedFS manifests used by this workflow live under `.github/test-infra/` so container scanners do not treat those CI-only assets as part of the shipped `config/` install bundle.
 
 For detailed instructions, advanced configuration options, and troubleshooting, see the [Kind Deployment Guide](docs/kind-deployment.md).
 

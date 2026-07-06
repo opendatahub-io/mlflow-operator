@@ -131,9 +131,9 @@ fi
 echo ""
 
 # ==========================================
-# Step 3: Verify kustomize overlays build
+# Step 3: Verify shipped kustomize overlays build
 # ==========================================
-echo "Step 3: Verifying kustomize overlays"
+echo "Step 3: Verifying shipped kustomize overlays"
 echo "----------------------------------------------"
 
 OVERLAY_EXIT_CODE=0
@@ -166,7 +166,65 @@ if [ "$OVERLAY_EXIT_CODE" -ne 0 ]; then
     OVERALL_EXIT_CODE=1
 else
     echo ""
-    echo -e "${GREEN}✅ All kustomize overlays build successfully${NC}"
+    echo -e "${GREEN}✅ All shipped kustomize overlays build successfully${NC}"
+fi
+echo ""
+
+# ==========================================
+# Step 4: Verify CI/local test manifests build
+# ==========================================
+echo "Step 4: Verifying CI/local test manifests"
+echo "----------------------------------------------"
+
+TEST_INFRA_EXIT_CODE=0
+VALIDATED_TEST_INFRA=()
+
+for overlay in .github/test-infra/overlays/*/; do
+    overlay_name=$(basename "$overlay")
+
+    # Skip kind overlay as it requires runtime TLS certificate generation
+    if [ "$overlay_name" = "kind" ]; then
+        echo "Skipping CI overlay: $overlay_name (requires runtime TLS certificate generation)"
+        continue
+    fi
+
+    echo "Building CI overlay: $overlay_name"
+    if bin/kustomize build "$overlay" > /dev/null 2>&1; then
+        echo -e "${GREEN}✓ $overlay_name builds successfully${NC}"
+        VALIDATED_TEST_INFRA+=("overlay:$overlay_name")
+    else
+        echo -e "${RED}✗ $overlay_name failed to build${NC}"
+        bin/kustomize build "$overlay" || true
+        TEST_INFRA_EXIT_CODE=1
+    fi
+done
+
+for infra_root in .github/test-infra/postgres .github/test-infra/seaweedfs; do
+    infra_name=$(basename "$infra_root")
+    for variant in "$infra_root"/*/; do
+        variant_name=$(basename "$variant")
+        if [ ! -f "${variant}kustomization.yaml" ] && [ ! -f "${variant}kustomization.yml" ] && [ ! -f "${variant}Kustomization" ]; then
+            continue
+        fi
+        echo "Building CI manifest set: $infra_name/$variant_name"
+        if bin/kustomize build "$variant" > /dev/null 2>&1; then
+            echo -e "${GREEN}✓ $infra_name/$variant_name builds successfully${NC}"
+            VALIDATED_TEST_INFRA+=("$infra_name:$variant_name")
+        else
+            echo -e "${RED}✗ $infra_name/$variant_name failed to build${NC}"
+            bin/kustomize build "$variant" || true
+            TEST_INFRA_EXIT_CODE=1
+        fi
+    done
+done
+
+if [ "$TEST_INFRA_EXIT_CODE" -ne 0 ]; then
+    echo ""
+    echo -e "${RED}ERROR: One or more CI/local test manifests failed to build${NC}"
+    OVERALL_EXIT_CODE=1
+else
+    echo ""
+    echo -e "${GREEN}✅ All CI/local test manifests build successfully${NC}"
 fi
 echo ""
 
@@ -195,7 +253,7 @@ if [ "${#VALIDATED_CHARTS[@]}" -gt 0 ]; then
 fi
 
 if [ "${#VALIDATED_OVERLAYS[@]}" -gt 0 ]; then
-    echo -e "${BLUE}Kustomize Overlays:${NC}"
+    echo -e "${BLUE}Shipped Kustomize Overlays:${NC}"
     for overlay in config/overlays/*/; do
         overlay_name=$(basename "$overlay")
         if printf '%s\n' "${VALIDATED_OVERLAYS[@]}" | grep -qx -- "$overlay_name"; then
@@ -203,6 +261,14 @@ if [ "${#VALIDATED_OVERLAYS[@]}" -gt 0 ]; then
         else
             echo -e "  ${RED}✗${NC} $overlay_name"
         fi
+    done
+    echo ""
+fi
+
+if [ "${#VALIDATED_TEST_INFRA[@]}" -gt 0 ]; then
+    echo -e "${BLUE}CI/Local Test Manifests:${NC}"
+    for entry in "${VALIDATED_TEST_INFRA[@]}"; do
+        echo -e "  ${GREEN}✓${NC} $entry"
     done
     echo ""
 fi
