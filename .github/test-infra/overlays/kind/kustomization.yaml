@@ -7,7 +7,7 @@ kind: Kustomization
 namespace: $NAMESPACE
 
 resources:
-  - ../../base
+  - ../../../../config/base
 
 patches:
   - path: manager-rolebinding-patch.yaml

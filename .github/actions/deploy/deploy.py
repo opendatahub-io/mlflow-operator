@@ -24,6 +24,7 @@ class MLflowDeployer:
     def __init__(self, args):
         self.args = args
         self.repo_root = Path(__file__).parent.parent.parent.parent
+        self.ci_test_infra_root = self.repo_root / ".github" / "test-infra"
         self._tls_ca_bundle_cm = None
         self._ca_tmpdir = None
         self._ca_cert_pem = None
@@ -49,6 +50,10 @@ class MLflowDeployer:
         print(f"Target namespace: {self.args.namespace}")
         print(f"S3 endpoint: {self.args.s3_endpoint}")
         print(f"PostgreSQL host: {self.args.postgres_host}")
+
+    def ci_test_infra_path(self, *parts: str) -> Path:
+        """Return the repo path for CI/local-test-only manifests."""
+        return self.ci_test_infra_root.joinpath(*parts)
 
     def run_command(self,
                     cmd: Union[str, List[str]],
@@ -156,7 +161,7 @@ class MLflowDeployer:
         """Generate TLS certificates for MLflow operator deployment"""
         print("🔐 Generating TLS certificates...")
 
-        kind_overlay = self.repo_root / "config" / "overlays" / "kind"
+        kind_overlay = self.ci_test_infra_path("overlays", "kind")
         generate_tls_script = kind_overlay / "generate-tls.sh"
 
         # Generate certificate and key files
@@ -205,7 +210,7 @@ class MLflowDeployer:
         print("🚀 Deploying MLflow operator...")
 
         # Update the Kind overlay params.env so the operator starts with explicit images.
-        base_params_env = self.repo_root / "config" / "overlays" / "kind" / "params.env"
+        base_params_env = self.ci_test_infra_path("overlays", "kind", "params.env")
         print(f"📝 Updating operator namespace to '{self.args.namespace}' in {base_params_env}")
 
         self.run_command([
@@ -220,7 +225,7 @@ class MLflowDeployer:
         self.generate_tls_certificates()
 
         # Use the kind overlay with proper environment setup
-        kind_overlay = self.repo_root / "config" / "overlays" / "kind"
+        kind_overlay = self.ci_test_infra_path("overlays", "kind")
 
         quoted_repo_root = shlex.quote(str(self.repo_root))
         quoted_namespace = shlex.quote(self.args.namespace)
@@ -407,8 +412,8 @@ class MLflowDeployer:
         else:
             platform_overlay = "openshift" if self.args.platform == "openshift" else "base"
 
-        seaweedfs_path = self.repo_root / "config" / "seaweedfs" / platform_overlay
-        seaweedfs_params_env = self.repo_root / "config" / "seaweedfs" / "base" / "params.env"
+        seaweedfs_path = self.ci_test_infra_path("seaweedfs", platform_overlay)
+        seaweedfs_params_env = self.ci_test_infra_path("seaweedfs", "base", "params.env")
 
         self.run_command([
             "sed", "-i", f"s#SEAWEEDFS_IMAGE=.*#SEAWEEDFS_IMAGE={self.args.seaweedfs_image}#",
@@ -703,8 +708,8 @@ class MLflowDeployer:
             platform_overlay = "openshift-tls" if self.args.platform == "openshift" else "tls"
         else:
             platform_overlay = "openshift" if self.args.platform == "openshift" else "base"
-        postgres_path = self.repo_root / "config" / "postgres" / platform_overlay
-        postgres_params_env = self.repo_root / "config" / "postgres" / "base" / "params.env"
+        postgres_path = self.ci_test_infra_path("postgres", platform_overlay)
+        postgres_params_env = self.ci_test_infra_path("postgres", "base", "params.env")
 
         self.run_command([
             "sed", "-i", f"s#POSTGRES_IMAGE=.*#POSTGRES_IMAGE={self.args.postgres_image}#",
@@ -1310,7 +1315,7 @@ class MLflowDeployer:
             sys.exit(1)
         finally:
             # Remove generated private key from working tree regardless of outcome.
-            kind_overlay = self.repo_root / "config" / "overlays" / "kind"
+            kind_overlay = self.ci_test_infra_path("overlays", "kind")
             for fname in ("tls.crt", "tls.key"):
                 fpath = kind_overlay / fname
                 if fpath.exists():

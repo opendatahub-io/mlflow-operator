@@ -2,6 +2,8 @@
 
 This document provides a comprehensive guide for deploying the MLflow Operator and MLflow instances to a local Kind (Kubernetes IN Docker) cluster.
 
+The manifests used by this local/CI workflow live under `.github/test-infra/`. The shipped operator install manifests remain under `config/`.
+
 ## Prerequisites
 
 Before you begin, ensure you have the following tools installed:
@@ -264,7 +266,7 @@ kind delete cluster --name mlflow-cluster
 The Kind deployment manifests are organized as follows:
 
 ```
-config/overlays/kind/
+.github/test-infra/overlays/kind/
 ├── kustomization.yaml              # Main overlay configuration
 ├── params.env                     # Environment variables
 ├── generate-tls.sh                 # TLS certificate generation script
@@ -276,7 +278,7 @@ config/overlays/kind/
 
 The platform-agnostic (and openshift-specific overlay) Postgres manifests are organized as follows:
 ```
-config/postgres/                    # PostgreSQL manifests
+.github/test-infra/postgres/        # PostgreSQL manifests
 ├── base/
 │   ├── kustomization.yaml
 │   ├── params.env
@@ -291,7 +293,7 @@ config/postgres/                    # PostgreSQL manifests
 
 The platform-agnostic (and openshift-specific overlay) SeaweedFS manifests are organized as follows:
 ```
-config/seaweedfs/                   # SeaweedFS (S3) manifests
+.github/test-infra/seaweedfs/       # SeaweedFS (S3) manifests
 ├── base/
 │   ├── kustomization.yaml
 │   ├── params.env

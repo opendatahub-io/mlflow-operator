@@ -18,6 +18,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+TEST_INFRA_ROOT="${TEST_INFRA_ROOT:-$REPO_ROOT/.github/test-infra}"
 UV_PROJECT_DIR="${UV_PROJECT_DIR:-$REPO_ROOT/mlflow-tests}"
 DEPLOY_PY="${DEPLOY_PY:-$REPO_ROOT/.github/actions/deploy/deploy.py}"
 
@@ -392,7 +393,7 @@ cleanup_self_managed_infrastructure() {
     fi
 
     echo "  Removing self-deployed infrastructure..."
-    kustomize build "$REPO_ROOT/config/postgres/$postgres_overlay" \
+    kustomize build "$TEST_INFRA_ROOT/postgres/$postgres_overlay" \
         | kubectl delete --ignore-not-found -n "$NAMESPACE" -f - 2>/dev/null || true
 
     if [ "$wait_for_delete" = "true" ]; then
@@ -407,7 +408,7 @@ cleanup_self_managed_infrastructure() {
         export APPLICATION_CRD_ID=mlflow-pipelines \
                PROFILE_NAMESPACE_LABEL=mlflow-profile \
                S3_BUCKET="${BUCKET:-mlpipeline}"
-        kustomize build "$REPO_ROOT/config/seaweedfs/$seaweedfs_overlay" \
+        kustomize build "$TEST_INFRA_ROOT/seaweedfs/$seaweedfs_overlay" \
             | envsubst '$NAMESPACE,$APPLICATION_CRD_ID,$PROFILE_NAMESPACE_LABEL,$S3_BUCKET' \
             | kubectl delete --ignore-not-found -f - 2>/dev/null || true
 
