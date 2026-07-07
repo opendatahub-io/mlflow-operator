@@ -223,6 +223,7 @@ func main() {
 			apierrors.IsTimeout(err),
 			apierrors.IsTooManyRequests(err):
 			setupLog.Info("Transient API error reading TLS profile, using Intermediate fallback", "error", err)
+			tlsProfileFetched = true // SecurityProfileWatcher will self-heal when the API recovers
 		default:
 			setupLog.Error(err, "unable to fetch APIServer TLS profile")
 			os.Exit(1)
@@ -246,6 +247,7 @@ func main() {
 			apierrors.IsTimeout(err),
 			apierrors.IsTooManyRequests(err):
 			setupLog.Info("Transient API error reading TLS adherence policy, using defaults", "error", err)
+			tlsAdherenceFetched = true // SecurityProfileWatcher will self-heal when the API recovers
 		default:
 			setupLog.Error(err, "unable to fetch APIServer TLS adherence policy")
 			os.Exit(1)
