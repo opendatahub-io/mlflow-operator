@@ -216,9 +216,14 @@ func main() {
 	tlsProfileFetched := false
 	tlsProfile, err := tlspkg.FetchAPIServerTLSProfile(bootstrapCtx, bootstrapClient)
 	if err != nil {
-		if apierrors.IsNotFound(err) || apimeta.IsNoMatchError(err) {
+		switch {
+		case apierrors.IsNotFound(err), apimeta.IsNoMatchError(err):
 			setupLog.Info("APIServer TLS profile API unavailable, using defaults")
-		} else {
+		case apierrors.IsServiceUnavailable(err),
+			apierrors.IsTimeout(err),
+			apierrors.IsTooManyRequests(err):
+			setupLog.Info("Transient API error reading TLS profile, using Intermediate fallback", "error", err)
+		default:
 			setupLog.Error(err, "unable to fetch APIServer TLS profile")
 			os.Exit(1)
 		}
@@ -234,9 +239,14 @@ func main() {
 	tlsAdherenceFetched := false
 	tlsAdherence, err := tlspkg.FetchAPIServerTLSAdherencePolicy(bootstrapCtx, bootstrapClient)
 	if err != nil {
-		if apierrors.IsNotFound(err) || apimeta.IsNoMatchError(err) {
+		switch {
+		case apierrors.IsNotFound(err), apimeta.IsNoMatchError(err):
 			setupLog.Info("APIServer TLS adherence policy unavailable")
-		} else {
+		case apierrors.IsServiceUnavailable(err),
+			apierrors.IsTimeout(err),
+			apierrors.IsTooManyRequests(err):
+			setupLog.Info("Transient API error reading TLS adherence policy, using defaults", "error", err)
+		default:
 			setupLog.Error(err, "unable to fetch APIServer TLS adherence policy")
 			os.Exit(1)
 		}
