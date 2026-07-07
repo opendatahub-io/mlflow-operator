@@ -218,23 +218,25 @@ func main() {
 	if err != nil {
 		switch {
 		case apierrors.IsNotFound(err), apimeta.IsNoMatchError(err):
-			setupLog.Info("APIServer TLS profile API unavailable, using defaults")
+			setupLog.Info("APIServer TLS profile API unavailable, using Intermediate defaults")
 		case apierrors.IsServiceUnavailable(err),
 			apierrors.IsTimeout(err),
 			apierrors.IsTooManyRequests(err):
-			setupLog.Info("Transient API error reading TLS profile, using Intermediate fallback", "error", err)
+			setupLog.Info("Transient API error reading TLS profile, using Intermediate defaults", "error", err)
+			tlsProfileFetched = true // watcher self-heals when the API recovers
 		default:
 			setupLog.Error(err, "unable to fetch APIServer TLS profile")
 			os.Exit(1)
 		}
+		tlsProfile = *configv1.TLSProfiles[configv1.TLSProfileIntermediateType]
 	} else {
 		tlsProfileFetched = true
-		tlsConfigFn, unsupported := tlspkg.NewTLSConfigFromProfile(tlsProfile)
-		if len(unsupported) > 0 {
-			setupLog.Info("TLS profile contains ciphers unsupported by Go", "unsupported", unsupported)
-		}
-		tlsOpts = append(tlsOpts, tlsConfigFn)
 	}
+	tlsConfigFn, unsupported := tlspkg.NewTLSConfigFromProfile(tlsProfile)
+	if len(unsupported) > 0 {
+		setupLog.Info("TLS profile contains ciphers unsupported by Go", "unsupported", unsupported)
+	}
+	tlsOpts = append(tlsOpts, tlsConfigFn)
 
 	tlsAdherenceFetched := false
 	tlsAdherence, err := tlspkg.FetchAPIServerTLSAdherencePolicy(bootstrapCtx, bootstrapClient)
