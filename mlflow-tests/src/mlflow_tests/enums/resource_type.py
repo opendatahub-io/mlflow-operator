@@ -16,6 +16,9 @@ class ResourceType(Enum):
     JOBS = "jobs"
     DATASETS = "datasets"
 
+    # MCP Server Registry resources
+    MCP_SERVERS = "mcpservers"
+
     # MLflow Gateway resources (for model serving and inference)
     GATEWAY_SECRETS = "gatewaysecrets"
     GATEWAY_ENDPOINTS = "gatewayendpoints"
