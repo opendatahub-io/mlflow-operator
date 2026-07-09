@@ -41,20 +41,18 @@ const (
 
 	// NamespaceWorkspaceLabelKey is the label on Namespaces that opt in to MLflow workspace RBAC
 	NamespaceWorkspaceLabelKey = "opendatahub.io/global-mlflow-workspace"
-	// NamespaceRBACLabelKey marks operator-managed RoleBindings for query and cleanup
-	NamespaceRBACLabelKey = "mlflow.opendatahub.io/namespace-rbac"
 	// ManagedByLabelKey is the standard Kubernetes label for resource ownership
 	ManagedByLabelKey = "app.kubernetes.io/managed-by"
 	// ManagedByLabelValue identifies this operator as the manager
 	ManagedByLabelValue = "mlflow-operator"
 	// AuthCRName is the singleton Auth CR name
 	AuthCRName = "auth"
-	// ViewClusterRoleName is the deployed name of the mlflow-view aggregate role (after kustomize namePrefix)
-	ViewClusterRoleName = "mlflow-operator-mlflow-view"
-	// EditClusterRoleName is the deployed name of the mlflow-edit aggregate role (after kustomize namePrefix)
-	EditClusterRoleName = "mlflow-operator-mlflow-edit"
+	// ViewClusterRoleBaseName is the base name of the mlflow-view aggregate ClusterRole (before kustomize namePrefix)
+	ViewClusterRoleBaseName = "mlflow-view"
+	// EditClusterRoleBaseName is the base name of the mlflow-edit aggregate ClusterRole (before kustomize namePrefix)
+	EditClusterRoleBaseName = "mlflow-edit"
 	// RoleBindingViewName is the name of the view RoleBinding in workspace namespaces
-	RoleBindingViewName = "mlflow-view"
+	RoleBindingViewName = "odh-group-mlflow-view"
 	// RoleBindingEditName is the name of the edit RoleBinding in workspace namespaces
-	RoleBindingEditName = "mlflow-edit"
+	RoleBindingEditName = "odh-group-mlflow-edit"
 )

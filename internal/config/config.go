@@ -27,6 +27,7 @@ import (
 const (
 	DefaultMLflowURL                    = "https://mlflow.example.com"
 	DefaultMLflowOperatorCRDWaitTimeout = 30 * time.Second
+	DefaultAuthCRDWaitTimeout           = 30 * time.Second
 )
 
 // OperatorConfig holds the configuration for the MLflow operator
@@ -50,6 +51,11 @@ type OperatorConfig struct {
 	SectionTitle string
 	// EnableNamespaceRBAC turns on the namespace RBAC controller for workspace RoleBindings
 	EnableNamespaceRBAC bool
+	// AuthCRDWaitTimeout bounds how long startup waits for the Auth CRD
+	// after the namespace RBAC controller has been explicitly enabled.
+	AuthCRDWaitTimeout time.Duration
+	// ResourceNamePrefix is the kustomize namePrefix applied to cluster-scoped resources at deploy time
+	ResourceNamePrefix string
 }
 
 var (
@@ -79,6 +85,8 @@ func loadConfig(v *viper.Viper, lookupEnv envLookupFn) *OperatorConfig {
 		MLflowURLConfigured:                  mlflowURLConfigured,
 		SectionTitle:                         v.GetString("SECTION_TITLE"),
 		EnableNamespaceRBAC:                  v.GetBool("ENABLE_NAMESPACE_RBAC"),
+		AuthCRDWaitTimeout:                   v.GetDuration("AUTH_CRD_WAIT_TIMEOUT"),
+		ResourceNamePrefix:                   v.GetString("RESOURCE_NAME_PREFIX"),
 	}
 }
 
@@ -97,6 +105,8 @@ func GetConfig() *OperatorConfig {
 		v.SetDefault("ENABLE_MLFLOW_OPERATOR_MODULE_CONTROLLER", false)
 		v.SetDefault("MLFLOW_OPERATOR_MODULE_CONTROLLER_CRD_WAIT_TIMEOUT", DefaultMLflowOperatorCRDWaitTimeout)
 		v.SetDefault("ENABLE_NAMESPACE_RBAC", false)
+		v.SetDefault("AUTH_CRD_WAIT_TIMEOUT", DefaultAuthCRDWaitTimeout)
+		v.SetDefault("RESOURCE_NAME_PREFIX", "mlflow-operator-")
 
 		instance = loadConfig(v, os.LookupEnv)
 	})

@@ -38,9 +38,11 @@ import (
 	rbacv1 "k8s.io/api/rbac/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/discovery"
@@ -67,8 +69,8 @@ var (
 )
 
 const (
-	defaultNamespace                  = "opendatahub"
-	mlflowOperatorCRDWaitPollInterval = 2 * time.Second
+	defaultNamespace    = "opendatahub"
+	crdWaitPollInterval = 2 * time.Second
 )
 
 func validateStartupConfig(namespace string, cfg *config.OperatorConfig, supportedMLflowVersion string) error {
@@ -112,7 +114,8 @@ func resolveManagerNamespace(namespace string, operatorConfig *config.OperatorCo
 	return namespace
 }
 
-func waitForMLflowOperatorCRD(
+func waitForCRD(
+	crdName string,
 	timeout time.Duration,
 	interval time.Duration,
 	isAvailable func() (bool, error),
@@ -120,13 +123,13 @@ func waitForMLflowOperatorCRD(
 	if timeout <= 0 {
 		return fmt.Errorf(
 			"%s CRD wait timeout must be greater than zero",
-			controller.MLflowOperatorCRDName,
+			crdName,
 		)
 	}
 	if interval <= 0 {
 		return fmt.Errorf(
 			"%s CRD wait interval must be greater than zero",
-			controller.MLflowOperatorCRDName,
+			crdName,
 		)
 	}
 
@@ -151,14 +154,14 @@ func waitForMLflowOperatorCRD(
 	if lastErr != nil {
 		return fmt.Errorf(
 			"%s CRD did not become available within %s: %w",
-			controller.MLflowOperatorCRDName,
+			crdName,
 			timeout,
 			lastErr,
 		)
 	}
 	return fmt.Errorf(
 		"%s CRD did not become available within %s",
-		controller.MLflowOperatorCRDName,
+		crdName,
 		timeout,
 	)
 }
@@ -348,25 +351,31 @@ func main() {
 	// Conditionally configure namespace RBAC controller cache entries
 	authAvailable := false
 	if operatorConfig.EnableNamespaceRBAC {
-		var err error
-		authAvailable, err = controller.IsAuthAvailable(discoveryClient)
-		if err != nil {
-			setupLog.Error(err, "Failed to check Auth CRD availability")
-			os.Exit(1)
-		}
-		if !authAvailable {
-			setupLog.Error(nil, "Namespace RBAC controller enabled but Auth CRD not available in cluster")
-			os.Exit(1)
-		}
-		setupLog.Info("Auth CRD available, adding RoleBinding to cache with cluster-wide scope")
-		managedRBLabelSelector := labels.SelectorFromSet(labels.Set{
-			controller.NamespaceRBACLabelKey: "true",
-		})
-		byObjectCache[&rbacv1.RoleBinding{}] = cache.ByObject{
-			Label: managedRBLabelSelector,
-			Namespaces: map[string]cache.Config{
-				cache.AllNamespaces: {},
+		setupLog.Info(
+			"Namespace RBAC controller enabled; waiting for Auth CRD before controller setup",
+			"timeout", operatorConfig.AuthCRDWaitTimeout,
+		)
+		if err := waitForCRD(
+			controller.AuthCRDName,
+			operatorConfig.AuthCRDWaitTimeout,
+			crdWaitPollInterval,
+			func() (bool, error) {
+				return controller.IsAuthAvailable(discoveryClient)
 			},
+		); err != nil {
+			setupLog.Error(err, "Namespace RBAC controller enabled but Auth CRD did not become available")
+			os.Exit(1)
+		}
+		authAvailable = true
+		setupLog.Info("Auth CRD available, adding Auth to cache")
+		authObj := &unstructured.Unstructured{}
+		authObj.SetGroupVersionKind(schema.GroupVersionKind{
+			Group:   "services.platform.opendatahub.io",
+			Version: "v1alpha1",
+			Kind:    "Auth",
+		})
+		byObjectCache[authObj] = cache.ByObject{
+			Field: fields.OneTermEqualSelector("metadata.name", controller.AuthCRName),
 		}
 	}
 
@@ -375,9 +384,10 @@ func main() {
 			"MLflowOperator controller enabled; waiting for required CRD before controller setup",
 			"timeout", operatorConfig.MLflowOperatorCRDWaitTimeout,
 		)
-		if err := waitForMLflowOperatorCRD(
+		if err := waitForCRD(
+			controller.MLflowOperatorCRDName,
 			operatorConfig.MLflowOperatorCRDWaitTimeout,
-			mlflowOperatorCRDWaitPollInterval,
+			crdWaitPollInterval,
 			func() (bool, error) {
 				return controller.IsMLflowOperatorAvailable(discoveryClient)
 			},
@@ -467,19 +477,32 @@ func main() {
 		setupLog.Info("MLflowOperator controller disabled; keeping legacy module ownership path inactive")
 	}
 	if operatorConfig.EnableNamespaceRBAC && authAvailable {
-		authWatchCache, err := controller.NewAuthWatchCache(cfg, scheme)
+		viewRBWatchCache, err := controller.NewRoleBindingWatchCache(cfg, scheme, controller.RoleBindingViewName)
 		if err != nil {
-			setupLog.Error(err, "unable to create Auth watch cache")
+			setupLog.Error(err, "unable to create RoleBinding view watch cache")
 			os.Exit(1)
 		}
-		if err := mgr.Add(authWatchCache); err != nil {
-			setupLog.Error(err, "unable to add Auth watch cache")
+		if err := mgr.Add(viewRBWatchCache); err != nil {
+			setupLog.Error(err, "unable to add RoleBinding view watch cache")
 			os.Exit(1)
 		}
+		editRBWatchCache, err := controller.NewRoleBindingWatchCache(cfg, scheme, controller.RoleBindingEditName)
+		if err != nil {
+			setupLog.Error(err, "unable to create RoleBinding edit watch cache")
+			os.Exit(1)
+		}
+		if err := mgr.Add(editRBWatchCache); err != nil {
+			setupLog.Error(err, "unable to add RoleBinding edit watch cache")
+			os.Exit(1)
+		}
+		namePrefix := operatorConfig.ResourceNamePrefix
 		if err := (&controller.NamespaceRBACReconciler{
-			Client:         mgr.GetClient(),
-			Scheme:         mgr.GetScheme(),
-			AuthWatchCache: authWatchCache,
+			Client:              mgr.GetClient(),
+			Scheme:              mgr.GetScheme(),
+			ViewRBWatchCache:    viewRBWatchCache,
+			EditRBWatchCache:    editRBWatchCache,
+			ViewClusterRoleName: namePrefix + controller.ViewClusterRoleBaseName,
+			EditClusterRoleName: namePrefix + controller.EditClusterRoleBaseName,
 		}).SetupWithManager(mgr); err != nil {
 			setupLog.Error(err, "unable to create controller", "controller", "NamespaceRBAC")
 			os.Exit(1)

@@ -50,6 +50,10 @@ spec:
           value: placeholder-section-title
         - name: ENABLE_MLFLOW_OPERATOR_MODULE_CONTROLLER
           value: "false"
+        - name: ENABLE_NAMESPACE_RBAC
+          value: "false"
+        - name: RESOURCE_NAME_PREFIX
+          value: placeholder-resource-name-prefix
         ports: []
         securityContext:
           readOnlyRootFilesystem: true

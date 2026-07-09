@@ -10,12 +10,30 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/cache/informertest"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	mlflowv1 "github.com/opendatahub-io/mlflow-operator/api/v1"
 )
+
+const testNamePrefix = "mlflow-operator-"
+
+// fakeRBCache wraps a client.Reader to satisfy crcache.Cache for tests.
+type fakeRBCache struct {
+	informertest.FakeInformers
+	reader client.Reader
+}
+
+func (f *fakeRBCache) Get(ctx context.Context, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+	return f.reader.Get(ctx, key, obj, opts...)
+}
+
+func (f *fakeRBCache) List(ctx context.Context, list client.ObjectList, opts ...client.ListOption) error {
+	return f.reader.List(ctx, list, opts...)
+}
 
 // ---- helpers ----
 
@@ -74,7 +92,10 @@ func newUnlabeledNamespace(name string) *corev1.Namespace {
 
 func newMLflowCR(name string) *mlflowv1.MLflow {
 	return &mlflowv1.MLflow{
-		ObjectMeta: metav1.ObjectMeta{Name: name},
+		ObjectMeta: metav1.ObjectMeta{
+			Name: name,
+			UID:  types.UID("test-uid-" + name),
+		},
 	}
 }
 
@@ -84,14 +105,13 @@ func newManagedRoleBinding(name, namespace string) *rbacv1.RoleBinding {
 			Name:      name,
 			Namespace: namespace,
 			Labels: map[string]string{
-				NamespaceRBACLabelKey: "true",
-				ManagedByLabelKey:     ManagedByLabelValue,
+				ManagedByLabelKey: ManagedByLabelValue,
 			},
 		},
 		RoleRef: rbacv1.RoleRef{
 			APIGroup: "rbac.authorization.k8s.io",
 			Kind:     "ClusterRole",
-			Name:     ViewClusterRoleName,
+			Name:     testNamePrefix + ViewClusterRoleBaseName,
 		},
 	}
 }
@@ -103,7 +123,14 @@ func buildReconciler(t *testing.T, objects ...client.Object) (*NamespaceRBACReco
 		WithScheme(scheme).
 		WithObjects(objects...).
 		Build()
-	return &NamespaceRBACReconciler{Client: c, Scheme: scheme}, c
+	return &NamespaceRBACReconciler{
+		Client:              c,
+		Scheme:              scheme,
+		ViewRBWatchCache:    &fakeRBCache{reader: c},
+		EditRBWatchCache:    &fakeRBCache{reader: c},
+		ViewClusterRoleName: testNamePrefix + ViewClusterRoleBaseName,
+		EditClusterRoleName: testNamePrefix + EditClusterRoleBaseName,
+	}, c
 }
 
 func reconcileNamespace(t *testing.T, r *NamespaceRBACReconciler, name string) reconcile.Result {
@@ -176,8 +203,8 @@ func TestReconcileCreatesRoleBindingsForLabeledNamespace(t *testing.T) {
 	if viewRB == nil {
 		t.Fatal("mlflow-view RoleBinding not found")
 	}
-	if viewRB.RoleRef.Name != ViewClusterRoleName {
-		t.Fatalf("expected roleRef %q, got %q", ViewClusterRoleName, viewRB.RoleRef.Name)
+	if viewRB.RoleRef.Name != testNamePrefix+ViewClusterRoleBaseName {
+		t.Fatalf("expected roleRef %q, got %q", testNamePrefix+ViewClusterRoleBaseName, viewRB.RoleRef.Name)
 	}
 	viewNames := subjectNames(viewRB.Subjects)
 	if !containsAll(viewNames, []string{"system:authenticated", "rhods-admins"}) {
@@ -188,19 +215,32 @@ func TestReconcileCreatesRoleBindingsForLabeledNamespace(t *testing.T) {
 	if editRB == nil {
 		t.Fatal("mlflow-edit RoleBinding not found")
 	}
-	if editRB.RoleRef.Name != EditClusterRoleName {
-		t.Fatalf("expected roleRef %q, got %q", EditClusterRoleName, editRB.RoleRef.Name)
+	if editRB.RoleRef.Name != testNamePrefix+EditClusterRoleBaseName {
+		t.Fatalf("expected roleRef %q, got %q", testNamePrefix+EditClusterRoleBaseName, editRB.RoleRef.Name)
 	}
 	editNames := subjectNames(editRB.Subjects)
 	if len(editNames) != 1 || editNames[0] != "rhods-admins" {
 		t.Fatalf("edit subjects should be [rhods-admins], got %v", editNames)
 	}
 
-	if viewRB.Labels[NamespaceRBACLabelKey] != "true" {
-		t.Fatal("view RoleBinding missing managed label")
-	}
 	if viewRB.Labels[ManagedByLabelKey] != ManagedByLabelValue {
 		t.Fatal("view RoleBinding missing managed-by label")
+	}
+
+	for _, rb := range []*rbacv1.RoleBinding{viewRB, editRB} {
+		if len(rb.OwnerReferences) == 0 {
+			t.Fatalf("RoleBinding %s missing ownerReferences", rb.Name)
+		}
+		ownerRef := rb.OwnerReferences[0]
+		if ownerRef.Kind != "MLflow" {
+			t.Fatalf("expected owner kind MLflow, got %s", ownerRef.Kind)
+		}
+		if ownerRef.Name != "mlflow" {
+			t.Fatalf("expected owner name mlflow, got %s", ownerRef.Name)
+		}
+		if ownerRef.Controller == nil || !*ownerRef.Controller {
+			t.Fatalf("expected controller=true on ownerReference for %s", rb.Name)
+		}
 	}
 }
 
@@ -212,8 +252,8 @@ func TestReconcileRequeuesWhenAuthCRMissing(t *testing.T) {
 
 	result := reconcileNamespace(t, r, "team-a")
 
-	if result.RequeueAfter == 0 {
-		t.Fatal("expected requeue when Auth CR is missing")
+	if result.RequeueAfter != 0 {
+		t.Fatal("expected no requeue when Auth CR is missing")
 	}
 
 	rbs := getRoleBindings(t, c, "team-a")
@@ -262,7 +302,7 @@ func TestReconcileCleansUpWhenMLflowCRDeleted(t *testing.T) {
 	}
 }
 
-func TestReconcilePreservesRoleBindingsWhenAuthCRDeleted(t *testing.T) {
+func TestReconcileCleansUpWhenAuthCRDeleted(t *testing.T) {
 	r, c := buildReconciler(t,
 		newLabeledNamespace("team-a", "mlflow"),
 		newMLflowCR("mlflow"),
@@ -285,13 +325,13 @@ func TestReconcilePreservesRoleBindingsWhenAuthCRDeleted(t *testing.T) {
 
 	result := reconcileNamespace(t, r, "team-a")
 
-	if result.RequeueAfter == 0 {
-		t.Fatal("expected requeue when Auth CR is deleted")
+	if result.RequeueAfter != 0 {
+		t.Fatal("expected no requeue when Auth CR is deleted")
 	}
 
 	rbs = getRoleBindings(t, c, "team-a")
-	if len(rbs) != 2 {
-		t.Fatalf("expected 2 rolebindings preserved after Auth CR deletion, got %d", len(rbs))
+	if len(rbs) != 0 {
+		t.Fatalf("expected 0 rolebindings after Auth CR deletion, got %d", len(rbs))
 	}
 }
 
@@ -582,12 +622,86 @@ func TestReconcileCorrectsTamperedRoleRef(t *testing.T) {
 	if viewRB == nil {
 		t.Fatal("mlflow-view RoleBinding not found after correction")
 	}
-	if viewRB.RoleRef.Name != ViewClusterRoleName {
-		t.Fatalf("expected roleRef %q after correction, got %q", ViewClusterRoleName, viewRB.RoleRef.Name)
+	if viewRB.RoleRef.Name != testNamePrefix+ViewClusterRoleBaseName {
+		t.Fatalf("expected roleRef %q after correction, got %q", testNamePrefix+ViewClusterRoleBaseName, viewRB.RoleRef.Name)
 	}
 	viewNames := subjectNames(viewRB.Subjects)
 	if !containsAll(viewNames, []string{"system:authenticated", "rhods-admins"}) {
 		t.Fatalf("expected correct subjects after roleRef correction, got %v", viewNames)
+	}
+}
+
+func TestReconcileHandlesPreExistingUnlabeledRoleBinding(t *testing.T) {
+	preExisting := &rbacv1.RoleBinding{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      RoleBindingViewName,
+			Namespace: "team-a",
+		},
+		RoleRef: rbacv1.RoleRef{
+			APIGroup: "rbac.authorization.k8s.io",
+			Kind:     "ClusterRole",
+			Name:     "some-other-role",
+		},
+	}
+
+	r, c := buildReconciler(t,
+		newLabeledNamespace("team-a", "mlflow"),
+		newMLflowCR("mlflow"),
+		newAuthCR([]string{"system:authenticated"}, []string{"rhods-admins"}),
+		preExisting,
+	)
+
+	reconcileNamespace(t, r, "team-a")
+
+	rbs := getRoleBindings(t, c, "team-a")
+	if len(rbs) != 2 {
+		t.Fatalf("expected 2 rolebindings, got %d", len(rbs))
+	}
+
+	viewRB := findRoleBinding(rbs, RoleBindingViewName)
+	if viewRB == nil {
+		t.Fatal("mlflow-view RoleBinding not found after reconcile")
+	}
+	if viewRB.RoleRef.Name != testNamePrefix+ViewClusterRoleBaseName {
+		t.Fatalf("expected roleRef %q, got %q", testNamePrefix+ViewClusterRoleBaseName, viewRB.RoleRef.Name)
+	}
+}
+
+func TestReconcileCleanupRemovesUnlabeledRoleBindings(t *testing.T) {
+	unlabeledView := &rbacv1.RoleBinding{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      RoleBindingViewName,
+			Namespace: "team-a",
+		},
+		RoleRef: rbacv1.RoleRef{
+			APIGroup: "rbac.authorization.k8s.io",
+			Kind:     "ClusterRole",
+			Name:     testNamePrefix + ViewClusterRoleBaseName,
+		},
+	}
+	unlabeledEdit := &rbacv1.RoleBinding{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      RoleBindingEditName,
+			Namespace: "team-a",
+		},
+		RoleRef: rbacv1.RoleRef{
+			APIGroup: "rbac.authorization.k8s.io",
+			Kind:     "ClusterRole",
+			Name:     testNamePrefix + EditClusterRoleBaseName,
+		},
+	}
+
+	r, c := buildReconciler(t,
+		newUnlabeledNamespace("team-a"),
+		unlabeledView,
+		unlabeledEdit,
+	)
+
+	reconcileNamespace(t, r, "team-a")
+
+	rbs := getRoleBindings(t, c, "team-a")
+	if len(rbs) != 0 {
+		t.Fatalf("expected 0 rolebindings after cleanup of unlabeled bindings, got %d", len(rbs))
 	}
 }
 
@@ -641,15 +755,15 @@ func TestMapRoleBindingToNamespace(t *testing.T) {
 	}
 }
 
-func TestMapRoleBindingToNamespaceSkipsUnmanagedRB(t *testing.T) {
+func TestMapRoleBindingToNamespaceAlwaysEnqueues(t *testing.T) {
 	r, _ := buildReconciler(t)
 
 	rb := &rbacv1.RoleBinding{
 		ObjectMeta: metav1.ObjectMeta{Name: "unmanaged", Namespace: "team-a"},
 	}
 	requests := r.mapRoleBindingToNamespace(context.Background(), rb)
-	if len(requests) != 0 {
-		t.Fatalf("expected 0 requests for unmanaged rb, got %d", len(requests))
+	if len(requests) != 1 || requests[0].Name != "team-a" {
+		t.Fatalf("expected [team-a], got %v", requests)
 	}
 }
 
@@ -698,5 +812,91 @@ func TestBuildGroupSubjects(t *testing.T) {
 	}
 	if subjects[0].Kind != "Group" || subjects[0].APIGroup != "rbac.authorization.k8s.io" {
 		t.Fatalf("unexpected subject: %+v", subjects[0])
+	}
+}
+
+// ---- Predicate filtering tests ----
+
+func TestNamespacePredicateCreateWithLabel(t *testing.T) {
+	p := namespacePredicate()
+	ns := newLabeledNamespace("team-a", "mlflow")
+	if !p.Create(event.CreateEvent{Object: ns}) {
+		t.Fatal("expected predicate to accept Create for labeled namespace")
+	}
+}
+
+func TestNamespacePredicateCreateWithoutLabel(t *testing.T) {
+	p := namespacePredicate()
+	ns := newUnlabeledNamespace("team-a")
+	if p.Create(event.CreateEvent{Object: ns}) {
+		t.Fatal("expected predicate to reject Create for unlabeled namespace")
+	}
+}
+
+func TestNamespacePredicateDeleteWithLabel(t *testing.T) {
+	p := namespacePredicate()
+	ns := newLabeledNamespace("team-a", "mlflow")
+	if !p.Delete(event.DeleteEvent{Object: ns}) {
+		t.Fatal("expected predicate to accept Delete for labeled namespace")
+	}
+}
+
+func TestNamespacePredicateDeleteWithoutLabel(t *testing.T) {
+	p := namespacePredicate()
+	ns := newUnlabeledNamespace("team-a")
+	if p.Delete(event.DeleteEvent{Object: ns}) {
+		t.Fatal("expected predicate to reject Delete for unlabeled namespace")
+	}
+}
+
+func TestNamespacePredicateUpdateLabelAdded(t *testing.T) {
+	p := namespacePredicate()
+	oldNS := newUnlabeledNamespace("team-a")
+	newNS := newLabeledNamespace("team-a", "mlflow")
+	if !p.Update(event.UpdateEvent{ObjectOld: oldNS, ObjectNew: newNS}) {
+		t.Fatal("expected predicate to accept Update when label is added")
+	}
+}
+
+func TestNamespacePredicateUpdateLabelRemoved(t *testing.T) {
+	p := namespacePredicate()
+	oldNS := newLabeledNamespace("team-a", "mlflow")
+	newNS := newUnlabeledNamespace("team-a")
+	if !p.Update(event.UpdateEvent{ObjectOld: oldNS, ObjectNew: newNS}) {
+		t.Fatal("expected predicate to accept Update when label is removed")
+	}
+}
+
+func TestNamespacePredicateUpdateNoLabelNoChange(t *testing.T) {
+	p := namespacePredicate()
+	oldNS := newUnlabeledNamespace("team-a")
+	newNS := newUnlabeledNamespace("team-a")
+	if p.Update(event.UpdateEvent{ObjectOld: oldNS, ObjectNew: newNS}) {
+		t.Fatal("expected predicate to reject Update when unlabeled namespace has no label change")
+	}
+}
+
+func TestNamespacePredicateUpdateHasLabelNoChange(t *testing.T) {
+	p := namespacePredicate()
+	oldNS := newLabeledNamespace("team-a", "mlflow")
+	newNS := newLabeledNamespace("team-a", "mlflow")
+	if !p.Update(event.UpdateEvent{ObjectOld: oldNS, ObjectNew: newNS}) {
+		t.Fatal("expected predicate to accept Update for labeled namespace even without label change")
+	}
+}
+
+func TestNamespacePredicateGenericWithLabel(t *testing.T) {
+	p := namespacePredicate()
+	ns := newLabeledNamespace("team-a", "mlflow")
+	if !p.Generic(event.GenericEvent{Object: ns}) {
+		t.Fatal("expected predicate to accept Generic for labeled namespace")
+	}
+}
+
+func TestNamespacePredicateGenericWithoutLabel(t *testing.T) {
+	p := namespacePredicate()
+	ns := newUnlabeledNamespace("team-a")
+	if p.Generic(event.GenericEvent{Object: ns}) {
+		t.Fatal("expected predicate to reject Generic for unlabeled namespace")
 	}
 }

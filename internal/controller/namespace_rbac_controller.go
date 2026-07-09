@@ -34,6 +34,8 @@ import (
 	controllerbuilder "sigs.k8s.io/controller-runtime/pkg/builder"
 	crcache "sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
@@ -52,13 +54,82 @@ var authGVK = schema.GroupVersionKind{
 // NamespaceRBACReconciler reconciles RoleBindings in namespaces labeled for MLflow workspace access.
 type NamespaceRBACReconciler struct {
 	client.Client
-	Scheme         *runtime.Scheme
-	AuthWatchCache crcache.Cache
+	Scheme              *runtime.Scheme
+	ViewRBWatchCache    crcache.Cache
+	EditRBWatchCache    crcache.Cache
+	ViewClusterRoleName string
+	EditClusterRoleName string
 }
 
-// +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=rolebindings,verbs=create;list;watch
-// +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=rolebindings,resourceNames=mlflow-view;mlflow-edit,verbs=get;update;patch;delete
-// +kubebuilder:rbac:groups=services.platform.opendatahub.io,resources=auths,verbs=get;list;watch
+// +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=rolebindings,verbs=create
+// +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=rolebindings,resourceNames=odh-group-mlflow-view;odh-group-mlflow-edit,verbs=get;list;watch;update;patch;delete
+// +kubebuilder:rbac:groups=services.platform.opendatahub.io,resources=auths,resourceNames=auth,verbs=get;list;watch
+
+// SetupWithManager registers watches for Namespace (primary), Auth CR, MLflow CR, and managed RoleBindings.
+func (r *NamespaceRBACReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	if r.ViewRBWatchCache == nil {
+		return fmt.Errorf("ViewRBWatchCache must be configured")
+	}
+	if r.EditRBWatchCache == nil {
+		return fmt.Errorf("EditRBWatchCache must be configured")
+	}
+	if r.ViewClusterRoleName == "" {
+		return fmt.Errorf("ViewClusterRoleName must be configured")
+	}
+	if r.EditClusterRoleName == "" {
+		return fmt.Errorf("EditClusterRoleName must be configured")
+	}
+
+	authObj := &unstructured.Unstructured{}
+	authObj.SetGroupVersionKind(authGVK)
+
+	// Both RoleBinding watches use dedicated caches with metadata.name field selectors
+	// so that list/watch stays compatible with resourceNames-scoped RBAC.
+	// Two caches are needed because controller-runtime only allows one field selector
+	// per GVK per cache.
+	return ctrl.NewControllerManagedBy(mgr).
+		For(&corev1.Namespace{}, controllerbuilder.WithPredicates(namespacePredicate())).
+		WatchesRawSource(
+			source.Kind(r.ViewRBWatchCache, &rbacv1.RoleBinding{},
+				handler.TypedEnqueueRequestsFromMapFunc(r.mapRoleBindingToNamespace)),
+		).
+		WatchesRawSource(
+			source.Kind(r.EditRBWatchCache, &rbacv1.RoleBinding{},
+				handler.TypedEnqueueRequestsFromMapFunc(r.mapRoleBindingToNamespace)),
+		).
+		Watches(&mlflowv1.MLflow{},
+			handler.EnqueueRequestsFromMapFunc(r.mapMLflowToNamespaces),
+		).
+		Watches(authObj,
+			handler.EnqueueRequestsFromMapFunc(r.mapAuthToNamespaces),
+		).
+		Complete(r)
+}
+
+// namespacePredicate filters namespace events to only those where the workspace
+// label is (or was) present. For Update, both old and new objects are checked so
+// that label removal still triggers reconciliation for cleanup.
+func namespacePredicate() predicate.Predicate {
+	return predicate.Funcs{
+		CreateFunc: func(e event.CreateEvent) bool {
+			_, has := e.Object.GetLabels()[NamespaceWorkspaceLabelKey]
+			return has
+		},
+		UpdateFunc: func(e event.UpdateEvent) bool {
+			_, oldHas := e.ObjectOld.GetLabels()[NamespaceWorkspaceLabelKey]
+			_, newHas := e.ObjectNew.GetLabels()[NamespaceWorkspaceLabelKey]
+			return oldHas || newHas
+		},
+		DeleteFunc: func(e event.DeleteEvent) bool {
+			_, has := e.Object.GetLabels()[NamespaceWorkspaceLabelKey]
+			return has
+		},
+		GenericFunc: func(e event.GenericEvent) bool {
+			_, has := e.Object.GetLabels()[NamespaceWorkspaceLabelKey]
+			return has
+		},
+	}
+}
 
 func (r *NamespaceRBACReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
@@ -68,7 +139,7 @@ func (r *NamespaceRBACReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		if errors.IsNotFound(err) {
 			return ctrl.Result{}, nil
 		}
-		return ctrl.Result{}, err
+		return ctrl.Result{}, fmt.Errorf("failed to get Namespace %s: %w", req.Name, err)
 	}
 
 	mlflowCRName, hasLabel := ns.Labels[NamespaceWorkspaceLabelKey]
@@ -82,19 +153,19 @@ func (r *NamespaceRBACReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 			log.V(1).Info("MLflow CR not found, cleaning up namespace RBAC", "mlflowCR", mlflowCRName, "namespace", req.Name)
 			return ctrl.Result{}, r.cleanupRoleBindings(ctx, req.Name)
 		}
-		return ctrl.Result{}, err
+		return ctrl.Result{}, fmt.Errorf("failed to get MLflow CR %s: %w", mlflowCRName, err)
 	}
 
 	allowedGroups, adminGroups, err := r.getAuthGroups(ctx)
 	if err != nil {
 		if errors.IsNotFound(err) {
-			log.V(1).Info("Auth CR not found, requeueing", "namespace", req.Name)
-			return ctrl.Result{RequeueAfter: 30_000_000_000}, nil // 30s
+			log.V(1).Info("Auth CR not found, cleaning up namespace RBAC", "namespace", req.Name)
+			return ctrl.Result{}, r.cleanupRoleBindings(ctx, req.Name)
 		}
-		return ctrl.Result{}, err
+		return ctrl.Result{}, fmt.Errorf("failed to get auth groups: %w", err)
 	}
 
-	if err := r.applyRoleBindings(ctx, req.Name, allowedGroups, adminGroups); err != nil {
+	if err := r.applyRoleBindings(ctx, req.Name, mlflow, allowedGroups, adminGroups); err != nil {
 		return ctrl.Result{}, err
 	}
 
@@ -130,13 +201,19 @@ func (r *NamespaceRBACReconciler) getAuthGroups(ctx context.Context) (allowedGro
 	return allowedGroups, adminGroups, nil
 }
 
-func (r *NamespaceRBACReconciler) applyRoleBindings(ctx context.Context, namespace string, allowedGroups, adminGroups []string) error {
+func (r *NamespaceRBACReconciler) rbReader(name string) client.Reader {
+	if name == RoleBindingViewName {
+		return r.ViewRBWatchCache
+	}
+	return r.EditRBWatchCache
+}
+
+func (r *NamespaceRBACReconciler) applyRoleBindings(ctx context.Context, namespace string, mlflow *mlflowv1.MLflow, allowedGroups, adminGroups []string) error {
 	viewSubjects := buildGroupSubjects(uniqueGroups(allowedGroups, adminGroups))
 	editSubjects := buildGroupSubjects(adminGroups)
 
 	managedLabels := map[string]string{
-		NamespaceRBACLabelKey: "true",
-		ManagedByLabelKey:     ManagedByLabelValue,
+		ManagedByLabelKey: ManagedByLabelValue,
 	}
 
 	viewRB := &rbacv1.RoleBinding{
@@ -149,7 +226,7 @@ func (r *NamespaceRBACReconciler) applyRoleBindings(ctx context.Context, namespa
 		RoleRef: rbacv1.RoleRef{
 			APIGroup: "rbac.authorization.k8s.io",
 			Kind:     "ClusterRole",
-			Name:     ViewClusterRoleName,
+			Name:     r.ViewClusterRoleName,
 		},
 		Subjects: viewSubjects,
 	}
@@ -164,15 +241,21 @@ func (r *NamespaceRBACReconciler) applyRoleBindings(ctx context.Context, namespa
 		RoleRef: rbacv1.RoleRef{
 			APIGroup: "rbac.authorization.k8s.io",
 			Kind:     "ClusterRole",
-			Name:     EditClusterRoleName,
+			Name:     r.EditClusterRoleName,
 		},
 		Subjects: editSubjects,
 	}
 
 	log := logf.FromContext(ctx)
 	for _, rb := range []*rbacv1.RoleBinding{viewRB, editRB} {
+		if err := controllerutil.SetControllerReference(mlflow, rb, r.Scheme); err != nil {
+			return fmt.Errorf("failed to set owner reference on RoleBinding %s/%s: %w", rb.Namespace, rb.Name, err)
+		}
+
 		existing := &rbacv1.RoleBinding{}
-		err := r.Get(ctx, client.ObjectKeyFromObject(rb), existing)
+		err := r.rbReader(rb.Name).Get(ctx, client.ObjectKeyFromObject(rb), existing)
+		// roleRef is immutable; a mismatch requires delete + recreate.
+		// https://kubernetes.io/docs/reference/access-authn-authz/rbac/#rolebinding-and-clusterrolebinding
 		if err == nil && existing.RoleRef != rb.RoleRef {
 			log.Info("RoleBinding roleRef mismatch detected, deleting before re-apply",
 				"rolebinding", rb.Name, "namespace", rb.Namespace,
@@ -192,55 +275,23 @@ func (r *NamespaceRBACReconciler) applyRoleBindings(ctx context.Context, namespa
 }
 
 func (r *NamespaceRBACReconciler) cleanupRoleBindings(ctx context.Context, namespace string) error {
-	rbList := &rbacv1.RoleBindingList{}
-	if err := r.List(ctx, rbList,
-		client.InNamespace(namespace),
-		client.MatchingLabels{NamespaceRBACLabelKey: "true"},
-	); err != nil {
-		return err
-	}
-	for i := range rbList.Items {
-		if err := r.Delete(ctx, &rbList.Items[i]); err != nil && !errors.IsNotFound(err) {
-			return err
+	for _, name := range []string{RoleBindingViewName, RoleBindingEditName} {
+		existing := &rbacv1.RoleBinding{}
+		err := r.rbReader(name).Get(ctx, types.NamespacedName{Name: name, Namespace: namespace}, existing)
+		if errors.IsNotFound(err) {
+			continue
+		}
+		if err != nil {
+			return fmt.Errorf("failed to get RoleBinding %s/%s for cleanup: %w", namespace, name, err)
+		}
+		if err := r.Delete(ctx, existing); err != nil && !errors.IsNotFound(err) {
+			return fmt.Errorf("failed to delete RoleBinding %s/%s: %w", namespace, name, err)
 		}
 	}
 	return nil
 }
 
-// SetupWithManager registers watches for Namespace (primary), Auth CR, MLflow CR, and managed RoleBindings.
-func (r *NamespaceRBACReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	if r.AuthWatchCache == nil {
-		return fmt.Errorf("AuthWatchCache must be configured")
-	}
-
-	authObj := &unstructured.Unstructured{}
-	authObj.SetGroupVersionKind(authGVK)
-
-	return ctrl.NewControllerManagedBy(mgr).
-		For(&corev1.Namespace{}, controllerbuilder.WithPredicates(predicate.Or(
-			predicate.NewPredicateFuncs(func(obj client.Object) bool {
-				_, hasLabel := obj.GetLabels()[NamespaceWorkspaceLabelKey]
-				return hasLabel
-			}),
-			predicate.LabelChangedPredicate{},
-		))).
-		Watches(&rbacv1.RoleBinding{},
-			handler.EnqueueRequestsFromMapFunc(r.mapRoleBindingToNamespace),
-		).
-		Watches(&mlflowv1.MLflow{},
-			handler.EnqueueRequestsFromMapFunc(r.mapMLflowToNamespaces),
-		).
-		WatchesRawSource(
-			source.Kind(
-				r.AuthWatchCache,
-				authObj,
-				handler.TypedEnqueueRequestsFromMapFunc(r.mapAuthToNamespaces),
-			),
-		).
-		Complete(r)
-}
-
-func (r *NamespaceRBACReconciler) mapAuthToNamespaces(ctx context.Context, obj *unstructured.Unstructured) []reconcile.Request {
+func (r *NamespaceRBACReconciler) mapAuthToNamespaces(ctx context.Context, obj client.Object) []reconcile.Request {
 	if obj.GetName() != AuthCRName {
 		return nil
 	}
@@ -249,24 +300,20 @@ func (r *NamespaceRBACReconciler) mapAuthToNamespaces(ctx context.Context, obj *
 
 func (r *NamespaceRBACReconciler) mapMLflowToNamespaces(ctx context.Context, obj client.Object) []reconcile.Request {
 	nsList := &corev1.NamespaceList{}
-	if err := r.List(ctx, nsList, client.HasLabels{NamespaceWorkspaceLabelKey}); err != nil {
+	if err := r.List(ctx, nsList, client.MatchingLabels{NamespaceWorkspaceLabelKey: obj.GetName()}); err != nil {
+		logf.FromContext(ctx).Error(err, "Failed to list namespaces for MLflow fan-out", "mlflow", obj.GetName())
 		return nil
 	}
-	var requests []reconcile.Request
+	requests := make([]reconcile.Request, 0, len(nsList.Items))
 	for _, ns := range nsList.Items {
-		if ns.Labels[NamespaceWorkspaceLabelKey] == obj.GetName() {
-			requests = append(requests, reconcile.Request{
-				NamespacedName: types.NamespacedName{Name: ns.Name},
-			})
-		}
+		requests = append(requests, reconcile.Request{
+			NamespacedName: types.NamespacedName{Name: ns.Name},
+		})
 	}
 	return requests
 }
 
-func (r *NamespaceRBACReconciler) mapRoleBindingToNamespace(ctx context.Context, obj client.Object) []reconcile.Request {
-	if obj.GetLabels()[NamespaceRBACLabelKey] != "true" {
-		return nil
-	}
+func (r *NamespaceRBACReconciler) mapRoleBindingToNamespace(_ context.Context, obj *rbacv1.RoleBinding) []reconcile.Request {
 	return []reconcile.Request{{
 		NamespacedName: types.NamespacedName{Name: obj.GetNamespace()},
 	}}
@@ -275,6 +322,7 @@ func (r *NamespaceRBACReconciler) mapRoleBindingToNamespace(ctx context.Context,
 func (r *NamespaceRBACReconciler) listLabeledNamespaceRequests(ctx context.Context) []reconcile.Request {
 	nsList := &corev1.NamespaceList{}
 	if err := r.List(ctx, nsList, client.HasLabels{NamespaceWorkspaceLabelKey}); err != nil {
+		logf.FromContext(ctx).Error(err, "Failed to list labeled namespaces")
 		return nil
 	}
 	requests := make([]reconcile.Request, 0, len(nsList.Items))
@@ -312,15 +360,16 @@ func uniqueGroups(slices ...[]string) []string {
 	return result
 }
 
-// NewAuthWatchCache creates a dedicated cache for the singleton Auth CR.
-func NewAuthWatchCache(cfg *rest.Config, scheme *runtime.Scheme) (crcache.Cache, error) {
-	authObj := &unstructured.Unstructured{}
-	authObj.SetGroupVersionKind(authGVK)
-	authFieldSelector := fields.OneTermEqualSelector("metadata.name", AuthCRName)
+func NewRoleBindingWatchCache(cfg *rest.Config, scheme *runtime.Scheme, name string) (crcache.Cache, error) {
 	return crcache.New(cfg, crcache.Options{
 		Scheme: scheme,
 		ByObject: map[client.Object]crcache.ByObject{
-			authObj: {Field: authFieldSelector},
+			&rbacv1.RoleBinding{}: {
+				Field: fields.OneTermEqualSelector("metadata.name", name),
+				Namespaces: map[string]crcache.Config{
+					crcache.AllNamespaces: {},
+				},
+			},
 		},
 	})
 }
