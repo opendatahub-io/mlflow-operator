@@ -1,0 +1,9 @@
+repos:
+  - repo: local
+    hooks:
+      - id: golangci-lint
+        name: golangci-lint
+        entry: make lint-fix
+        language: system
+        pass_filenames: false
+        types: [go]
