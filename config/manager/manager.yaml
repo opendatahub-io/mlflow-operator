@@ -53,7 +53,8 @@ spec:
         - name: ENABLE_NAMESPACE_RBAC
           value: "false"
         - name: RESOURCE_NAME_PREFIX
-          value: placeholder-resource-name-prefix
+          # Must match namePrefix in config/base/kustomization.yaml
+          value: mlflow-operator-
         ports: []
         securityContext:
           readOnlyRootFilesystem: true

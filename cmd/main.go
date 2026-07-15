@@ -349,7 +349,6 @@ func main() {
 	}
 
 	// Conditionally configure namespace RBAC controller cache entries
-	authAvailable := false
 	if operatorConfig.EnableNamespaceRBAC {
 		setupLog.Info(
 			"Namespace RBAC controller enabled; waiting for Auth CRD before controller setup",
@@ -366,7 +365,6 @@ func main() {
 			setupLog.Error(err, "Namespace RBAC controller enabled but Auth CRD did not become available")
 			os.Exit(1)
 		}
-		authAvailable = true
 		setupLog.Info("Auth CRD available, adding Auth to cache")
 		authObj := &unstructured.Unstructured{}
 		authObj.SetGroupVersionKind(schema.GroupVersionKind{
@@ -476,7 +474,7 @@ func main() {
 	} else {
 		setupLog.Info("MLflowOperator controller disabled; keeping legacy module ownership path inactive")
 	}
-	if operatorConfig.EnableNamespaceRBAC && authAvailable {
+	if operatorConfig.EnableNamespaceRBAC {
 		viewRBWatchCache, err := controller.NewRoleBindingWatchCache(cfg, scheme, controller.RoleBindingViewName)
 		if err != nil {
 			setupLog.Error(err, "unable to create RoleBinding view watch cache")

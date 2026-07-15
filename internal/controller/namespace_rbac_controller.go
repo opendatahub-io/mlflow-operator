@@ -63,6 +63,7 @@ type NamespaceRBACReconciler struct {
 
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=rolebindings,verbs=create
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=rolebindings,resourceNames=odh-group-mlflow-view;odh-group-mlflow-edit,verbs=get;list;watch;update;patch;delete
+// +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterroles,resourceNames=mlflow-operator-mlflow-view;mlflow-operator-mlflow-edit,verbs=bind
 // +kubebuilder:rbac:groups=services.platform.opendatahub.io,resources=auths,resourceNames=auth,verbs=get;list;watch
 
 // SetupWithManager registers watches for Namespace (primary), Auth CR, MLflow CR, and managed RoleBindings.
