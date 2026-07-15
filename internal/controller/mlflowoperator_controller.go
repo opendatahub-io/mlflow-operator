@@ -21,15 +21,20 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/Masterminds/semver/v3"
+	corev1 "k8s.io/api/core/v1"
 	apiequality "k8s.io/apimachinery/pkg/api/equality"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
+	controllerbuilder "sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	modulev1alpha1 "github.com/opendatahub-io/mlflow-operator/api/mlflowoperator/v1alpha1"
@@ -44,12 +49,19 @@ const (
 	mlflowInstancesReason   = "MLflowInstancesPresent"
 	phaseProgressing        = "Progressing"
 	phaseReady              = "Ready"
+	platformConfigMapName   = "odh-mlflowoperator-config"
+	platformVersionKey      = "platformVersion"
+	platformReleaseName     = "platform"
+	mlflowReleaseName       = "MLflow"
+	mlflowRepoURL           = "https://github.com/mlflow/mlflow"
+	maxReleaseVersionLength = 64
 )
 
 // MLflowOperatorReconciler reconciles the singleton MLflowOperator module CR.
 type MLflowOperatorReconciler struct {
 	client.Client
-	Scheme *runtime.Scheme
+	Scheme                *runtime.Scheme
+	ApplicationsNamespace string
 }
 
 // +kubebuilder:rbac:groups=components.platform.opendatahub.io,resources=mlflowoperators,verbs=get;list;watch;update;patch
@@ -128,6 +140,13 @@ func (r *MLflowOperatorReconciler) SetupWithManager(mgr ctrl.Manager) error {
 				}}
 			}),
 		).
+		Watches(
+			&corev1.ConfigMap{},
+			handler.EnqueueRequestsFromMapFunc(r.platformConfigToMLflowOperatorRequests),
+			controllerbuilder.WithPredicates(predicate.NewPredicateFuncs(func(obj client.Object) bool {
+				return obj.GetName() == platformConfigMapName
+			})),
+		).
 		Complete(r)
 }
 
@@ -140,6 +159,11 @@ func (r *MLflowOperatorReconciler) updateModuleStatus(
 	updated := module.DeepCopy()
 	updated.Status.Phase = phaseForReadyCondition(status)
 	updated.Status.ObservedGeneration = updated.Generation
+	releases, err := r.desiredModuleReleases(ctx)
+	if err != nil {
+		return err
+	}
+	updated.Status.Releases = releases
 	setModuleStatusCondition(&updated.Status.Conditions, modulev1alpha1.Condition{
 		Type:               readyConditionType,
 		Status:             status,
@@ -158,6 +182,66 @@ func (r *MLflowOperatorReconciler) updateModuleStatus(
 	}
 
 	module.Status = updated.Status
+	return nil
+}
+
+func (r *MLflowOperatorReconciler) desiredModuleReleases(ctx context.Context) ([]modulev1alpha1.ComponentRelease, error) {
+	releases := make([]modulev1alpha1.ComponentRelease, 0, 2)
+	if SupportedMLflowVersion != "" {
+		releases = append(releases, modulev1alpha1.ComponentRelease{
+			Name:    mlflowReleaseName,
+			Version: SupportedMLflowVersion,
+			RepoURL: mlflowRepoURL,
+		})
+	}
+
+	appsNamespace := r.ApplicationsNamespace
+	if appsNamespace == "" {
+		return releases, nil
+	}
+
+	cm := &corev1.ConfigMap{}
+	if err := r.Get(ctx, types.NamespacedName{
+		Name:      platformConfigMapName,
+		Namespace: appsNamespace,
+	}, cm); err != nil {
+		if apierrors.IsNotFound(err) {
+			return releases, nil
+		}
+		return nil, fmt.Errorf("get platform config ConfigMap %s/%s: %w", appsNamespace, platformConfigMapName, err)
+	}
+
+	if platformVersion := cm.Data[platformVersionKey]; platformVersion != "" {
+		if err := validateReleaseVersion(platformVersion); err != nil {
+			return nil, fmt.Errorf("invalid platform version in %s/%s: %w", appsNamespace, platformConfigMapName, err)
+		}
+		releases = append([]modulev1alpha1.ComponentRelease{{
+			Name:    platformReleaseName,
+			Version: platformVersion,
+		}}, releases...)
+	}
+
+	return releases, nil
+}
+
+func (r *MLflowOperatorReconciler) platformConfigToMLflowOperatorRequests(_ context.Context, obj client.Object) []reconcile.Request {
+	appsNamespace := r.ApplicationsNamespace
+	if appsNamespace == "" || obj.GetNamespace() != appsNamespace {
+		return nil
+	}
+
+	return []reconcile.Request{{
+		NamespacedName: types.NamespacedName{Name: modulev1alpha1.MLflowOperatorInstanceName},
+	}}
+}
+
+func validateReleaseVersion(version string) error {
+	if len(version) > maxReleaseVersionLength {
+		return fmt.Errorf("release version length %d exceeds maximum %d", len(version), maxReleaseVersionLength)
+	}
+	if _, err := semver.NewVersion(strings.TrimPrefix(version, "v")); err != nil {
+		return fmt.Errorf("parse semantic version %q: %w", version, err)
+	}
 	return nil
 }
 

@@ -431,8 +431,9 @@ func main() {
 	// Only turn on the new MLflowOperator ownership path during the coordinated ODH handoff.
 	if operatorConfig.EnableMLflowOperatorModuleController {
 		if err := (&controller.MLflowOperatorReconciler{
-			Client: mgr.GetClient(),
-			Scheme: mgr.GetScheme(),
+			Client:                mgr.GetClient(),
+			Scheme:                mgr.GetScheme(),
+			ApplicationsNamespace: operatorConfig.ApplicationsNamespace,
 		}).SetupWithManager(mgr); err != nil {
 			setupLog.Error(err, "unable to create controller", "controller", "MLflowOperator")
 			os.Exit(1)
