@@ -19,6 +19,7 @@ package controller
 import (
 	"testing"
 
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
@@ -281,6 +282,96 @@ func TestRenderChart(t *testing.T) {
 			}
 			if !tt.wantErr && tt.validateObjs != nil {
 				tt.validateObjs(t, objs)
+			}
+		})
+	}
+}
+
+func TestRenderChartReadReplicaBackendStore(t *testing.T) {
+	renderer := NewHelmRenderer("../../charts/mlflow")
+	readReplicaURI := "postgresql://reader:5432/mlflow"
+
+	tests := []struct {
+		name           string
+		configure      func(*mlflowv1.MLflow)
+		wantPresent    bool
+		wantValue      string
+		wantSecretName string
+		wantSecretKey  string
+	}{
+		{
+			name: "direct URI",
+			configure: func(mlflow *mlflowv1.MLflow) {
+				mlflow.Spec.ReadReplicaBackendStoreURI = &readReplicaURI
+			},
+			wantPresent: true,
+			wantValue:   readReplicaURI,
+		},
+		{
+			name: "secret reference",
+			configure: func(mlflow *mlflowv1.MLflow) {
+				mlflow.Spec.ReadReplicaBackendStoreURIFrom = &corev1.SecretKeySelector{
+					LocalObjectReference: corev1.LocalObjectReference{Name: "db-credentials"},
+					Key:                  "read-replica-uri",
+				}
+			},
+			wantPresent:    true,
+			wantSecretName: "db-credentials",
+			wantSecretKey:  "read-replica-uri",
+		},
+		{
+			name:        "unset",
+			configure:   func(*mlflowv1.MLflow) {},
+			wantPresent: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mlflow := &mlflowv1.MLflow{
+				ObjectMeta: metav1.ObjectMeta{Name: "mlflow"},
+				Spec: mlflowv1.MLflowSpec{
+					BackendStoreURI: ptr("postgresql://writer:5432/mlflow"),
+				},
+			}
+			tt.configure(mlflow)
+
+			objs, err := renderer.RenderChart(mlflow, "test-ns", RenderOptions{}, nil)
+			if err != nil {
+				t.Fatalf("RenderChart() error = %v", err)
+			}
+			deployment, err := renderedDeployment(objs, "mlflow", "test-ns")
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			var replicaEnv *corev1.EnvVar
+			for i := range deployment.Spec.Template.Spec.Containers[0].Env {
+				env := &deployment.Spec.Template.Spec.Containers[0].Env[i]
+				if env.Name == readReplicaBackendStoreURIEnvName {
+					replicaEnv = env
+					break
+				}
+			}
+			if !tt.wantPresent {
+				if replicaEnv != nil {
+					t.Fatalf("unexpected %s environment variable", readReplicaBackendStoreURIEnvName)
+				}
+				return
+			}
+			if replicaEnv == nil {
+				t.Fatalf("missing %s environment variable", readReplicaBackendStoreURIEnvName)
+			}
+			if replicaEnv.Value != tt.wantValue {
+				t.Errorf("replica env value = %q, want %q", replicaEnv.Value, tt.wantValue)
+			}
+			if tt.wantSecretName != "" {
+				if replicaEnv.ValueFrom == nil || replicaEnv.ValueFrom.SecretKeyRef == nil {
+					t.Fatal("replica environment variable does not use secretKeyRef")
+				}
+				if replicaEnv.ValueFrom.SecretKeyRef.Name != tt.wantSecretName || replicaEnv.ValueFrom.SecretKeyRef.Key != tt.wantSecretKey {
+					t.Errorf("replica secretKeyRef = %s/%s, want %s/%s", replicaEnv.ValueFrom.SecretKeyRef.Name, replicaEnv.ValueFrom.SecretKeyRef.Key, tt.wantSecretName, tt.wantSecretKey)
+				}
 			}
 		})
 	}

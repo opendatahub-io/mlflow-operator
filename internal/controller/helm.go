@@ -349,6 +349,24 @@ func (h *HelmRenderer) mlflowToHelmValues(
 		backendStoreURI = defaultBackendStoreURI
 	}
 
+	// ReadReplicaBackendStoreURI is optional; when omitted, MLflow routes reads
+	// to the primary backend store.
+	readReplicaBackendStoreURI := ""
+	var readReplicaBackendStoreURIFrom map[string]interface{}
+	if mlflow.Spec.ReadReplicaBackendStoreURIFrom != nil {
+		readReplicaBackendStoreURIFrom = map[string]interface{}{
+			"secretKeyRef": map[string]interface{}{
+				"name": mlflow.Spec.ReadReplicaBackendStoreURIFrom.Name,
+				"key":  mlflow.Spec.ReadReplicaBackendStoreURIFrom.Key,
+			},
+		}
+		if mlflow.Spec.ReadReplicaBackendStoreURIFrom.Optional != nil {
+			readReplicaBackendStoreURIFrom["secretKeyRef"].(map[string]interface{})["optional"] = *mlflow.Spec.ReadReplicaBackendStoreURIFrom.Optional
+		}
+	} else if mlflow.Spec.ReadReplicaBackendStoreURI != nil {
+		readReplicaBackendStoreURI = *mlflow.Spec.ReadReplicaBackendStoreURI
+	}
+
 	// RegistryStoreURI: defaults to backendStoreUri when omitted (per API contract)
 	// Prefer secret ref over direct value
 	var registryStoreURIFrom map[string]interface{}
@@ -407,17 +425,18 @@ func (h *HelmRenderer) mlflowToHelmValues(
 	}
 
 	mlflowConfig := map[string]interface{}{
-		"backendStoreUri":      backendStoreURI,
-		"registryStoreUri":     registryStoreURI,
-		"artifactsDestination": artifactsDest,
-		"defaultArtifactRoot":  defaultArtifactRoot,
-		"enableWorkspaces":     true,
-		"workspaceStoreUri":    "kubernetes://",
-		"serveArtifacts":       serveArtifacts,
-		"workers":              workers,
-		"port":                 8443,
-		"allowedHosts":         allowedHosts,
-		"staticPrefix":         StaticPrefix, // Hardcoded for operator deployments
+		"backendStoreUri":            backendStoreURI,
+		"readReplicaBackendStoreUri": readReplicaBackendStoreURI,
+		"registryStoreUri":           registryStoreURI,
+		"artifactsDestination":       artifactsDest,
+		"defaultArtifactRoot":        defaultArtifactRoot,
+		"enableWorkspaces":           true,
+		"workspaceStoreUri":          "kubernetes://",
+		"serveArtifacts":             serveArtifacts,
+		"workers":                    workers,
+		"port":                       8443,
+		"allowedHosts":               allowedHosts,
+		"staticPrefix":               StaticPrefix, // Hardcoded for operator deployments
 	}
 
 	if workspaceLabelSelector != "" {
@@ -427,6 +446,9 @@ func (h *HelmRenderer) mlflowToHelmValues(
 	// Add secret references if provided
 	if backendStoreURIFrom != nil {
 		mlflowConfig["backendStoreUriFrom"] = backendStoreURIFrom
+	}
+	if readReplicaBackendStoreURIFrom != nil {
+		mlflowConfig["readReplicaBackendStoreUriFrom"] = readReplicaBackendStoreURIFrom
 	}
 	if registryStoreURIFrom != nil {
 		mlflowConfig["registryStoreUriFrom"] = registryStoreURIFrom

@@ -53,8 +53,8 @@ for chart_dir in charts/*/; do
         chart_name=$(basename "$chart_dir")
         echo "Checking chart: $chart_name"
 
-        DIRECT_URI_SETS="mlflow.backendStoreUri=sqlite:////mlflow/mlflow.db,mlflow.registryStoreUri=postgresql://registry-db/mlflow"
-        SECRETREF_SETS="mlflow.backendStoreUriFrom.secretKeyRef.name=db-creds,mlflow.backendStoreUriFrom.secretKeyRef.key=backend-uri,mlflow.registryStoreUriFrom.secretKeyRef.name=db-creds,mlflow.registryStoreUriFrom.secretKeyRef.key=registry-uri"
+        DIRECT_URI_SETS="mlflow.backendStoreUri=sqlite:////mlflow/mlflow.db,mlflow.readReplicaBackendStoreUri=sqlite:////mlflow/mlflow-read.db,mlflow.registryStoreUri=sqlite:////mlflow/mlflow.db"
+        SECRETREF_SETS="mlflow.backendStoreUriFrom.secretKeyRef.name=db-creds,mlflow.backendStoreUriFrom.secretKeyRef.key=backend-uri,mlflow.readReplicaBackendStoreUriFrom.secretKeyRef.name=db-creds,mlflow.readReplicaBackendStoreUriFrom.secretKeyRef.key=read-replica-uri,mlflow.registryStoreUriFrom.secretKeyRef.name=db-creds,mlflow.registryStoreUriFrom.secretKeyRef.key=backend-uri"
         chart_failed=0
 
         # Lint the chart (direct URI path)
@@ -95,6 +95,16 @@ for chart_dir in charts/*/; do
             echo -e "  ${RED}✗ Template failed to render${NC}"
             helm template test "$chart_dir" --set "$SECRETREF_SETS" || true
             chart_failed=1
+        fi
+
+        echo "  Rejecting malformed read-replica secret ref..."
+        if helm template test "$chart_dir" \
+            --set "mlflow.backendStoreUri=sqlite:////mlflow/mlflow.db" \
+            --set "mlflow.readReplicaBackendStoreUriFrom.secretKeyRef.name=db-creds" > /dev/null 2>&1; then
+            echo -e "  ${RED}✗ Malformed read-replica secret ref was accepted${NC}"
+            chart_failed=1
+        else
+            echo -e "  ${GREEN}✓ Malformed read-replica secret ref rejected${NC}"
         fi
 
         if [ "$chart_failed" -ne 0 ]; then

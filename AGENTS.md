@@ -166,7 +166,7 @@ The Helm chart does not create an OpenShift Route. Create your own Route if you 
 
 The MLflow CR spec fields map directly to Helm chart values. See example configurations:
 - `config/samples/mlflow_v1_mlflow.yaml` - Local storage (SQLite + file-based artifacts) with a commented DRA example
-- `config/samples/mlflow_v1_mlflow_remote_storage.yaml` - Remote storage (PostgreSQL + S3)
+- `config/samples/mlflow_v1_mlflow_remote_storage.yaml` - PostgreSQL primary/read-replica routing + S3
 
 ### Storage Configuration
 
@@ -218,6 +218,8 @@ spec:
         name: aws-credentials
 ```
 
+Optional read-replica routing is configured with exactly one of `readReplicaBackendStoreUri` or `readReplicaBackendStoreUriFrom`. The replica must already have a compatible schema. One replica URI is used for both tracking and model-registry reads, so deployments with separate tracking and registry databases should configure it only when that endpoint can correctly serve both stores.
+
 ### Operator-managed database migration
 
 - `spec.migration.mode` controls operator-managed migration behavior:
@@ -234,6 +236,7 @@ spec:
 - For ODH/RHOAI MLflow images that ship `mlflow.store.db.migration_gap`, the operator-managed migration Job runs the backend-only RHOAI `3.3 -> 3.4` gap repair before the generic MLflow migration logic; this replaced the earlier Deployment init-container approach
 - The presence-based `mlflow.opendatahub.io/force-migrate` annotation forces a one-shot migration; the operator clears it after a successful forced run, and if a finished Job already exists for the current desired generation, the operator deletes it first so it can create the replacement Job with the same generated name. Terminal migration failures instruct admins to use that annotation after fixing the issue.
 - When backend and registry store URIs differ, the migration Job must handle them independently and only advance `status.version` after both succeed
+- Migration Jobs must explicitly neutralize `MLFLOW_READ_REPLICA_BACKEND_STORE_URI`; schema initialization and upgrades always target the primary backend and registry stores
 
 ## Testing
 
@@ -347,7 +350,7 @@ The `config/samples/` directory contains example MLflow custom resource configur
    - Shows upstreamCASecret configuration
 
 4. **mlflow_v1_mlflow_remote_storage.yaml** - Remote storage with garbage collection
-   - PostgreSQL for metadata
+   - PostgreSQL primary/read-replica routing for metadata
    - S3 for artifacts
    - No PVC required (fully remote)
    - Multi-replica deployment

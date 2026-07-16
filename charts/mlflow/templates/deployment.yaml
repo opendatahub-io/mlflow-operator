@@ -8,6 +8,13 @@
 {{- fail "mlflow.backendStoreUriFrom.secretKeyRef must include non-empty 'name' and 'key'" }}
 {{- end }}
 {{- end }}
+{{- with .Values.mlflow.readReplicaBackendStoreUriFrom }}
+{{- if not .secretKeyRef }}
+{{- fail "mlflow.readReplicaBackendStoreUriFrom.secretKeyRef must include non-empty 'name' and 'key'" }}
+{{- else if or (not .secretKeyRef.name) (not .secretKeyRef.key) }}
+{{- fail "mlflow.readReplicaBackendStoreUriFrom.secretKeyRef must include non-empty 'name' and 'key'" }}
+{{- end }}
+{{- end }}
 {{- with .Values.mlflow.registryStoreUriFrom }}
 {{- if not .secretKeyRef }}
 {{- fail "mlflow.registryStoreUriFrom.secretKeyRef must include non-empty 'name' and 'key'" }}
@@ -159,6 +166,15 @@ spec:
               {{- else }}
               value: {{ .Values.mlflow.backendStoreUri | quote }}
               {{- end }}
+            {{- if or .Values.mlflow.readReplicaBackendStoreUri .Values.mlflow.readReplicaBackendStoreUriFrom }}
+            - name: MLFLOW_READ_REPLICA_BACKEND_STORE_URI
+              {{- if .Values.mlflow.readReplicaBackendStoreUriFrom }}
+              valueFrom:
+                {{- toYaml .Values.mlflow.readReplicaBackendStoreUriFrom | nindent 16 }}
+              {{- else }}
+              value: {{ .Values.mlflow.readReplicaBackendStoreUri | quote }}
+              {{- end }}
+            {{- end }}
             {{- if or .Values.mlflow.registryStoreUri .Values.mlflow.registryStoreUriFrom }}
             - name: MLFLOW_REGISTRY_STORE_URI
               {{- if .Values.mlflow.registryStoreUriFrom }}
