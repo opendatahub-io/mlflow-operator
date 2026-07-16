@@ -755,17 +755,17 @@ class MLflowDeployer:
             "apiVersion": "mlflow.opendatahub.io/v1",
             "kind": "MLflow",
             "metadata": {
-                "name": "mlflow",
-                "namespace": self.args.namespace
-            },
-            "spec": {
-                "image": {
-                    "image": self.args.mlflow_image,
-                    "imagePullPolicy": self.mlflow_image_pull_policy()
-                }
+         "name": "mlflow",
+         "namespace": self.args.namespace
+        },
+        "spec": {
+            "workers": self.args.workers,
+            "image": {
+                "image": self.args.mlflow_image,
+                "imagePullPolicy": self.mlflow_image_pull_policy()
             }
         }
-
+    }
         # Configure backend store
         if use_postgres_backend:
             mlflow_cr["spec"]["backendStoreUriFrom"] = {
@@ -1349,7 +1349,12 @@ def main():
     parser.add_argument("--skip-infrastructure", action="store_true", default=False,
                        help="Skip deploying PostgreSQL and SeaweedFS (assume they are pre-existing); "
                             "credentials secrets are still created")
-
+    parser.add_argument(
+    "--workers",
+    type=int,
+    default=1,
+    help="Number of MLflow workers"
+    )
     # Storage configuration
     parser.add_argument("--backend-store", choices=["sqlite", "postgres"],
                        default="sqlite", help="Backend store type")
