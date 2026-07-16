@@ -86,6 +86,21 @@ mlflow:
   #       optional: false
   backendStoreUriFrom: {}
 
+  # Optional read-only replica URI for backend-store reads. Writes continue to use
+  # the primary backend store. If unset, all operations use the primary backend store.
+  # Important: For URIs containing credentials, use readReplicaBackendStoreUriFrom.
+  # readReplicaBackendStoreUri: "postgresql://reader-db:5432/mlflow"
+
+  # Read-replica backend store URI from secret (preferred for URIs with credentials)
+  # When used via the operator, this is mutually exclusive with readReplicaBackendStoreUri.
+  # Example:
+  #   readReplicaBackendStoreUriFrom:
+  #     secretKeyRef:
+  #       name: mlflow-db-credentials
+  #       key: read-replica-backend-store-uri
+  #       optional: false
+  readReplicaBackendStoreUriFrom: {}
+
   # Registry store URI (where MLflow stores model registry metadata)
   # If empty, uses the same value as backendStoreUri
   # Note: For URIs containing credentials, use registryStoreUriFrom instead

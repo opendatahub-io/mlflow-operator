@@ -45,18 +45,19 @@ import (
 )
 
 const (
-	forceMigrateAnnotation    = "mlflow.opendatahub.io/force-migrate"
-	migrationConditionType    = "Migration"
-	migrationJobContainerName = "db-migrate"
-	MigrationJobLabelKey      = "mlflow.opendatahub.io/migration-job"
-	migrationJobInstanceLabel = "mlflow.opendatahub.io/migration-instance"
-	supportedVersionEnvName   = "SUPPORTED_MLFLOW_VERSION"
-	migrationJobRequeueAfter  = 5 * time.Minute
-	migrationRetryDelay       = 2 * time.Minute
-	migrationRetryDeleteDelay = 2 * time.Second
-	migrationJobCommand       = `exec python3.12 -c "$MIGRATION_PYTHON_SCRIPT"`
-	migrationJobBackoffLimit  = int32(3)
-	migrationJobTTLSeconds    = int32(24 * 60 * 60) // 24 hours
+	forceMigrateAnnotation            = "mlflow.opendatahub.io/force-migrate"
+	migrationConditionType            = "Migration"
+	migrationJobContainerName         = "db-migrate"
+	MigrationJobLabelKey              = "mlflow.opendatahub.io/migration-job"
+	migrationJobInstanceLabel         = "mlflow.opendatahub.io/migration-instance"
+	supportedVersionEnvName           = "SUPPORTED_MLFLOW_VERSION"
+	readReplicaBackendStoreURIEnvName = "MLFLOW_READ_REPLICA_BACKEND_STORE_URI"
+	migrationJobRequeueAfter          = 5 * time.Minute
+	migrationRetryDelay               = 2 * time.Minute
+	migrationRetryDeleteDelay         = 2 * time.Second
+	migrationJobCommand               = `exec python3.12 -c "$MIGRATION_PYTHON_SCRIPT"`
+	migrationJobBackoffLimit          = int32(3)
+	migrationJobTTLSeconds            = int32(24 * 60 * 60) // 24 hours
 
 	migrationScriptExitCodeVersionMismatch     = 10
 	migrationScriptExitCodeUnsupportedBackend  = 11
@@ -559,6 +560,11 @@ func buildMigrationJobFromDeployment(mlflow *mlflowv1.MLflow, deployment *appsv1
 	jobContainer.StartupProbe = nil
 	jobContainer.Lifecycle = nil
 	jobContainer.Resources.Claims = nil
+	jobContainer.Env = filterEnvVar(jobContainer.Env, readReplicaBackendStoreURIEnvName)
+	jobContainer.Env = append(jobContainer.Env, corev1.EnvVar{
+		Name:  readReplicaBackendStoreURIEnvName,
+		Value: "",
+	})
 	jobContainer.Env = append(jobContainer.Env, corev1.EnvVar{
 		Name:  "MIGRATION_PYTHON_SCRIPT",
 		Value: migrationPythonScript,
@@ -608,6 +614,16 @@ func findContainer(containers []corev1.Container, name string) *corev1.Container
 		}
 	}
 	return nil
+}
+
+func filterEnvVar(env []corev1.EnvVar, excludedName string) []corev1.EnvVar {
+	filtered := make([]corev1.EnvVar, 0, len(env))
+	for _, envVar := range env {
+		if envVar.Name != excludedName {
+			filtered = append(filtered, envVar)
+		}
+	}
+	return filtered
 }
 
 func filterMigrationInitContainers(initContainers []corev1.Container) []corev1.Container {

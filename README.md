@@ -16,6 +16,7 @@ The MLflow Operator automates the deployment and lifecycle management of MLflow 
 - **Built-in Kubernetes Auth**: MLflow `kubernetes-auth` with `self_subject_access_review` and in-pod TLS termination
 - **OpenShift Integration**: Automatic TLS certificate provisioning via service-ca-operator
 - **Flexible Storage**: Support for local PVC, remote databases (PostgreSQL), and remote artifact storage (S3, etc.)
+- **Read-Replica Routing**: Route supported metadata reads to an optional SQL read replica while writes remain on the primary database
 - **Persistent Storage**: Automatic PVC creation with configurable size and storage class
 - **Operator-Managed Database Migrations**: The operator can scale MLflow down, run a one-shot migration Job, and restore replicas during upgrades
 
@@ -229,6 +230,10 @@ spec:
     name: mlflow-db-credentials
     key: registry-store-uri  # postgresql://user:password@host:5432/dbname
 
+  readReplicaBackendStoreUriFrom:
+    name: mlflow-db-credentials
+    key: read-replica-backend-store-uri  # postgresql://user:password@reader:5432/dbname
+
   artifactsDestination: "s3://my-mlflow-bucket/artifacts"
   defaultArtifactRoot: "s3://my-mlflow-bucket/artifacts/runs"
   serveArtifacts: true
@@ -249,8 +254,27 @@ Create the database credentials secret:
 kubectl create secret generic mlflow-db-credentials \
   --from-literal=backend-store-uri='postgresql://mlflow:password@postgres.example.com:5432/mlflow' \
   --from-literal=registry-store-uri='postgresql://mlflow:password@postgres.example.com:5432/mlflow' \
+  --from-literal=read-replica-backend-store-uri='postgresql://mlflow:password@postgres-reader.example.com:5432/mlflow' \
   -n <namespace>
 ```
+
+### Read-Replica Backend Routing
+
+MLflow 3.14 and later can route supported tracking and model-registry reads to one optional SQL read replica. Configure either the direct URI or the Secret-backed form; do not set both:
+
+```yaml
+spec:
+  backendStoreUriFrom:
+    name: mlflow-db-credentials
+    key: backend-store-uri
+  readReplicaBackendStoreUriFrom:
+    name: mlflow-db-credentials
+    key: read-replica-backend-store-uri
+```
+
+For development configurations without credentials, use `readReplicaBackendStoreUri` directly. When neither read-replica field is set, MLflow continues to send all reads and writes to the primary backend, preserving existing single-backend behavior.
+
+MLflow uses one replica URI for supported tracking and model-registry reads, while writes continue to use the primary stores. Configure the replica only when it has a compatible schema and can serve both stores. Replica availability and read consistency are determined by the database topology.
 
 ### Dynamic Resource Allocation
 
@@ -295,6 +319,7 @@ To trigger a manual one-shot rerun, add the presence-based `mlflow.opendatahub.i
 By default, finished migration Jobs remain visible for 24 hours before TTL cleanup may remove them. This means upgrades can leave a completed migration Job behind briefly in shared namespaces such as `redhat-ods-applications`, which gives admins time to inspect logs when needed.
 
 During the migration flow, the operator resolves the final MLflow image, scales the MLflow Deployment to zero, waits for all MLflow replicas to disappear, runs a one-shot Job against the backend and registry stores, verifies that the migration image reports the supported MLflow version, restores the requested replica count, and updates `status.version` only after the post-migration rollout is ready.
+The migration Job explicitly disables `MLFLOW_READ_REPLICA_BACKEND_STORE_URI`, so schema changes never target the read replica.
 For ODH/RHOAI MLflow images that ship `mlflow.store.db.migration_gap`, that Job also runs the backend-only RHOAI `3.3 -> 3.4` gap repair before the generic MLflow migration logic.
 
 ### Trace Archival
@@ -423,7 +448,7 @@ When CA bundles are present (platform or custom), PostgreSQL connections use `PG
 
 See the [config/samples](./config/samples/) directory for complete examples:
 - `mlflow_v1_mlflow.yaml` - OpenShift deployment with local storage, service-ca TLS, and a commented DRA example
-- `mlflow_v1_mlflow_remote_storage.yaml` - Remote PostgreSQL + S3 storage with horizontal scaling
+- `mlflow_v1_mlflow_remote_storage.yaml` - PostgreSQL primary/read-replica routing + S3 storage with horizontal scaling
 - `mlflow_v1_mlflowconfig.yaml` - Namespace-scoped artifact storage override using the upstream `MLflowConfig` CRD
 
 ## Development

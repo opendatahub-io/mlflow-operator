@@ -33,12 +33,14 @@ func TestMlflowToHelmValues_MLflowConfig(t *testing.T) {
 		name                     string
 		mlflow                   *mlflowv1.MLflow
 		wantBackendStoreURI      string
+		wantReadReplicaStoreURI  string
 		wantRegistryStoreURI     string
 		wantArtifactsDestination string
 		wantDefaultArtifactRoot  string
 		wantServeArtifacts       bool
 		wantWorkers              int32
 		wantBackendSecretRef     bool
+		wantReadReplicaSecretRef bool
 		wantRegistrySecretRef    bool
 	}{
 		{
@@ -93,6 +95,23 @@ func TestMlflowToHelmValues_MLflowConfig(t *testing.T) {
 			wantRegistrySecretRef:    false,
 		},
 		{
+			name: "mlflow config with read replica",
+			mlflow: &mlflowv1.MLflow{
+				ObjectMeta: metav1.ObjectMeta{Name: "test"},
+				Spec: mlflowv1.MLflowSpec{
+					BackendStoreURI:            ptr("postgresql://writer/db"),
+					ReadReplicaBackendStoreURI: ptr("postgresql://reader/db"),
+				},
+			},
+			wantBackendStoreURI:      "postgresql://writer/db",
+			wantReadReplicaStoreURI:  "postgresql://reader/db",
+			wantRegistryStoreURI:     "postgresql://writer/db",
+			wantArtifactsDestination: defaultArtifactsDest,
+			wantDefaultArtifactRoot:  "",
+			wantServeArtifacts:       false,
+			wantWorkers:              1,
+		},
+		{
 			name: "registry defaults to backend when omitted",
 			mlflow: &mlflowv1.MLflow{
 				ObjectMeta: metav1.ObjectMeta{Name: "test"},
@@ -139,6 +158,11 @@ func TestMlflowToHelmValues_MLflowConfig(t *testing.T) {
 						LocalObjectReference: corev1.LocalObjectReference{Name: "db-creds"},
 						Key:                  "backend-uri",
 					},
+					ReadReplicaBackendStoreURIFrom: &corev1.SecretKeySelector{
+						LocalObjectReference: corev1.LocalObjectReference{Name: "db-creds"},
+						Key:                  "read-replica-uri",
+						Optional:             ptr(true),
+					},
 					RegistryStoreURIFrom: &corev1.SecretKeySelector{
 						LocalObjectReference: corev1.LocalObjectReference{Name: "db-creds"},
 						Key:                  "registry-uri",
@@ -152,6 +176,7 @@ func TestMlflowToHelmValues_MLflowConfig(t *testing.T) {
 			wantServeArtifacts:       false,
 			wantWorkers:              1,
 			wantBackendSecretRef:     true,
+			wantReadReplicaSecretRef: true,
 			wantRegistrySecretRef:    true,
 		},
 		{
@@ -174,6 +199,28 @@ func TestMlflowToHelmValues_MLflowConfig(t *testing.T) {
 			wantWorkers:              1,
 			wantBackendSecretRef:     true,
 			wantRegistrySecretRef:    true, // Should inherit backend secret ref
+		},
+		{
+			name: "defense-in-depth: read-replica secret reference wins when both are set",
+			mlflow: &mlflowv1.MLflow{
+				ObjectMeta: metav1.ObjectMeta{Name: "test"},
+				Spec: mlflowv1.MLflowSpec{
+					BackendStoreURI:            ptr(testBackendStoreURI),
+					ReadReplicaBackendStoreURI: ptr("postgresql://ignored-reader"),
+					ReadReplicaBackendStoreURIFrom: &corev1.SecretKeySelector{
+						LocalObjectReference: corev1.LocalObjectReference{Name: "db-creds"},
+						Key:                  "read-replica-uri",
+						Optional:             ptr(true),
+					},
+				},
+			},
+			wantBackendStoreURI:      testBackendStoreURI,
+			wantRegistryStoreURI:     testBackendStoreURI,
+			wantArtifactsDestination: defaultArtifactsDest,
+			wantDefaultArtifactRoot:  "",
+			wantServeArtifacts:       false,
+			wantWorkers:              1,
+			wantReadReplicaSecretRef: true,
 		},
 		{
 			name: "mlflow config with custom defaultArtifactRoot",
@@ -212,6 +259,10 @@ func TestMlflowToHelmValues_MLflowConfig(t *testing.T) {
 				t.Errorf("mlflow.backendStoreUri = %v, want %v", got, tt.wantBackendStoreURI)
 			}
 
+			if got := mlflowConfig["readReplicaBackendStoreUri"].(string); got != tt.wantReadReplicaStoreURI {
+				t.Errorf("mlflow.readReplicaBackendStoreUri = %v, want %v", got, tt.wantReadReplicaStoreURI)
+			}
+
 			if got := mlflowConfig["registryStoreUri"].(string); got != tt.wantRegistryStoreURI {
 				t.Errorf("mlflow.registryStoreUri = %v, want %v", got, tt.wantRegistryStoreURI)
 			}
@@ -243,6 +294,11 @@ func TestMlflowToHelmValues_MLflowConfig(t *testing.T) {
 				t.Errorf("mlflow.registryStoreUriFrom exists = %v, want %v", hasRegistrySecretRef, tt.wantRegistrySecretRef)
 			}
 
+			_, hasReadReplicaSecretRef := mlflowConfig["readReplicaBackendStoreUriFrom"]
+			if hasReadReplicaSecretRef != tt.wantReadReplicaSecretRef {
+				t.Errorf("mlflow.readReplicaBackendStoreUriFrom exists = %v, want %v", hasReadReplicaSecretRef, tt.wantReadReplicaSecretRef)
+			}
+
 			// Validate secret ref structure if present
 			if tt.wantBackendSecretRef {
 				secretRef, ok := mlflowConfig["backendStoreUriFrom"].(map[string]interface{})
@@ -256,6 +312,16 @@ func TestMlflowToHelmValues_MLflowConfig(t *testing.T) {
 					if secretKeyRef["key"] != "backend-uri" {
 						t.Errorf("backendStoreUriFrom secret key = %v, want backend-uri", secretKeyRef["key"])
 					}
+				}
+			}
+			if tt.wantReadReplicaSecretRef {
+				secretRef := mlflowConfig["readReplicaBackendStoreUriFrom"].(map[string]interface{})
+				secretKeyRef := secretRef["secretKeyRef"].(map[string]interface{})
+				if secretKeyRef["name"] != "db-creds" || secretKeyRef["key"] != "read-replica-uri" {
+					t.Errorf("unexpected readReplicaBackendStoreUriFrom secretKeyRef: %v", secretKeyRef)
+				}
+				if optional, ok := secretKeyRef["optional"].(bool); !ok || !optional {
+					t.Errorf("readReplicaBackendStoreUriFrom optional = %v, want true", secretKeyRef["optional"])
 				}
 			}
 		})

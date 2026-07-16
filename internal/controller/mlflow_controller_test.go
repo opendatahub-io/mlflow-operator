@@ -365,6 +365,105 @@ var _ = Describe("MLflow Controller", func() {
 			Expect(err.Error()).To(ContainSubstring("backendStoreUri and backendStoreUriFrom are mutually exclusive"))
 		})
 
+		It("allows readReplicaBackendStoreUri", func() {
+			serveArtifactsTrue := true
+			readReplicaURI := "postgresql://reader:5432/db"
+			mlflow := &mlflowv1.MLflow{
+				ObjectMeta: metav1.ObjectMeta{Name: resourceName},
+				Spec: mlflowv1.MLflowSpec{
+					ServeArtifacts:             &serveArtifactsTrue,
+					BackendStoreURI:            &pgStoreURI,
+					ReadReplicaBackendStoreURI: &readReplicaURI,
+				},
+			}
+			Expect(k8sClient.Create(ctx, mlflow)).To(Succeed())
+		})
+
+		It("allows readReplicaBackendStoreUriFrom", func() {
+			serveArtifactsTrue := true
+			mlflow := &mlflowv1.MLflow{
+				ObjectMeta: metav1.ObjectMeta{Name: resourceName},
+				Spec: mlflowv1.MLflowSpec{
+					ServeArtifacts:  &serveArtifactsTrue,
+					BackendStoreURI: &pgStoreURI,
+					ReadReplicaBackendStoreURIFrom: &corev1.SecretKeySelector{
+						LocalObjectReference: corev1.LocalObjectReference{Name: "db-credentials"},
+						Key:                  "read-replica-uri",
+					},
+				},
+			}
+			Expect(k8sClient.Create(ctx, mlflow)).To(Succeed())
+		})
+
+		It("rejects both read-replica backend store forms", func() {
+			serveArtifactsTrue := true
+			readReplicaURI := "postgresql://reader:5432/db"
+			mlflow := &mlflowv1.MLflow{
+				ObjectMeta: metav1.ObjectMeta{Name: resourceName},
+				Spec: mlflowv1.MLflowSpec{
+					ServeArtifacts:             &serveArtifactsTrue,
+					BackendStoreURI:            &pgStoreURI,
+					ReadReplicaBackendStoreURI: &readReplicaURI,
+					ReadReplicaBackendStoreURIFrom: &corev1.SecretKeySelector{
+						LocalObjectReference: corev1.LocalObjectReference{Name: "db-credentials"},
+						Key:                  "read-replica-uri",
+					},
+				},
+			}
+			err := k8sClient.Create(ctx, mlflow)
+			Expect(errors.IsInvalid(err)).To(BeTrue())
+			Expect(err.Error()).To(ContainSubstring("readReplicaBackendStoreUri and readReplicaBackendStoreUriFrom are mutually exclusive"))
+		})
+
+		It("rejects an incomplete read-replica secret selector", func() {
+			serveArtifactsTrue := true
+			mlflow := &mlflowv1.MLflow{
+				ObjectMeta: metav1.ObjectMeta{Name: resourceName},
+				Spec: mlflowv1.MLflowSpec{
+					ServeArtifacts:  &serveArtifactsTrue,
+					BackendStoreURI: &pgStoreURI,
+					ReadReplicaBackendStoreURIFrom: &corev1.SecretKeySelector{
+						LocalObjectReference: corev1.LocalObjectReference{Name: "db-credentials"},
+					},
+				},
+			}
+			err := k8sClient.Create(ctx, mlflow)
+			Expect(errors.IsInvalid(err)).To(BeTrue())
+			Expect(err.Error()).To(ContainSubstring("readReplicaBackendStoreUriFrom.name and readReplicaBackendStoreUriFrom.key must be non-empty"))
+		})
+
+		It("rejects an unsupported read-replica URI scheme", func() {
+			serveArtifactsTrue := true
+			readReplicaURI := "file:///mlflow/replica"
+			mlflow := &mlflowv1.MLflow{
+				ObjectMeta: metav1.ObjectMeta{Name: resourceName},
+				Spec: mlflowv1.MLflowSpec{
+					ServeArtifacts:             &serveArtifactsTrue,
+					BackendStoreURI:            &pgStoreURI,
+					ReadReplicaBackendStoreURI: &readReplicaURI,
+				},
+			}
+			err := k8sClient.Create(ctx, mlflow)
+			Expect(errors.IsInvalid(err)).To(BeTrue())
+			Expect(err.Error()).To(ContainSubstring("readReplicaBackendStoreUri must use a supported SQL metadata store URI scheme"))
+		})
+
+		It("rejects a SQLite read replica without storage", func() {
+			serveArtifactsTrue := true
+			readReplicaURI := "sqlite:////mlflow/replica.db"
+			mlflow := &mlflowv1.MLflow{
+				ObjectMeta: metav1.ObjectMeta{Name: resourceName},
+				Spec: mlflowv1.MLflowSpec{
+					ServeArtifacts:             &serveArtifactsTrue,
+					BackendStoreURI:            &pgStoreURI,
+					ReadReplicaBackendStoreURI: &readReplicaURI,
+				},
+			}
+			err := k8sClient.Create(ctx, mlflow)
+			Expect(errors.IsInvalid(err)).To(BeTrue())
+			Expect(err.Error()).To(ContainSubstring("storage must be configured when using a file-based read-replica backend store"))
+		})
+
 		It("rejects empty networkPolicyAdditionalEgressRules entries", func() {
 			artifactRoot := "s3://bucket/artifacts"
 			proto := corev1.ProtocolTCP

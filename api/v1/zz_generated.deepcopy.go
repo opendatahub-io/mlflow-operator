@@ -229,6 +229,16 @@ func (in *MLflowSpec) DeepCopyInto(out *MLflowSpec) {
 		*out = new(corev1.SecretKeySelector)
 		(*in).DeepCopyInto(*out)
 	}
+	if in.ReadReplicaBackendStoreURI != nil {
+		in, out := &in.ReadReplicaBackendStoreURI, &out.ReadReplicaBackendStoreURI
+		*out = new(string)
+		**out = **in
+	}
+	if in.ReadReplicaBackendStoreURIFrom != nil {
+		in, out := &in.ReadReplicaBackendStoreURIFrom, &out.ReadReplicaBackendStoreURIFrom
+		*out = new(corev1.SecretKeySelector)
+		(*in).DeepCopyInto(*out)
+	}
 	if in.RegistryStoreURI != nil {
 		in, out := &in.RegistryStoreURI, &out.RegistryStoreURI
 		*out = new(string)

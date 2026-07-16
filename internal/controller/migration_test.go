@@ -231,6 +231,10 @@ func TestBuildMigrationJobFromDeployment(t *testing.T) {
 				LocalObjectReference: corev1.LocalObjectReference{Name: "db-credentials"},
 				Key:                  "backend-store-uri",
 			},
+			ReadReplicaBackendStoreURIFrom: &corev1.SecretKeySelector{
+				LocalObjectReference: corev1.LocalObjectReference{Name: "replica-credentials"},
+				Key:                  "read-replica-backend-store-uri",
+			},
 			RegistryStoreURIFrom: &corev1.SecretKeySelector{
 				LocalObjectReference: corev1.LocalObjectReference{Name: "registry-credentials"},
 				Key:                  "registry-store-uri",
@@ -259,6 +263,15 @@ func TestBuildMigrationJobFromDeployment(t *testing.T) {
 
 	deployment, err := renderedDeployment(objs, "mlflow", "test-ns")
 	g.Expect(err).NotTo(gomega.HaveOccurred())
+	serverEnvByName := map[string]corev1.EnvVar{}
+	for _, env := range deployment.Spec.Template.Spec.Containers[0].Env {
+		serverEnvByName[env.Name] = env
+	}
+	g.Expect(serverEnvByName[readReplicaBackendStoreURIEnvName].ValueFrom.SecretKeyRef.Name).To(gomega.Equal("replica-credentials"))
+	deployment.Spec.Template.Spec.Containers[0].Env = append(
+		deployment.Spec.Template.Spec.Containers[0].Env,
+		corev1.EnvVar{Name: readReplicaBackendStoreURIEnvName, Value: "postgresql://ignored-replica"},
+	)
 	deployment.Spec.Template.Labels["custom-label"] = "custom-value"
 
 	job, err := buildMigrationJobFromDeployment(&mlflowv1.MLflow{
@@ -294,9 +307,14 @@ func TestBuildMigrationJobFromDeployment(t *testing.T) {
 	g.Expect(*job.Spec.BackoffLimit).To(gomega.Equal(int32(3)))
 
 	envByName := map[string]corev1.EnvVar{}
+	replicaEnvCount := 0
 	for _, env := range container.Env {
 		envByName[env.Name] = env
+		if env.Name == readReplicaBackendStoreURIEnvName {
+			replicaEnvCount++
+		}
 	}
+	g.Expect(replicaEnvCount).To(gomega.Equal(1))
 	g.Expect(envByName).To(gomega.HaveKey("MIGRATION_PYTHON_SCRIPT"))
 	g.Expect(envByName["MIGRATION_PYTHON_SCRIPT"].Value).To(gomega.ContainSubstring("_initialize_tables"))
 	g.Expect(envByName["MIGRATION_PYTHON_SCRIPT"].Value).To(gomega.ContainSubstring("registry_uri != backend_uri"))
@@ -321,6 +339,10 @@ func TestBuildMigrationJobFromDeployment(t *testing.T) {
 	g.Expect(envByName["MLFLOW_BACKEND_STORE_URI"].ValueFrom.SecretKeyRef.Name).To(gomega.Equal("db-credentials"))
 	g.Expect(envByName).To(gomega.HaveKey("MLFLOW_REGISTRY_STORE_URI"))
 	g.Expect(envByName["MLFLOW_REGISTRY_STORE_URI"].ValueFrom.SecretKeyRef.Name).To(gomega.Equal("registry-credentials"))
+	g.Expect(envByName).To(gomega.HaveKeyWithValue(readReplicaBackendStoreURIEnvName, corev1.EnvVar{
+		Name:  readReplicaBackendStoreURIEnvName,
+		Value: "",
+	}))
 	g.Expect(envByName).To(gomega.HaveKeyWithValue("SSL_CERT_FILE", corev1.EnvVar{
 		Name:  "SSL_CERT_FILE",
 		Value: caCombinedBundle,

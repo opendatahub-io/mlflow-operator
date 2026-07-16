@@ -28,11 +28,15 @@ import (
 // +kubebuilder:validation:XValidation:rule="!has(self.defaultArtifactRoot) || !self.defaultArtifactRoot.startsWith('file://') || (has(self.serveArtifacts) && self.serveArtifacts)",message="serveArtifacts must be enabled when defaultArtifactRoot uses file-based storage (file:// prefix)"
 // +kubebuilder:validation:XValidation:rule="(has(self.backendStoreUri) && size(self.backendStoreUri) > 0) || (has(self.backendStoreUriFrom) && size(self.backendStoreUriFrom.name) > 0 && size(self.backendStoreUriFrom.key) > 0)",message="backendStoreUri or backendStoreUriFrom must be set"
 // +kubebuilder:validation:XValidation:rule="!(has(self.backendStoreUri) && has(self.backendStoreUriFrom))",message="backendStoreUri and backendStoreUriFrom are mutually exclusive"
+// +kubebuilder:validation:XValidation:rule="!(has(self.readReplicaBackendStoreUri) && has(self.readReplicaBackendStoreUriFrom))",message="readReplicaBackendStoreUri and readReplicaBackendStoreUriFrom are mutually exclusive"
+// +kubebuilder:validation:XValidation:rule="!has(self.readReplicaBackendStoreUriFrom) || (size(self.readReplicaBackendStoreUriFrom.name) > 0 && size(self.readReplicaBackendStoreUriFrom.key) > 0)",message="readReplicaBackendStoreUriFrom.name and readReplicaBackendStoreUriFrom.key must be non-empty when readReplicaBackendStoreUriFrom is set"
 // +kubebuilder:validation:XValidation:rule="!(has(self.registryStoreUri) && has(self.registryStoreUriFrom))",message="registryStoreUri and registryStoreUriFrom are mutually exclusive"
 // +kubebuilder:validation:XValidation:rule="!has(self.registryStoreUriFrom) || (size(self.registryStoreUriFrom.name) > 0 && size(self.registryStoreUriFrom.key) > 0)",message="registryStoreUriFrom.name and registryStoreUriFrom.key must be non-empty when registryStoreUriFrom is set"
 // +kubebuilder:validation:XValidation:rule="!has(self.backendStoreUri) || self.backendStoreUri.startsWith('sqlite://') || self.backendStoreUri.startsWith('sqlite+') || self.backendStoreUri.startsWith('postgresql://') || self.backendStoreUri.startsWith('postgresql+') || self.backendStoreUri.startsWith('mysql://') || self.backendStoreUri.startsWith('mysql+')",message="backendStoreUri must use a supported SQL metadata store URI scheme"
+// +kubebuilder:validation:XValidation:rule="!has(self.readReplicaBackendStoreUri) || self.readReplicaBackendStoreUri.startsWith('sqlite://') || self.readReplicaBackendStoreUri.startsWith('sqlite+') || self.readReplicaBackendStoreUri.startsWith('postgresql://') || self.readReplicaBackendStoreUri.startsWith('postgresql+') || self.readReplicaBackendStoreUri.startsWith('mysql://') || self.readReplicaBackendStoreUri.startsWith('mysql+')",message="readReplicaBackendStoreUri must use a supported SQL metadata store URI scheme"
 // +kubebuilder:validation:XValidation:rule="!has(self.registryStoreUri) || self.registryStoreUri.startsWith('sqlite://') || self.registryStoreUri.startsWith('sqlite+') || self.registryStoreUri.startsWith('postgresql://') || self.registryStoreUri.startsWith('postgresql+') || self.registryStoreUri.startsWith('mysql://') || self.registryStoreUri.startsWith('mysql+')",message="registryStoreUri must use a supported SQL metadata store URI scheme"
 // +kubebuilder:validation:XValidation:rule="!has(self.backendStoreUri) || (!self.backendStoreUri.startsWith('sqlite://') && !self.backendStoreUri.startsWith('file://')) || has(self.storage)",message="storage must be configured when using file-based backend store (sqlite:// or file:// prefix)"
+// +kubebuilder:validation:XValidation:rule="!has(self.readReplicaBackendStoreUri) || !self.readReplicaBackendStoreUri.startsWith('sqlite://') || has(self.storage)",message="storage must be configured when using a file-based read-replica backend store (sqlite:// prefix)"
 // +kubebuilder:validation:XValidation:rule="!has(self.registryStoreUri) || (!self.registryStoreUri.startsWith('sqlite://') && !self.registryStoreUri.startsWith('file://')) || has(self.storage)",message="storage must be configured when using file-based registry store (sqlite:// or file:// prefix)"
 // +kubebuilder:validation:XValidation:rule="!has(self.artifactsDestination) || !self.artifactsDestination.startsWith('file://') || has(self.storage)",message="storage must be configured when artifactsDestination uses file-based storage (file:// prefix)"
 // +kubebuilder:validation:XValidation:rule="!has(self.artifactsDestination) || !self.artifactsDestination.startsWith('file://') || (has(self.serveArtifacts) && self.serveArtifacts)",message="serveArtifacts must be enabled when artifactsDestination uses file-based storage (file:// prefix)"
@@ -108,6 +112,21 @@ type MLflowSpec struct {
 	// Mutually exclusive with BackendStoreURI - the API rejects specs that set both.
 	// +optional
 	BackendStoreURIFrom *corev1.SecretKeySelector `json:"backendStoreUriFrom,omitempty"`
+
+	// ReadReplicaBackendStoreURI is the optional URI for a read-only replica of the
+	// backend store. MLflow routes supported read operations to this database while
+	// writes and operator-managed migrations continue to use the primary backend store.
+	// The replica must use a compatible schema and may return stale data due to
+	// replication lag. For URIs containing credentials, prefer using
+	// ReadReplicaBackendStoreURIFrom.
+	// +optional
+	ReadReplicaBackendStoreURI *string `json:"readReplicaBackendStoreUri,omitempty"`
+
+	// ReadReplicaBackendStoreURIFrom is a reference to a secret containing the
+	// optional read-replica backend store URI. Mutually exclusive with
+	// ReadReplicaBackendStoreURI.
+	// +optional
+	ReadReplicaBackendStoreURIFrom *corev1.SecretKeySelector `json:"readReplicaBackendStoreUriFrom,omitempty"`
 
 	// RegistryStoreURI is the URI for the MLflow registry store (model registry metadata).
 	// Inline registryStoreUri values intentionally support only sqlite:// and
