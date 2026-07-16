@@ -67,6 +67,12 @@ var _ = Describe("Manager", Ordered, func() {
 		_, err = utils.Run(cmd)
 		Expect(err).NotTo(HaveOccurred(), "Failed to install CRDs")
 
+		By("installing the Auth CRD from fixture")
+		cmd = exec.Command("kubectl", "apply", "-f",
+			"test/e2e/fixtures/services.platform.opendatahub.io_auths.yaml")
+		_, err = utils.Run(cmd)
+		Expect(err).NotTo(HaveOccurred(), "Failed to install Auth CRD")
+
 		By("deploying the controller-manager")
 		cmd = exec.Command("make", "deploy", fmt.Sprintf("IMG=%s", projectImage))
 		_, err = utils.Run(cmd)
@@ -86,6 +92,14 @@ var _ = Describe("Manager", Ordered, func() {
 
 		By("cleaning up any MLflow resources")
 		cmd = exec.Command("kubectl", "delete", "mlflow", "--all", "--ignore-not-found=true")
+		_, _ = utils.Run(cmd)
+
+		By("cleaning up any Auth resources")
+		cmd = exec.Command("kubectl", "delete", "auths.services.platform.opendatahub.io", "--all", "--ignore-not-found=true")
+		_, _ = utils.Run(cmd)
+
+		By("removing the Auth CRD")
+		cmd = exec.Command("kubectl", "delete", "crd", "auths.services.platform.opendatahub.io", "--ignore-not-found=true")
 		_, _ = utils.Run(cmd)
 
 		By("undeploying the controller-manager")
@@ -803,15 +817,198 @@ spec:
 			Eventually(verifyDeleted, 30*time.Second).Should(Succeed())
 		})
 
-		// TODO: Customize the e2e test suite with scenarios specific to your project.
-		// Consider applying sample/CR(s) and check their status and/or verifying
-		// the reconciliation by using the metrics, i.e.:
-		// metricsOutput, err := getMetricsOutput()
-		// Expect(err).NotTo(HaveOccurred(), "Failed to retrieve logs from curl pod")
-		// Expect(metricsOutput).To(ContainSubstring(
-		//    fmt.Sprintf(`controller_runtime_reconcile_total{controller="%s",result="success"} 1`,
-		//    strings.ToLower(<Kind>),
-		// ))
+		It("should reconcile namespace RBAC when Auth CRD is present", func() {
+			const mlflowName = "mlflow"
+			var err error
+
+			By("enabling the namespace RBAC controller")
+			cmd := exec.Command(
+				"kubectl", "set", "env",
+				fmt.Sprintf("deployment/%s", controllerDeploymentName),
+				"-n", namespace,
+				"ENABLE_NAMESPACE_RBAC=true",
+			)
+			_, err = utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred(), "Failed to enable namespace RBAC controller")
+			DeferCleanup(func() {
+				resetCmd := exec.Command(
+					"kubectl", "set", "env",
+					fmt.Sprintf("deployment/%s", controllerDeploymentName),
+					"-n", namespace,
+					"ENABLE_NAMESPACE_RBAC=false",
+				)
+				_, _ = utils.Run(resetCmd)
+			})
+
+			By("waiting for the controller rollout to finish after the env change")
+			cmd = exec.Command(
+				"kubectl", "rollout", "status",
+				fmt.Sprintf("deployment/%s", controllerDeploymentName),
+				"-n", namespace,
+				"--timeout=3m",
+			)
+			_, err = utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred(), "Controller deployment did not roll out after enabling namespace RBAC")
+			controllerPodName = waitForControllerPodName()
+
+			By("creating the singleton Auth custom resource")
+			authManifest := `apiVersion: services.platform.opendatahub.io/v1alpha1
+kind: Auth
+metadata:
+  name: auth
+spec:
+  adminGroups:
+    - admin-group
+  allowedGroups:
+    - group-a
+    - group-b
+`
+			authFile, err := writeTempManifest("auth-", authManifest)
+			Expect(err).NotTo(HaveOccurred(), "Failed to write Auth manifest")
+			defer func() {
+				if removeErr := os.Remove(authFile); removeErr != nil {
+					_, _ = fmt.Fprintf(GinkgoWriter, "failed to remove %s: %v\n", authFile, removeErr)
+				}
+			}()
+			cmd = exec.Command("kubectl", "apply", "-f", authFile)
+			_, err = utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred(), "Failed to create Auth CR")
+			DeferCleanup(func() {
+				deleteCmd := exec.Command("kubectl", "delete", "auths.services.platform.opendatahub.io",
+					"auth", "--ignore-not-found=true")
+				_, _ = utils.Run(deleteCmd)
+			})
+
+			By("creating an MLflow custom resource")
+			mlflowManifest := fmt.Sprintf(`apiVersion: mlflow.opendatahub.io/v1
+kind: MLflow
+metadata:
+  name: %s
+spec:
+  serveArtifacts: true
+  artifactsDestination: s3://mlflow-artifacts/test
+  defaultArtifactRoot: s3://mlflow-artifacts/test-root
+  backendStoreUri: postgresql://user:pass@db:5432/mlflow
+  registryStoreUri: postgresql://user:pass@db:5432/mlflow
+`, mlflowName)
+			mlflowFile, err := writeTempManifest("mlflow-rbac-", mlflowManifest)
+			Expect(err).NotTo(HaveOccurred(), "Failed to write MLflow manifest")
+			defer func() {
+				if removeErr := os.Remove(mlflowFile); removeErr != nil {
+					_, _ = fmt.Fprintf(GinkgoWriter, "failed to remove %s: %v\n", mlflowFile, removeErr)
+				}
+			}()
+			cmd = exec.Command("kubectl", "apply", "-f", mlflowFile)
+			_, err = utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred(), "Failed to create MLflow resource")
+			DeferCleanup(func() {
+				deleteCmd := exec.Command("kubectl", "delete", "mlflow", mlflowName, "--ignore-not-found=true")
+				_, _ = utils.Run(deleteCmd)
+			})
+
+			By("labeling the namespace to opt in to workspace RBAC")
+			cmd = exec.Command("kubectl", "label", "--overwrite", "ns", namespace,
+				fmt.Sprintf("opendatahub.io/global-mlflow-workspace=%s", mlflowName))
+			_, err = utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred(), "Failed to label namespace for workspace RBAC")
+			DeferCleanup(func() {
+				removeCmd := exec.Command("kubectl", "label", "ns", namespace,
+					"opendatahub.io/global-mlflow-workspace-")
+				_, _ = utils.Run(removeCmd)
+			})
+
+			By("verifying the view RoleBinding is created with correct subjects")
+			Eventually(func(g Gomega) {
+				output, getErr := kubectlOutput(
+					"get", "rolebinding", "odh-group-mlflow-view",
+					"-n", namespace,
+					"-o", "jsonpath={.roleRef.name}")
+				g.Expect(getErr).NotTo(HaveOccurred())
+				g.Expect(output).To(Equal("mlflow-operator-mlflow-view"))
+
+				subjects, subErr := kubectlOutput(
+					"get", "rolebinding", "odh-group-mlflow-view",
+					"-n", namespace,
+					"-o", "jsonpath={.subjects[*].name}")
+				g.Expect(subErr).NotTo(HaveOccurred())
+				g.Expect(subjects).To(ContainSubstring("group-a"))
+				g.Expect(subjects).To(ContainSubstring("group-b"))
+				g.Expect(subjects).To(ContainSubstring("admin-group"))
+			}, 2*time.Minute, time.Second).Should(Succeed())
+
+			By("verifying the edit RoleBinding is created with correct subjects")
+			Eventually(func(g Gomega) {
+				output, getErr := kubectlOutput(
+					"get", "rolebinding", "odh-group-mlflow-edit",
+					"-n", namespace,
+					"-o", "jsonpath={.roleRef.name}")
+				g.Expect(getErr).NotTo(HaveOccurred())
+				g.Expect(output).To(Equal("mlflow-operator-mlflow-edit"))
+
+				subjects, subErr := kubectlOutput(
+					"get", "rolebinding", "odh-group-mlflow-edit",
+					"-n", namespace,
+					"-o", "jsonpath={.subjects[*].name}")
+				g.Expect(subErr).NotTo(HaveOccurred())
+				g.Expect(subjects).To(ContainSubstring("admin-group"))
+				g.Expect(subjects).NotTo(ContainSubstring("group-a"))
+				g.Expect(subjects).NotTo(ContainSubstring("group-b"))
+			}, 2*time.Minute, time.Second).Should(Succeed())
+
+			By("updating the Auth CR to change allowed groups")
+			updatedAuthManifest := `apiVersion: services.platform.opendatahub.io/v1alpha1
+kind: Auth
+metadata:
+  name: auth
+spec:
+  adminGroups:
+    - admin-group
+  allowedGroups:
+    - group-c
+`
+			updatedAuthFile, err := writeTempManifest("auth-updated-", updatedAuthManifest)
+			Expect(err).NotTo(HaveOccurred(), "Failed to write updated Auth manifest")
+			defer func() {
+				if removeErr := os.Remove(updatedAuthFile); removeErr != nil {
+					_, _ = fmt.Fprintf(GinkgoWriter, "failed to remove %s: %v\n", updatedAuthFile, removeErr)
+				}
+			}()
+			cmd = exec.Command("kubectl", "apply", "-f", updatedAuthFile)
+			_, err = utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred(), "Failed to update Auth CR")
+
+			By("verifying the view RoleBinding subjects are updated")
+			Eventually(func(g Gomega) {
+				subjects, subErr := kubectlOutput(
+					"get", "rolebinding", "odh-group-mlflow-view",
+					"-n", namespace,
+					"-o", "jsonpath={.subjects[*].name}")
+				g.Expect(subErr).NotTo(HaveOccurred())
+				g.Expect(subjects).To(ContainSubstring("group-c"))
+				g.Expect(subjects).To(ContainSubstring("admin-group"))
+				g.Expect(subjects).NotTo(ContainSubstring("group-a"))
+				g.Expect(subjects).NotTo(ContainSubstring("group-b"))
+			}, 2*time.Minute, time.Second).Should(Succeed())
+
+			By("removing the workspace label from the namespace")
+			cmd = exec.Command("kubectl", "label", "ns", namespace,
+				"opendatahub.io/global-mlflow-workspace-")
+			_, err = utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred(), "Failed to remove workspace label")
+
+			By("verifying the RoleBindings are cleaned up")
+			Eventually(func(g Gomega) {
+				_, viewErr := kubectlOutput(
+					"get", "rolebinding", "odh-group-mlflow-view",
+					"-n", namespace)
+				g.Expect(viewErr).To(HaveOccurred(), "view RoleBinding should be deleted")
+
+				_, editErr := kubectlOutput(
+					"get", "rolebinding", "odh-group-mlflow-edit",
+					"-n", namespace)
+				g.Expect(editErr).To(HaveOccurred(), "edit RoleBinding should be deleted")
+			}, 2*time.Minute, time.Second).Should(Succeed())
+		})
 	})
 })
 

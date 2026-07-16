@@ -2,10 +2,13 @@ package config
 
 import (
 	"os"
+	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
 	"github.com/spf13/viper"
+	"gopkg.in/yaml.v3"
 )
 
 func TestLoadConfigPrefersModularInputs(t *testing.T) {
@@ -50,6 +53,31 @@ func TestLoadConfigFallsBackToLegacyInputs(t *testing.T) {
 	}
 }
 
+func TestResourceNamePrefixMatchesKustomize(t *testing.T) {
+	_, thisFile, _, _ := runtime.Caller(0)
+	repoRoot := filepath.Join(filepath.Dir(thisFile), "..", "..")
+	kustomizationPath := filepath.Join(repoRoot, "config", "base", "kustomization.yaml")
+
+	data, err := os.ReadFile(kustomizationPath)
+	if err != nil {
+		t.Fatalf("failed to read kustomization.yaml: %v", err)
+	}
+
+	var kustomization struct {
+		NamePrefix string `yaml:"namePrefix"`
+	}
+	if err := yaml.Unmarshal(data, &kustomization); err != nil {
+		t.Fatalf("failed to parse kustomization.yaml: %v", err)
+	}
+
+	cfg := loadConfig(newTestViper(), os.LookupEnv)
+
+	if cfg.ResourceNamePrefix != kustomization.NamePrefix {
+		t.Fatalf("RESOURCE_NAME_PREFIX default %q must match namePrefix %q in config/base/kustomization.yaml",
+			cfg.ResourceNamePrefix, kustomization.NamePrefix)
+	}
+}
+
 func newTestViper() *viper.Viper {
 	v := viper.New()
 	v.AutomaticEnv()
@@ -59,5 +87,8 @@ func newTestViper() *viper.Viper {
 	v.SetDefault("APPLICATIONS_NAMESPACE", "")
 	v.SetDefault("ENABLE_MLFLOW_OPERATOR_MODULE_CONTROLLER", false)
 	v.SetDefault("MLFLOW_OPERATOR_MODULE_CONTROLLER_CRD_WAIT_TIMEOUT", DefaultMLflowOperatorCRDWaitTimeout)
+	v.SetDefault("ENABLE_NAMESPACE_RBAC", false)
+	v.SetDefault("AUTH_CRD_WAIT_TIMEOUT", DefaultAuthCRDWaitTimeout)
+	v.SetDefault("RESOURCE_NAME_PREFIX", "mlflow-operator-")
 	return v
 }

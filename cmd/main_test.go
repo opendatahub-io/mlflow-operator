@@ -126,7 +126,7 @@ func TestResolveManagerNamespace(t *testing.T) {
 
 func TestWaitForRequiredCRDReturnsImmediatelyWhenAvailable(t *testing.T) {
 	calls := 0
-	err := waitForMLflowOperatorCRD(20*time.Millisecond, time.Millisecond, func() (bool, error) {
+	err := waitForCRD("TestCRD", 20*time.Millisecond, time.Millisecond, func() (bool, error) {
 		calls++
 		return true, nil
 	})
@@ -140,7 +140,7 @@ func TestWaitForRequiredCRDReturnsImmediatelyWhenAvailable(t *testing.T) {
 
 func TestWaitForRequiredCRDRetriesUntilAvailable(t *testing.T) {
 	calls := 0
-	err := waitForMLflowOperatorCRD(50*time.Millisecond, time.Millisecond, func() (bool, error) {
+	err := waitForCRD("TestCRD", 50*time.Millisecond, time.Millisecond, func() (bool, error) {
 		calls++
 		switch calls {
 		case 1:
@@ -160,7 +160,7 @@ func TestWaitForRequiredCRDRetriesUntilAvailable(t *testing.T) {
 }
 
 func TestWaitForRequiredCRDTimesOutWhenUnavailable(t *testing.T) {
-	err := waitForMLflowOperatorCRD(10*time.Millisecond, time.Millisecond, func() (bool, error) {
+	err := waitForCRD("TestCRD", 10*time.Millisecond, time.Millisecond, func() (bool, error) {
 		return false, nil
 	})
 	if err == nil {
@@ -172,7 +172,7 @@ func TestWaitForRequiredCRDTimesOutWhenUnavailable(t *testing.T) {
 }
 
 func TestWaitForRequiredCRDRejectsNonPositiveTimeout(t *testing.T) {
-	err := waitForMLflowOperatorCRD(0, time.Millisecond, func() (bool, error) {
+	err := waitForCRD("TestCRD", 0, time.Millisecond, func() (bool, error) {
 		return true, nil
 	})
 	if err == nil {

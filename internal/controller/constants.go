@@ -38,4 +38,21 @@ const (
 
 	// PlatformTrustedCABundleConfigMapName is the well-known ConfigMap name for platform CA bundle
 	PlatformTrustedCABundleConfigMapName = "odh-trusted-ca-bundle"
+
+	// NamespaceWorkspaceLabelKey is the label on Namespaces that opt in to MLflow workspace RBAC
+	NamespaceWorkspaceLabelKey = "opendatahub.io/global-mlflow-workspace"
+	// ManagedByLabelKey is the standard Kubernetes label for resource ownership
+	ManagedByLabelKey = "app.kubernetes.io/managed-by"
+	// ManagedByLabelValue identifies this operator as the manager
+	ManagedByLabelValue = "mlflow-operator"
+	// AuthCRName is the singleton Auth CR name
+	AuthCRName = "auth"
+	// ViewClusterRoleBaseName is the base name of the mlflow-view aggregate ClusterRole (before kustomize namePrefix)
+	ViewClusterRoleBaseName = "mlflow-view"
+	// EditClusterRoleBaseName is the base name of the mlflow-edit aggregate ClusterRole (before kustomize namePrefix)
+	EditClusterRoleBaseName = "mlflow-edit"
+	// RoleBindingViewName is the name of the view RoleBinding in workspace namespaces
+	RoleBindingViewName = "odh-group-mlflow-view"
+	// RoleBindingEditName is the name of the edit RoleBinding in workspace namespaces
+	RoleBindingEditName = "odh-group-mlflow-edit"
 )
