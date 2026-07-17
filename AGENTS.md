@@ -24,6 +24,10 @@ For security, `spec.artifactRootSecret` is fixed to `mlflow-artifact-connection`
 Its CRD is vendored in this repo at `config/crd/mlflow.kubeflow.org_mlflowconfigs.yaml` and should be refreshed from the `mlflow-kubernetes-plugins` repository when the upstream schema changes.
 The vendored upstream schema also requires `spec.artifactRootPath` to be relative and forbids `..` path segments.
 
+### Namespace RBAC Controller
+
+The namespace RBAC controller is a **dedicated reconciliation loop** that watches cluster-wide Namespace objects labeled `opendatahub.io/global-mlflow-workspace: <MLFLOW_CR_NAME>` and reconciles `odh-group-mlflow-view` and `odh-group-mlflow-edit` RoleBindings in each. Subjects are read from the platform Auth CR (`services.platform.opendatahub.io/v1alpha1`) via unstructured client to avoid importing the ODH platform API module. The controller path is guarded by the `ENABLE_NAMESPACE_RBAC` rollout toggle (default `false`). When enabled, startup checks for the Auth CRD via the discovery API and fails if it is absent, so explicit enablement never silently skips controller registration. RoleBindings are owned by the MLflow CR via `controllerutil.SetControllerReference`, giving Kubernetes GC a safety net when the operator is offline. RoleBinding watches use dedicated per-name caches (`ViewRBWatchCache`, `EditRBWatchCache`) with `metadata.name` field selectors because the operator's RBAC uses `resourceNames`-scoped permissions — a general informer cache without a field selector would be rejected by the API server. The Auth CR watch uses a separate `AuthWatchCache` following the same `GCRBACWatchCache` pattern established for the `mlflow-gc` RBAC objects.
+
 ## API Definitions
 
 The `api/` folder contains the API type definitions owned by this repository:
