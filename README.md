@@ -189,10 +189,13 @@ When garbage collection is enabled, the CronJob runs under a separate `mlflow-gc
 
 The operator requires two levels of RBAC permissions:
 
-- **Cluster-scoped** (`config/rbac/role.yaml`): Manages the MLflow custom resource lifecycle, enumerates namespaces, reads and watches the well-known artifact storage secret, watches MLflowConfig overrides, manages the shared `mlflow` ClusterRole/ClusterRoleBinding plus the currently effective singleton `mlflow-gc` RBAC names, and handles OpenShift console links and Gateway API routes.
-- **Namespace-scoped** (`config/rbac/namespace_role.yaml`): Manages deployment resources (ConfigMaps, Secrets, ServiceAccounts, Services, PVCs, Deployments, NetworkPolicies, ServiceMonitors) within the target namespace.
+- **Cluster-scoped** (`config/rbac/role.yaml`): Manages the MLflow custom resource lifecycle, enumerates namespaces, reads and watches the well-known artifact storage secret, watches MLflowConfig overrides, manages the shared `mlflow` ClusterRole/ClusterRoleBinding plus the currently effective singleton `mlflow-gc` RBAC names, and handles OpenShift console links and Gateway API routes. 
+- **Namespace-scoped** (`config/rbac/namespace_role.yaml`): 
+  The MLflow Controller manages deployment resources (ConfigMaps, Secrets, ServiceAccounts, Services, PVCs, Deployments, NetworkPolicies, ServiceMonitors) within the target namespace.
 
-The operator also creates shared `mlflow` ClusterRole and ClusterRoleBinding objects for the MLflow server pod itself, granting read-only cluster-wide access to namespaces, the well-known `mlflow-artifact-connection` secret, and MLflowConfig CRs. Secret access includes watch-based reads so namespace-specific artifact override updates can be observed across workspaces. These cannot be scoped to a single namespace because MLflow serves requests across namespaces.
+  When `ENABLE_NAMESPACE_RBAC` is set, the Namespace RBAC Controller watches labeled namespaces and reconciles `odh-group-mlflow-view` and `odh-group-mlflow-edit` RoleBindings in each. Subjects are read from the Auth CR. Removing the label removes these RoleBindings; updating the Auth CR re-reconciles subjects automatically.
+
+  The operator also creates shared `mlflow` ClusterRole and ClusterRoleBinding objects for the MLflow server pod itself, granting read-only cluster-wide access to namespaces, the well-known `mlflow-artifact-connection` secret, and MLflowConfig CRs. Secret access includes watch-based reads so namespace-specific artifact override updates can be observed across workspaces. These cannot be scoped to a single namespace because MLflow serves requests across namespaces.
 
 See the manifest files for detailed per-resource documentation.
 

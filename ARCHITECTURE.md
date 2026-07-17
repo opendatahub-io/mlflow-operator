@@ -104,3 +104,44 @@ On OpenShift, that secret can be provisioned automatically through the service-c
 ## Storage and Availability Decisions
 
 The `MLflow` CR controls whether the deployment uses local PVC-backed storage or remote database and artifact backends. The operator is responsible for wiring that storage into the deployment, while the MLflow runtime still decides which artifact root applies to a specific workspace.
+
+## Namespace RBAC
+
+The main reconciliation loop renders resources through the internal Helm chart for each MLflow CR. The namespace RBAC controller is architecturally distinct: it watches Namespace objects (not MLflow CRs), creates RoleBindings directly (not via Helm), and reads the platform Auth CR through an unstructured client to avoid importing the ODH platform API module.
+
+This controller runs as a separate reconciliation loop gated behind `ENABLE_NAMESPACE_RBAC`. When a namespace carries the `opendatahub.io/global-mlflow-workspace` label, the controller ensures that the Auth CR's user groups are bound to the pre-existing `mlflow-operator-mlflow-view` and `mlflow-operator-mlflow-edit` aggregate ClusterRoles via namespace-scoped RoleBindings.
+
+```mermaid
+flowchart TB
+    subgraph Cluster
+        NS["Namespace\nlabels:\n  opendatahub.io/global-\n  mlflow-workspace:\n  'my-mlflow'"]
+
+        Controller["MLflow Namespace\nRBAC Controller"]
+
+        Auth["Auth CR\nallowedGroups\nadminGroups"]
+
+        CR["ClusterRole\nmlflow-operator-mlflow-edit\nmlflow-operator-mlflow-view\n(pre-existing)"]
+
+        RBView["RoleBinding (odh-group-mlflow-view)\nsubjects: allowedGroups\nroleRef: mlflow-operator-mlflow-view"]
+
+        RBEdit["RoleBinding (odh-group-mlflow-edit)\nsubjects: adminGroups\nroleRef: mlflow-operator-mlflow-edit"]
+
+        Controller -- "watches" --> NS
+        Controller -- "reads" --> Auth
+        Controller -- "creates in Namespace" --> RBView
+        Controller -- "creates in Namespace" --> RBEdit
+        Auth -. "allowedGroups" .-> RBView
+        Auth -. "adminGroups" .-> RBEdit
+        CR -. "roleRef" .-> RBView
+        CR -. "roleRef" .-> RBEdit
+    end
+```
+
+### Watch and lifecycle strategy summary
+
+| Watch object | Watch method | Lifecycle safety net | Rationale |
+|---|---|---|---|
+| **Namespace** | `For()` (primary) | `metadata.namespace` (K8s built-in: namespace deletion cascades to all contained resources) | Primary reconciliation target; label presence/absence drives create/cleanup |
+| **MLflow CR** | `Watches()` + custom mapper | `ownerReference` with `controller: true` (GC cascade) | Owner of the RoleBindings; GC provides a safety net when the operator is offline |
+| **Auth CR** | `Watches()` + custom mapper | None (watch + active reconcile only) | External resource from another operator; ownerReference would be ineffective due to multi-owner GC semantics and UID instability |
+| **RoleBinding** | `WatchesRawSource()` + dedicated caches + custom mapper | None (it *is* the controlled resource) | Self-healing: detects external tampering or deletion and triggers re-reconciliation. Must use dedicated per-name caches with `metadata.name` field selectors (`odh-group-mlflow-view`, `odh-group-mlflow-edit`) because the operator's RBAC uses `resourceNames`-scoped permissions — a general informer cache without a field selector would be rejected by the API server |
