@@ -19,6 +19,8 @@ env:
   UPGRADE_CLUSTER_NAME: 'mlflow-upgrade'
   UPGRADE_VALIDATION_CLUSTER_NAME: 'mlflow-upgrade-validation'
   UPGRADE_TEST_WORKSPACE: 'mlflow-upgrade-test-workspace'
+  MLFLOW_SEED_RBAC_COMMIT: '38b88c61fa4acd0f35081e4d0685c10c0c5bea91'
+  MLFLOW_SEED_OPERATOR_IMAGE: 'quay.io/opendatahub/mlflow-operator@sha256:8b2359c84f4cf325e475c086abbc26c97c4af397f5f5428f9344a64442c28d9f'
   MLFLOW_SEED_SOURCE_IMAGE: 'quay.io/opendatahub/mlflow@sha256:ad51bbd7f770491da88dc1db3b3c84f7471d25c48026ecb385180b63b18f4c64'
   MLFLOW_SEED_IMAGE: 'localhost/mlflow-seed:3.10.1'
 
@@ -101,6 +103,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
         with:
+          fetch-depth: 0
           persist-credentials: false
 
       - name: Resolve operator Dockerfile
@@ -390,30 +393,25 @@ jobs:
         shell: bash
         run: docker load -i "test-image/${{ env.MLFLOW_TESTS_RUNTIME_ARTIFACT }}.tar"
 
-      - name: Resolve operator Dockerfile
-        id: resolve-operator-dockerfile
+      - name: Install deploy helper dependencies
+        run: python3 -m pip install pyyaml kubernetes
+
+      - name: Deploy seed operator with legacy RBAC
         shell: bash
         run: |
-          if [[ -f Dockerfile.konflux ]]; then
-            echo "path=Dockerfile.konflux" >> "$GITHUB_OUTPUT"
-          else
-            echo "path=Dockerfile" >> "$GITHUB_OUTPUT"
-          fi
+          restore_rbac() {
+            git restore --source=HEAD --worktree -- config/rbac
+          }
+          trap restore_rbac EXIT
 
-      - name: Build MLflow 3.10.1-compatible seed operator image
-        env:
-          SEED_OPERATOR_IMG: "localhost/mlflow-operator-upgrade-seed:v0.0.1"
-        run: |
-          docker build \
-            --build-arg SUPPORTED_MLFLOW_VERSION_OVERRIDE=3.10.1 \
-            -f "${{ steps.resolve-operator-dockerfile.outputs.path }}" \
-            -t "${SEED_OPERATOR_IMG}" \
-            .
-
-      - name: Load seed operator image into Kind cluster
-        env:
-          SEED_OPERATOR_IMG: "localhost/mlflow-operator-upgrade-seed:v0.0.1"
-        run: kind load docker-image "${SEED_OPERATOR_IMG}" --name "${{ env.UPGRADE_VALIDATION_CLUSTER_NAME }}"
+          git fetch --depth=1 origin "${{ env.MLFLOW_SEED_RBAC_COMMIT }}"
+          git restore --source="${{ env.MLFLOW_SEED_RBAC_COMMIT }}" --worktree -- config/rbac
+          python3 .github/actions/deploy/deploy.py \
+            --namespace "${{ env.NAMESPACE }}" \
+            --mlflow-operator-image "${{ env.MLFLOW_SEED_OPERATOR_IMAGE }}" \
+            --platform base \
+            --skip-mlflow-cr \
+            --skip-infrastructure
 
       - name: Pull MLflow 3.10.1 seed image
         run: docker pull "${{ env.MLFLOW_SEED_SOURCE_IMAGE }}"
@@ -436,9 +434,10 @@ jobs:
             -v "$HOME/.kube:/mlflow/.kube:ro,z" \
             -v "${{ github.workspace }}/test-results:/mlflow/results:z" \
             -e DEPLOY_MLFLOW_OPERATOR=false \
+            -e SKIP_OPERATOR=true \
             -e SKIP_CLEANUP=true \
             -e NAMESPACE="${{ env.NAMESPACE }}" \
-            -e MLFLOW_OPERATOR_IMAGE="localhost/mlflow-operator-upgrade-seed:v0.0.1" \
+            -e MLFLOW_OPERATOR_IMAGE="${{ env.MLFLOW_SEED_OPERATOR_IMAGE }}" \
             -e MLFLOW_IMAGE="${{ env.MLFLOW_SEED_IMAGE }}" \
             -e BACKEND_STORE="${BACKEND_STORE}" \
             -e REGISTRY_STORE="${REGISTRY_STORE}" \
@@ -457,12 +456,12 @@ jobs:
       - name: Upgrade seeded deployment in place
         shell: bash
         run: |
-          kubectl set image deployment/mlflow-operator-controller-manager \
-            manager="${{ env.OPERATOR_RUNTIME_IMAGE }}" \
-            -n "${{ env.NAMESPACE }}"
-          kubectl rollout status deployment/mlflow-operator-controller-manager \
-            --timeout=300s \
-            -n "${{ env.NAMESPACE }}"
+          python3 .github/actions/deploy/deploy.py \
+            --namespace "${{ env.NAMESPACE }}" \
+            --mlflow-operator-image "${{ env.OPERATOR_RUNTIME_IMAGE }}" \
+            --platform base \
+            --skip-mlflow-cr \
+            --skip-infrastructure
           kubectl patch mlflow mlflow \
             -n "${{ env.NAMESPACE }}" \
             --type=merge \
@@ -554,20 +553,11 @@ jobs:
       - name: Clone the code
         uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
         with:
+          fetch-depth: 0
           persist-credentials: false
 
       - name: Free up disk space
         uses: kubeflow/pipelines/.github/actions/github-disk-cleanup@3004f974b571840bdb1ed6362c520d3cf566e9c0 # master
-
-      - name: Resolve operator Dockerfile
-        id: resolve-operator-dockerfile
-        shell: bash
-        run: |
-          if [[ -f Dockerfile.konflux ]]; then
-            echo "path=Dockerfile.konflux" >> "$GITHUB_OUTPUT"
-          else
-            echo "path=Dockerfile" >> "$GITHUB_OUTPUT"
-          fi
 
       - name: Setup Go
         uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
@@ -609,21 +599,6 @@ jobs:
           docker load -i "runtime-image/${{ env.MLFLOW_RUNTIME_ARTIFACT }}.tar"
           kind load docker-image "${{ env.MLFLOW_RUNTIME_IMAGE }}" --name ${{ env.UPGRADE_CLUSTER_NAME }}
 
-      - name: Build MLflow 3.10.1-compatible seed operator image
-        env:
-          SEED_OPERATOR_IMG: "localhost/mlflow-operator-upgrade-seed:v0.0.1"
-        run: |
-          docker build \
-            --build-arg SUPPORTED_MLFLOW_VERSION_OVERRIDE=3.10.1 \
-            -f "${{ steps.resolve-operator-dockerfile.outputs.path }}" \
-            -t "${SEED_OPERATOR_IMG}" \
-            .
-
-      - name: Load seed operator image into Kind cluster
-        env:
-          SEED_OPERATOR_IMG: "localhost/mlflow-operator-upgrade-seed:v0.0.1"
-        run: kind load docker-image "${SEED_OPERATOR_IMG}" --name ${{ env.UPGRADE_CLUSTER_NAME }}
-
       - name: Pull MLflow 3.10.1 seed image
         run: docker pull "${{ env.MLFLOW_SEED_SOURCE_IMAGE }}"
 
@@ -636,14 +611,30 @@ jobs:
       - name: Install deploy helper dependencies
         run: python3 -m pip install pyyaml kubernetes
 
+      - name: Deploy seed operator with legacy RBAC
+        shell: bash
+        run: |
+          restore_rbac() {
+            git restore --source=HEAD --worktree -- config/rbac
+          }
+          trap restore_rbac EXIT
+
+          git fetch --depth=1 origin "${{ env.MLFLOW_SEED_RBAC_COMMIT }}"
+          git restore --source="${{ env.MLFLOW_SEED_RBAC_COMMIT }}" --worktree -- config/rbac
+          python3 .github/actions/deploy/deploy.py \
+            --namespace "${{ env.NAMESPACE }}" \
+            --mlflow-operator-image "${{ env.MLFLOW_SEED_OPERATOR_IMAGE }}" \
+            --platform base \
+            --skip-mlflow-cr \
+            --skip-infrastructure
+
       - name: Deploy seeded MLflow 3.10.1 instance
         shell: bash
-        env:
-          SEED_OPERATOR_IMG: "localhost/mlflow-operator-upgrade-seed:v0.0.1"
         run: |
           DEPLOY_ARGS=(
             --namespace "${{ env.NAMESPACE }}"
-            --mlflow-operator-image "${SEED_OPERATOR_IMG}"
+            --skip-operator
+            --mlflow-operator-image "${{ env.MLFLOW_SEED_OPERATOR_IMAGE }}"
             --mlflow-image "${{ env.MLFLOW_SEED_IMAGE }}"
             --backend-store "${{ matrix.backend_store }}"
             --registry-store "${{ matrix.backend_store }}"
@@ -653,10 +644,15 @@ jobs:
 
           python3 .github/actions/deploy/deploy.py "${DEPLOY_ARGS[@]}"
 
-      - name: Wait for seeded MLflow 3.10.1 migration to complete
+      - name: Reapply current operator manifests before upgrade e2e
         shell: bash
         run: |
-          kubectl wait --for=jsonpath='{.status.version}'=3.10.1 mlflow/mlflow --timeout=300s
+          python3 .github/actions/deploy/deploy.py \
+            --namespace "${{ env.NAMESPACE }}" \
+            --mlflow-operator-image "${{ env.MLFLOW_SEED_OPERATOR_IMAGE }}" \
+            --platform base \
+            --skip-mlflow-cr \
+            --skip-infrastructure
 
       - name: Run upgrade e2e tests
         run: make test-e2e-upgrade E2E_IMG=${{ env.UPGRADE_OPERATOR_IMAGE }} MLFLOW_SEED_IMAGE=${{ env.MLFLOW_SEED_IMAGE }}

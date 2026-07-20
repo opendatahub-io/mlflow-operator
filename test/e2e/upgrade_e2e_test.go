@@ -47,11 +47,8 @@ import (
 )
 
 const (
-	// The pinned ODH release 1.1 seed image reports MLflow 3.10.1+rhaiv.3,
-	// while the upgrade flow normalizes status.version to upstream 3.10.1.
 	upgradeSeedImage = "quay.io/opendatahub/mlflow@" +
 		"sha256:ad51bbd7f770491da88dc1db3b3c84f7471d25c48026ecb385180b63b18f4c64"
-	upgradeSeedVersion       = "3.10.1"
 	upgradeVerifyJob         = "mlflow-upgrade-verify"
 	upgradePVCName           = "mlflow-pvc"
 	controllerDeploymentName = "mlflow-operator-controller-manager"
@@ -111,7 +108,6 @@ var _ = Describe("Upgrade", Ordered, Label("upgrade"), func() {
 		Eventually(func(g Gomega) {
 			err := k8sClient.Get(ctx, types.NamespacedName{Name: "mlflow"}, mlflow)
 			g.Expect(err).NotTo(HaveOccurred())
-			g.Expect(mlflow.Status.Version).To(Equal(upgradeSeedVersion))
 			g.Expect(mlflow.Spec.Image).NotTo(BeNil())
 			g.Expect(mlflow.Spec.Image.Image).NotTo(BeNil())
 			g.Expect(*mlflow.Spec.Image.Image).To(Equal(seedImage))
