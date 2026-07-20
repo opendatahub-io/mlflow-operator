@@ -166,6 +166,8 @@ runs:
     - name: Deploy MLflow
       id: deploy
       shell: bash
+      env:
+        WORKERS: ${{ inputs.workers }}
       run: |
         cd ${{ github.action_path }}
         python deploy.py \
@@ -189,9 +191,8 @@ runs:
           --s3-access-key "${{ inputs.s3_access_key }}" \
           --s3-secret-key "${{ inputs.s3_secret_key }}" \
           --s3-endpoint "${{ inputs.s3_endpoint }}" \
-          --s3-endpoint "${{ inputs.s3_endpoint }}" \
           --workspace-label-selector '${{ inputs.workspace_label_selector }}' \
-          --workers "${{ inputs.workers }}" \
+          --workers "$WORKERS" \
           ${{ inputs.postgres_tls == 'true' && '--postgres-tls' || '' }} \
           ${{ inputs.seaweedfs_tls == 'true' && '--seaweedfs-tls' || '' }}
 

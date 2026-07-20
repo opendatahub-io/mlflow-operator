@@ -1425,6 +1425,8 @@ def main():
     parser.add_argument("--workspace-label-selector", default="")
 
     args = parser.parse_args()
+    if args.workers < 1:
+        parser.error("--workers must be >= 1")
 
     # Apply SeaweedFS defaults for self-deployed S3 storage if not provided
     if args.artifact_storage == "s3":
