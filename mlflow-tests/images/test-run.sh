@@ -430,6 +430,58 @@ cleanup_self_managed_infrastructure() {
     fi
 }
 
+collect_debug_logs() {
+    local failure_reason="${1:-failure}"
+
+    echo "  Collecting debug logs after ${failure_reason}..."
+    if ! "$SCRIPT_DIR/collect-debug-logs.sh" \
+        --namespace "$NAMESPACE" \
+        --output-dir "${TEST_RESULTS_DIR}/debug"; then
+        echo "WARN: debug log collection failed for namespace '${NAMESPACE}' after ${failure_reason}" >&2
+    fi
+}
+
+wait_for_mlflow_cr_available() {
+    echo "  Waiting for MLflow CR to report Available=True..."
+    if kubectl wait \
+        --for=condition=Available \
+        "mlflow/${MLFLOW_NAME}" \
+        --namespace "$NAMESPACE" \
+        --timeout=300s; then
+        local available_reason=""
+        available_reason="$(kubectl get mlflow "$MLFLOW_NAME" -n "$NAMESPACE" -o jsonpath="{.status.conditions[?(@.type=='Available')].reason}" 2>/dev/null || true)"
+        echo "  MLflow CR reports Available=True${available_reason:+ (reason: ${available_reason})}"
+        return 0
+    fi
+
+    local available_status=""
+    local available_reason=""
+    available_status="$(kubectl get mlflow "$MLFLOW_NAME" -n "$NAMESPACE" -o jsonpath="{.status.conditions[?(@.type=='Available')].status}" 2>/dev/null || true)"
+    available_reason="$(kubectl get mlflow "$MLFLOW_NAME" -n "$NAMESPACE" -o jsonpath="{.status.conditions[?(@.type=='Available')].reason}" 2>/dev/null || true)"
+    echo "ERROR: MLflow CR did not report Available=True within timeout (last status: ${available_status:-missing}, reason: ${available_reason:-missing})" >&2
+    collect_debug_logs "status availability failure"
+    return 1
+}
+
+wait_for_mlflow_server_info() {
+    local api_url="${MLFLOW_TRACKING_URI%/}/api/3.0/mlflow/server-info"
+    local retry=0
+    local max_retries=36  # 36 × 5 s = 3 min
+
+    echo "  Waiting for MLflow server-info endpoint at $api_url..."
+    until curl -sk --max-time 5 -o /dev/null -w "%{http_code}" "$api_url" | grep -qx "200"; do
+        retry=$((retry + 1))
+        if [ "$retry" -ge "$max_retries" ]; then
+            echo "ERROR: MLflow server-info endpoint did not become reachable within timeout" >&2
+            collect_debug_logs "server-info readiness failure"
+            return 1
+        fi
+        echo "  Attempt $retry/$max_retries — retrying in 5s..."
+        sleep 5
+    done
+    echo "  MLflow server-info endpoint is reachable"
+}
+
 should_cleanup_reused_resources() {
     local cleanup_status="${1:-${OVERALL_EXIT:-0}}"
     case "$CLEANUP_REUSED_RESOURCES" in
@@ -716,7 +768,6 @@ run_suite() {
     setup_rbac || return $?
 
     # ── Tracking URI ────────────────────────────────────────────────────────────
-    local health_url
     if [ "$INFRASTRUCTURE_PLATFORM" = "openshift" ] && [ "$FORCE_PORT_FORWARD" != "true" ]; then
         echo "  Waiting for MLflow CR status.url to be populated..."
         local external_url=""
@@ -728,6 +779,7 @@ run_suite() {
             addr_retry=$((addr_retry + 1))
             if [ "$addr_retry" -ge "$addr_max" ]; then
                 echo "ERROR: MLflow CR status.url not populated within timeout" >&2
+                collect_debug_logs "status.url readiness failure"
                 return 1
             fi
             echo "  Attempt $addr_retry/$addr_max — retrying in 5s..."
@@ -739,16 +791,11 @@ run_suite() {
             echo "  Using legacy tracking URI shape without /mlflow static prefix for upgrade MLflow ${MLFLOW_TEST_SUPPORTED_VERSION:-unknown}"
         fi
         export MLFLOW_TRACKING_URI="$tracking_url"
-        health_url="${external_url}/health"
     else
         local mlflow_base_path="/mlflow"
         if ! should_use_mlflow_static_prefix; then
             mlflow_base_path=""
             echo "  Using legacy tracking URI shape without /mlflow static prefix for upgrade MLflow ${MLFLOW_TEST_SUPPORTED_VERSION:-unknown}"
-        fi
-        local health_base_path="/mlflow"
-        if ! should_use_mlflow_prefixed_health_endpoint; then
-            health_base_path=""
         fi
         if [ "$INFRASTRUCTURE_PLATFORM" = "openshift" ] && [ "$FORCE_PORT_FORWARD" = "true" ]; then
             echo "  FORCE_PORT_FORWARD=true, using localhost port-forward instead of MLflow CR status.url"
@@ -758,24 +805,16 @@ run_suite() {
         PF_PID=$!
         sleep 2
         export MLFLOW_TRACKING_URI="https://localhost:8443${mlflow_base_path}"
-        health_url="https://localhost:8443${health_base_path}/health"
     fi
     echo "  MLFLOW_TRACKING_URI=$MLFLOW_TRACKING_URI"
 
-    # ── Health check ────────────────────────────────────────────────────────────
-    echo "  Waiting for MLflow health endpoint at $health_url..."
-    local retry=0
-    local max_retries=36  # 36 × 5 s = 3 min
-    until curl -sk --max-time 5 -o /dev/null -w "%{http_code}" "$health_url" | grep -qE "^(200|302)$"; do
-        retry=$((retry + 1))
-        if [ "$retry" -ge "$max_retries" ]; then
-            echo "ERROR: MLflow endpoint did not become reachable within timeout" >&2
-            return 1
-        fi
-        echo "  Attempt $retry/$max_retries — retrying in 5s..."
-        sleep 5
-    done
-    echo "  MLflow endpoint is reachable"
+    # ── MLflow CR availability ─────────────────────────────────────────────────
+    if ! wait_for_mlflow_cr_available; then
+        return 1
+    fi
+    if ! wait_for_mlflow_server_info; then
+        return 1
+    fi
 
     if [ "$INFERRED_UPGRADE_PHASE" = "post_upgrade" ]; then
         echo "  Waiting for MLflow CR status.version to reach ${SUPPORTED_MLFLOW_VERSION_RAW}..."
@@ -785,6 +824,7 @@ run_suite() {
             --namespace "$NAMESPACE" \
             --timeout=300s; then
             echo "ERROR: MLflow CR did not report status.version=${SUPPORTED_MLFLOW_VERSION_RAW} within timeout" >&2
+            collect_debug_logs "status.version readiness failure"
             return 1
         fi
         echo "  MLflow CR status.version matches ${SUPPORTED_MLFLOW_VERSION_RAW}"

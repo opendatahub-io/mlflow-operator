@@ -24,6 +24,8 @@ from .utils import (
 )
 
 logger = logging.getLogger(__name__)
+_UPGRADE_EXPERIMENT_SETUP_MAX_ATTEMPTS = 4
+_UPGRADE_EXPERIMENT_SETUP_RETRY_DELAY_SECONDS = 1
 
 
 def make_upgrade_state_action(action_name: str, **state_updates):
@@ -55,6 +57,16 @@ def _is_missing_resource_error(exc: MlflowException) -> bool:
     return error_code == "RESOURCE_DOES_NOT_EXIST" or "RESOURCE_DOES_NOT_EXIST" in message
 
 
+def _is_upgrade_experiment_already_exists_error(exc: Exception) -> bool:
+    """Return whether create_experiment reported an existing named experiment."""
+    if not isinstance(exc, MlflowException):
+        return False
+
+    error_code = getattr(exc, "error_code", "")
+    message = str(exc)
+    return error_code == "RESOURCE_ALREADY_EXISTS" or "already exists" in message.lower()
+
+
 def action_write_pre_upgrade_version_configmap(test_context: TestContext) -> None:
     """Write the normalized supported MLflow version into the shared ConfigMap."""
     version = get_supported_upgrade_version_from_env()
@@ -73,18 +85,49 @@ def action_ensure_upgrade_experiment(test_context: TestContext) -> None:
     """Create the current upgrade experiment if needed and store its identifier."""
     experiment = _require_upgrade_payload(test_context, "current_experiment")
     experiment_name = experiment["experiment_name"]
-    existing = mlflow.get_experiment_by_name(experiment_name)
-    if existing is not None:
-        raise AssertionError(
-            f"Upgrade experiment '{experiment_name}' already exists in workspace "
-            f"'{test_context.active_workspace}'. Clean the static upgrade workspace before reseeding."
-        )
-    experiment_id = mlflow.create_experiment(experiment_name)
-    logger.info("Created upgrade experiment '%s' with id %s", experiment_name, experiment_id)
+    for attempt in range(1, _UPGRADE_EXPERIMENT_SETUP_MAX_ATTEMPTS + 1):
+        try:
+            existing = mlflow.get_experiment_by_name(experiment_name)
+            if existing is not None:
+                raise AssertionError(
+                    f"Upgrade experiment '{experiment_name}' already exists in workspace "
+                    f"'{test_context.active_workspace}'. Clean the static upgrade workspace before reseeding."
+                )
 
-    test_context.active_experiment_id = experiment_id
-    test_context.upgrade_state["active_experiment_name"] = experiment_name
-    test_context.upgrade_observed_state["experiment_id"] = experiment_id
+            try:
+                experiment_id = mlflow.create_experiment(experiment_name)
+                logger.info("Created upgrade experiment '%s' with id %s", experiment_name, experiment_id)
+            except Exception as exc:
+                if not _is_upgrade_experiment_already_exists_error(exc):
+                    raise
+                existing = mlflow.get_experiment_by_name(experiment_name)
+                if existing is None:
+                    raise
+                experiment_id = existing.experiment_id
+                logger.info(
+                    "Reused upgrade experiment '%s' with id %s after create returned already exists",
+                    experiment_name,
+                    experiment_id,
+                )
+
+            test_context.active_experiment_id = experiment_id
+            test_context.upgrade_state["active_experiment_name"] = experiment_name
+            test_context.upgrade_observed_state["experiment_id"] = experiment_id
+            return
+        except Exception as exc:
+            if attempt == _UPGRADE_EXPERIMENT_SETUP_MAX_ATTEMPTS:
+                raise
+            logger.warning(
+                "Upgrade experiment setup failure for '%s' in workspace '%s' "
+                "(attempt %s/%s): %s: %s",
+                experiment_name,
+                test_context.active_workspace,
+                attempt,
+                _UPGRADE_EXPERIMENT_SETUP_MAX_ATTEMPTS,
+                type(exc).__name__,
+                exc,
+            )
+            time.sleep(_UPGRADE_EXPERIMENT_SETUP_RETRY_DELAY_SECONDS)
 
 
 def action_start_upgrade_run(test_context: TestContext) -> None:
