@@ -4,7 +4,8 @@
 # Usage:
 #   collect-debug-logs.sh --namespace <ns> [--output-dir <dir>]
 #
-# Called by test-run.sh on test failure and by the GHA collect-debug-logs action.
+# Called by test-run.sh on pre-pytest readiness failures, test failure, and by
+# the GHA collect-debug-logs action.
 # Writes to the output directory so logs are available in CI artifacts regardless
 # of whether the runner is GHA, Jenkins, or local.
 
