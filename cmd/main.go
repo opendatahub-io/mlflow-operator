@@ -19,6 +19,7 @@ package main
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -224,7 +225,9 @@ func main() {
 			setupLog.Info("APIServer TLS profile API unavailable, using Intermediate defaults")
 		case apierrors.IsServiceUnavailable(err),
 			apierrors.IsTimeout(err),
-			apierrors.IsTooManyRequests(err):
+			apierrors.IsServerTimeout(err),
+			apierrors.IsTooManyRequests(err),
+			errors.Is(err, context.DeadlineExceeded):
 			setupLog.Info("Transient API error reading TLS profile, using Intermediate defaults", "error", err)
 			tlsProfileFetched = true // watcher self-heals when the API recovers
 		default:
