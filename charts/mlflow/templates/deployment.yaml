@@ -22,6 +22,18 @@
 {{- fail "mlflow.registryStoreUriFrom.secretKeyRef must include non-empty 'name' and 'key'" }}
 {{- end }}
 {{- end }}
+{{- if and .Values.artifactsServer.enabled .Values.mlflow.serveArtifacts }}
+{{- fail "mlflow.serveArtifacts and artifactsServer.enabled are mutually exclusive" }}
+{{- end }}
+{{- if and .Values.artifactsServer.enabled (not .Values.artifactsServer.artifactRoot) }}
+{{- fail "artifactsServer.artifactRoot must be set when artifactsServer.enabled is true" }}
+{{- end }}
+{{- if and .Values.artifactsServer.enabled (empty .Values.artifactsServer.artifactsDestination) }}
+{{- fail "artifactsServer.artifactsDestination must be set when artifactsServer.enabled is true" }}
+{{- end }}
+{{- if and .Values.artifactsServer.enabled (hasPrefix "file://" .Values.artifactsServer.artifactsDestination) (or (not .Values.storage.enabled) (ne .Values.storage.accessMode "ReadWriteMany")) }}
+{{- fail "file-based artifactsServer.artifactsDestination requires storage.enabled=true and storage.accessMode=ReadWriteMany" }}
+{{- end }}
 {{- $healthPrefix := .Values.mlflow.staticPrefix | trimSuffix "/" -}}
 apiVersion: apps/v1
 kind: Deployment
@@ -124,13 +136,16 @@ spec:
             - mlflow
           args:
             - server
-            {{- if .Values.mlflow.serveArtifacts }}
+            {{- if .Values.artifactsServer.enabled }}
+            - --no-serve-artifacts
+            - --default-artifact-root={{ .Values.artifactsServer.artifactRoot }}
+            {{- else if .Values.mlflow.serveArtifacts }}
             - --serve-artifacts
             - --artifacts-destination={{ .Values.mlflow.artifactsDestination }}
             {{- else }}
             - --no-serve-artifacts
             {{- end }}
-            {{- if .Values.mlflow.defaultArtifactRoot }}
+            {{- if and (not .Values.artifactsServer.enabled) .Values.mlflow.defaultArtifactRoot }}
             - --default-artifact-root={{ .Values.mlflow.defaultArtifactRoot }}
             {{- end }}
             - --app-name=kubernetes-auth

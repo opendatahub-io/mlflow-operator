@@ -11,12 +11,24 @@ import (
 const mlflowServicePort = 8443
 
 func buildStatusURL(mlflowName, baseURL string, baseURLConfigured bool) string {
+	return buildResourceURL(mlflowName, ResourceName, baseURL, baseURLConfigured)
+}
+
+func buildArtifactsURL(mlflowName, baseURL string, baseURLConfigured bool) string {
+	baseURL = buildResourceURL(mlflowName, ArtifactsResourceName, baseURL, baseURLConfigured)
+	if baseURL == "" {
+		return ""
+	}
+	return baseURL + "/api/2.0/mlflow-artifacts/artifacts"
+}
+
+func buildResourceURL(mlflowName, resourceName, baseURL string, baseURLConfigured bool) string {
 	baseURL = strings.TrimRight(baseURL, "/")
 	if baseURL == "" || !baseURLConfigured {
 		return ""
 	}
 
-	return fmt.Sprintf("%s/%s%s", baseURL, ResourceName, getResourceSuffix(mlflowName))
+	return fmt.Sprintf("%s/%s%s", baseURL, resourceName, getResourceSuffix(mlflowName))
 }
 
 func buildStatusAddress(mlflowName, namespace string) *mlflowv1.MLflowAddressStatus {

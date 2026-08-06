@@ -21,20 +21,24 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	mlflowv1 "github.com/opendatahub-io/mlflow-operator/api/v1"
+	"github.com/opendatahub-io/mlflow-operator/internal/config"
 )
 
 var _ = Describe("MLflow Controller", func() {
@@ -247,6 +251,162 @@ var _ = Describe("MLflow Controller", func() {
 			Expect(rootRule.Matches[0].Path.Value).NotTo(BeNil())
 			Expect(*rootRule.Matches[0].Path.Value).To(Equal("/" + ResourceName))
 		})
+
+		It("should reconcile an enabled dedicated artifact server and evaluate its readiness", func() {
+			Expect(k8sClient.Get(ctx, typeNamespacedName, mlflow)).To(Succeed())
+			mlflow.Spec.ArtifactsServer = &mlflowv1.ArtifactsServerSpec{Enabled: true}
+			mlflow.Spec.ArtifactsDestination = ptr("s3://bucket/artifacts")
+			Expect(k8sClient.Update(ctx, mlflow)).To(Succeed())
+
+			controllerReconciler := &MLflowReconciler{
+				Client:             k8sClient,
+				Scheme:             k8sClient.Scheme(),
+				Namespace:          "opendatahub",
+				ChartPath:          "../../charts/mlflow",
+				HTTPRouteAvailable: true,
+				GCRBACWatchCache:   mustNewGCRBACWatchCache(),
+				baseConfig: &config.OperatorConfig{
+					MLflowImage:         controllerTestMLflowImage,
+					GatewayName:         "data-science-gateway",
+					MLflowURL:           "https://gateway.example.com",
+					MLflowURLConfigured: true,
+				},
+			}
+			artifactKey := types.NamespacedName{Name: ArtifactsResourceName, Namespace: "opendatahub"}
+			DeferCleanup(func() {
+				for _, obj := range []client.Object{
+					&appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: ArtifactsResourceName, Namespace: "opendatahub"}},
+					&corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: ArtifactsResourceName, Namespace: "opendatahub"}},
+					&gatewayv1.HTTPRoute{ObjectMeta: metav1.ObjectMeta{Name: ArtifactsResourceName, Namespace: "opendatahub"}},
+				} {
+					Expect(client.IgnoreNotFound(k8sClient.Delete(ctx, obj))).To(Succeed())
+				}
+			})
+
+			_, reconcileErr := controllerReconciler.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
+			Expect(reconcileErr).NotTo(HaveOccurred())
+
+			Expect(k8sClient.Get(ctx, artifactKey, &appsv1.Deployment{})).To(Succeed())
+			Expect(k8sClient.Get(ctx, artifactKey, &corev1.Service{})).To(Succeed())
+			Expect(k8sClient.Get(ctx, artifactKey, &gatewayv1.HTTPRoute{})).To(Succeed())
+
+			trackingDeployment := &appsv1.Deployment{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: ResourceName, Namespace: "opendatahub"}, trackingDeployment)).To(Succeed())
+			trackingDeployment.Status.Replicas = 1
+			trackingDeployment.Status.ReadyReplicas = 1
+			Expect(k8sClient.Status().Update(ctx, trackingDeployment)).To(Succeed())
+
+			_, reconcileErr = controllerReconciler.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
+			Expect(reconcileErr).NotTo(HaveOccurred())
+			Expect(k8sClient.Get(ctx, typeNamespacedName, mlflow)).To(Succeed())
+			available := meta.FindStatusCondition(mlflow.Status.Conditions, "Available")
+			Expect(available).NotTo(BeNil())
+			Expect(available.Status).To(Equal(metav1.ConditionFalse))
+			Expect(available.Message).To(ContainSubstring(ArtifactsResourceName))
+		})
+
+		It("should create and clean up dedicated artifact resources", func() {
+			Expect(k8sClient.Get(ctx, typeNamespacedName, mlflow)).To(Succeed())
+			mlflow.Spec.ArtifactsServer = &mlflowv1.ArtifactsServerSpec{Enabled: true}
+			mlflow.Spec.ArtifactsDestination = ptr("s3://bucket/artifacts")
+			Expect(k8sClient.Update(ctx, mlflow)).To(Succeed())
+
+			controllerReconciler := &MLflowReconciler{
+				Client:             k8sClient,
+				Scheme:             k8sClient.Scheme(),
+				Namespace:          "opendatahub",
+				ChartPath:          "../../charts/mlflow",
+				HTTPRouteAvailable: true,
+				GCRBACWatchCache:   mustNewGCRBACWatchCache(),
+			}
+			Expect(controllerReconciler.reconcileArtifactsHTTPRoute(ctx, mlflow, "opendatahub", &config.OperatorConfig{
+				GatewayName: "data-science-gateway",
+			})).To(Succeed())
+
+			artifactKey := types.NamespacedName{Name: ArtifactsResourceName, Namespace: "opendatahub"}
+			artifactRoute := &gatewayv1.HTTPRoute{}
+			Expect(k8sClient.Get(ctx, artifactKey, artifactRoute)).To(Succeed())
+			Expect(artifactRoute.Spec.Rules).To(HaveLen(1))
+			Expect(*artifactRoute.Spec.Rules[0].Matches[0].Path.Value).To(Equal("/" + ArtifactsResourceName))
+			Expect(artifactRoute.Spec.Rules[0].BackendRefs[0].Name).To(Equal(gatewayv1.ObjectName(ArtifactsResourceName)))
+			Expect(artifactRoute.Labels).To(HaveKeyWithValue("app", ResourceName))
+
+			artifactLabels := map[string]string{"app": ArtifactsResourceName}
+			ownerReference := *metav1.NewControllerRef(mlflow, mlflowv1.GroupVersion.WithKind("MLflow"))
+			Expect(k8sClient.Create(ctx, &appsv1.Deployment{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:            ArtifactsResourceName,
+					Namespace:       "opendatahub",
+					OwnerReferences: []metav1.OwnerReference{ownerReference},
+				},
+				Spec: appsv1.DeploymentSpec{
+					Selector: &metav1.LabelSelector{MatchLabels: artifactLabels},
+					Template: corev1.PodTemplateSpec{
+						ObjectMeta: metav1.ObjectMeta{Labels: artifactLabels},
+						Spec: corev1.PodSpec{Containers: []corev1.Container{{
+							Name: "mlflow-artifacts", Image: "example.com/mlflow:test",
+						}}},
+					},
+				},
+			})).To(Succeed())
+			DeferCleanup(func() {
+				for _, obj := range []client.Object{
+					&appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: ArtifactsResourceName, Namespace: "opendatahub"}},
+					&corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: ArtifactsResourceName, Namespace: "opendatahub"}},
+				} {
+					Expect(client.IgnoreNotFound(k8sClient.Delete(ctx, obj))).To(Succeed())
+				}
+			})
+			Expect(k8sClient.Create(ctx, &corev1.Service{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:            ArtifactsResourceName,
+					Namespace:       "opendatahub",
+					OwnerReferences: []metav1.OwnerReference{ownerReference},
+				},
+				Spec: corev1.ServiceSpec{Ports: []corev1.ServicePort{{
+					Name: "https", Port: 8443,
+				}}},
+			})).To(Succeed())
+
+			Expect(k8sClient.Get(ctx, typeNamespacedName, mlflow)).To(Succeed())
+			mlflow.Spec.ArtifactsServer = nil
+			Expect(k8sClient.Update(ctx, mlflow)).To(Succeed())
+			_, reconcileErr := controllerReconciler.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
+			Expect(reconcileErr).NotTo(HaveOccurred())
+
+			Expect(errors.IsNotFound(k8sClient.Get(ctx, artifactKey, &appsv1.Deployment{}))).To(BeTrue())
+			Expect(errors.IsNotFound(k8sClient.Get(ctx, artifactKey, &corev1.Service{}))).To(BeTrue())
+			Expect(errors.IsNotFound(k8sClient.Get(ctx, artifactKey, &gatewayv1.HTTPRoute{}))).To(BeTrue())
+		})
+
+		It("should preserve unowned artifact resources when split serving is disabled", func() {
+			foreignService := &corev1.Service{
+				ObjectMeta: metav1.ObjectMeta{Name: ArtifactsResourceName, Namespace: "opendatahub"},
+				Spec:       corev1.ServiceSpec{Ports: []corev1.ServicePort{{Name: "https", Port: 8443}}},
+			}
+			Expect(k8sClient.Create(ctx, foreignService)).To(Succeed())
+			DeferCleanup(func() {
+				service := &corev1.Service{}
+				key := types.NamespacedName{Name: ArtifactsResourceName, Namespace: "opendatahub"}
+				if err := k8sClient.Get(ctx, key, service); err == nil {
+					Expect(k8sClient.Delete(ctx, service)).To(Succeed())
+				}
+			})
+
+			controllerReconciler := &MLflowReconciler{
+				Client:             k8sClient,
+				Scheme:             k8sClient.Scheme(),
+				Namespace:          "opendatahub",
+				ChartPath:          "../../charts/mlflow",
+				HTTPRouteAvailable: false,
+				GCRBACWatchCache:   mustNewGCRBACWatchCache(),
+			}
+			_, reconcileErr := controllerReconciler.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
+			Expect(reconcileErr).NotTo(HaveOccurred())
+			Expect(k8sClient.Get(ctx, types.NamespacedName{
+				Name: ArtifactsResourceName, Namespace: "opendatahub",
+			}, &corev1.Service{})).To(Succeed())
+		})
 	})
 
 	Describe("CEL validation", func() {
@@ -339,6 +499,105 @@ var _ = Describe("MLflow Controller", func() {
 						Schedule:  &schedule,
 						Location:  &location,
 						Retention: &retention,
+					},
+				},
+			}
+			Expect(k8sClient.Create(ctx, mlflow)).To(Succeed())
+		})
+
+		It("allows missing defaultArtifactRoot when artifactsServer is enabled", func() {
+			artifactsDestination := "s3://bucket/artifacts"
+			mlflow := &mlflowv1.MLflow{
+				ObjectMeta: metav1.ObjectMeta{Name: resourceName},
+				Spec: mlflowv1.MLflowSpec{
+					BackendStoreURI:      &pgStoreURI,
+					ArtifactsDestination: &artifactsDestination,
+					ArtifactsServer:      &mlflowv1.ArtifactsServerSpec{Enabled: true},
+				},
+			}
+			Expect(k8sClient.Create(ctx, mlflow)).To(Succeed())
+		})
+
+		It("rejects enabling artifact serving on both deployments", func() {
+			serveArtifactsTrue := true
+			artifactsDestination := "s3://bucket/artifacts"
+			mlflow := &mlflowv1.MLflow{
+				ObjectMeta: metav1.ObjectMeta{Name: resourceName},
+				Spec: mlflowv1.MLflowSpec{
+					BackendStoreURI:      &pgStoreURI,
+					ArtifactsDestination: &artifactsDestination,
+					ServeArtifacts:       &serveArtifactsTrue,
+					ArtifactsServer:      &mlflowv1.ArtifactsServerSpec{Enabled: true},
+				},
+			}
+			err := k8sClient.Create(ctx, mlflow)
+			Expect(errors.IsInvalid(err)).To(BeTrue())
+			Expect(err.Error()).To(ContainSubstring("serveArtifacts and artifactsServer.enabled are mutually exclusive"))
+		})
+
+		It("rejects an artifact server replica count below one", func() {
+			zero := int32(0)
+			artifactsDestination := "s3://bucket/artifacts"
+			mlflow := &mlflowv1.MLflow{
+				ObjectMeta: metav1.ObjectMeta{Name: resourceName},
+				Spec: mlflowv1.MLflowSpec{
+					BackendStoreURI:      &pgStoreURI,
+					ArtifactsDestination: &artifactsDestination,
+					ArtifactsServer:      &mlflowv1.ArtifactsServerSpec{Enabled: true, Replicas: &zero},
+				},
+			}
+			err := k8sClient.Create(ctx, mlflow)
+			Expect(errors.IsInvalid(err)).To(BeTrue())
+			Expect(err.Error()).To(ContainSubstring("spec.artifactsServer.replicas"))
+		})
+
+		It("rejects an artifact server without an explicit destination", func() {
+			mlflow := &mlflowv1.MLflow{
+				ObjectMeta: metav1.ObjectMeta{Name: resourceName},
+				Spec: mlflowv1.MLflowSpec{
+					BackendStoreURI: &pgStoreURI,
+					ArtifactsServer: &mlflowv1.ArtifactsServerSpec{Enabled: true},
+				},
+			}
+			err := k8sClient.Create(ctx, mlflow)
+			Expect(errors.IsInvalid(err)).To(BeTrue())
+			Expect(err.Error()).To(ContainSubstring("artifactsDestination must be set when artifactsServer is enabled"))
+		})
+
+		It("rejects a file-backed artifact server without ReadWriteMany storage", func() {
+			artifactsDestination := "file:///mlflow/artifacts"
+			mlflow := &mlflowv1.MLflow{
+				ObjectMeta: metav1.ObjectMeta{Name: resourceName},
+				Spec: mlflowv1.MLflowSpec{
+					BackendStoreURI:      &pgStoreURI,
+					ArtifactsDestination: &artifactsDestination,
+					ArtifactsServer:      &mlflowv1.ArtifactsServerSpec{Enabled: true},
+					Storage: &corev1.PersistentVolumeClaimSpec{
+						AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
+						Resources: corev1.VolumeResourceRequirements{Requests: corev1.ResourceList{
+							corev1.ResourceStorage: resource.MustParse("1Gi"),
+						}},
+					},
+				},
+			}
+			err := k8sClient.Create(ctx, mlflow)
+			Expect(errors.IsInvalid(err)).To(BeTrue())
+			Expect(err.Error()).To(ContainSubstring("ReadWriteMany"))
+		})
+
+		It("allows a file-backed artifact server with ReadWriteMany storage", func() {
+			artifactsDestination := "file:///mlflow/artifacts"
+			mlflow := &mlflowv1.MLflow{
+				ObjectMeta: metav1.ObjectMeta{Name: resourceName},
+				Spec: mlflowv1.MLflowSpec{
+					BackendStoreURI:      &pgStoreURI,
+					ArtifactsDestination: &artifactsDestination,
+					ArtifactsServer:      &mlflowv1.ArtifactsServerSpec{Enabled: true},
+					Storage: &corev1.PersistentVolumeClaimSpec{
+						AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteMany},
+						Resources: corev1.VolumeResourceRequirements{Requests: corev1.ResourceList{
+							corev1.ResourceStorage: resource.MustParse("1Gi"),
+						}},
 					},
 				},
 			}

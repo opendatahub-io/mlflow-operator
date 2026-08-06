@@ -107,6 +107,76 @@ for chart_dir in charts/*/; do
             echo -e "  ${GREEN}✓ Malformed read-replica secret ref rejected${NC}"
         fi
 
+        echo "  Rendering dedicated artifacts-only server..."
+        ARTIFACT_SERVER_SETS="mlflow.backendStoreUri=postgresql://db/mlflow,mlflow.serveArtifacts=false,artifactsServer.enabled=true,artifactsServer.artifactsDestination=s3://bucket/artifacts,artifactsServer.artifactRoot=https://mlflow.example.com/mlflow-artifacts/api/2.0/mlflow-artifacts/artifacts"
+        if helm template test "$chart_dir" --set "$ARTIFACT_SERVER_SETS" > /dev/null 2>&1; then
+            echo -e "  ${GREEN}✓ Dedicated artifact server renders successfully${NC}"
+        else
+            echo -e "  ${RED}✗ Dedicated artifact server failed to render${NC}"
+            helm template test "$chart_dir" --set "$ARTIFACT_SERVER_SETS" || true
+            chart_failed=1
+        fi
+
+        echo "  Rejecting artifact server without an advertised artifact root..."
+        if helm template test "$chart_dir" \
+            --set "mlflow.backendStoreUri=postgresql://db/mlflow" \
+            --set "mlflow.serveArtifacts=false" \
+            --set "artifactsServer.enabled=true" > /dev/null 2>&1; then
+            echo -e "  ${RED}✗ Artifact server without artifactRoot was accepted${NC}"
+            chart_failed=1
+        else
+            echo -e "  ${GREEN}✓ Missing artifactRoot rejected${NC}"
+        fi
+
+        echo "  Rejecting artifact server without an artifact destination..."
+        DESTINATION_ERROR=$(helm template test "$chart_dir" \
+            --set "mlflow.backendStoreUri=postgresql://db/mlflow" \
+            --set "mlflow.serveArtifacts=false" \
+            --set "artifactsServer.enabled=true" \
+            --set "artifactsServer.artifactRoot=https://mlflow.example.com/mlflow-artifacts/api/2.0/mlflow-artifacts/artifacts" \
+            --set "artifactsServer.artifactsDestination=null" 2>&1) && destination_accepted=1 || destination_accepted=0
+        if [ "$destination_accepted" -eq 1 ]; then
+            echo -e "  ${RED}✗ Artifact server without artifactsDestination was accepted${NC}"
+            chart_failed=1
+        elif grep -q "artifactsServer.artifactsDestination must be set" <<< "$DESTINATION_ERROR"; then
+            echo -e "  ${GREEN}✓ Missing artifactsDestination rejected${NC}"
+        else
+            echo -e "  ${RED}✗ Missing artifactsDestination returned an unexpected error${NC}"
+            printf '%s\n' "$DESTINATION_ERROR"
+            chart_failed=1
+        fi
+
+        echo "  Rejecting simultaneous inline and dedicated artifact serving..."
+        if helm template test "$chart_dir" \
+            --set "mlflow.backendStoreUri=postgresql://db/mlflow" \
+            --set "mlflow.serveArtifacts=true" \
+            --set "artifactsServer.enabled=true" \
+            --set "artifactsServer.artifactRoot=https://mlflow.example.com/mlflow-artifacts/api/2.0/mlflow-artifacts/artifacts" > /dev/null 2>&1; then
+            echo -e "  ${RED}✗ Mutually exclusive artifact serving modes were accepted${NC}"
+            chart_failed=1
+        else
+            echo -e "  ${GREEN}✓ Mutually exclusive artifact serving modes rejected${NC}"
+        fi
+
+        echo "  Rejecting file-backed artifact server without ReadWriteMany storage..."
+        FILE_ARTIFACT_SERVER_SETS="mlflow.backendStoreUri=postgresql://db/mlflow,mlflow.serveArtifacts=false,artifactsServer.enabled=true,artifactsServer.artifactsDestination=file:///mlflow/artifacts,artifactsServer.artifactRoot=https://mlflow.example.com/mlflow-artifacts/api/2.0/mlflow-artifacts/artifacts"
+        if helm template test "$chart_dir" --set "$FILE_ARTIFACT_SERVER_SETS" > /dev/null 2>&1; then
+            echo -e "  ${RED}✗ File-backed artifact server with ReadWriteOnce storage was accepted${NC}"
+            chart_failed=1
+        else
+            echo -e "  ${GREEN}✓ File-backed artifact server with ReadWriteOnce storage rejected${NC}"
+        fi
+
+        echo "  Rendering file-backed artifact server with ReadWriteMany storage..."
+        RWX_SETS="$FILE_ARTIFACT_SERVER_SETS,storage.enabled=true,storage.accessMode=ReadWriteMany"
+        if helm template test "$chart_dir" --set "$RWX_SETS" > /dev/null 2>&1; then
+            echo -e "  ${GREEN}✓ File-backed artifact server with ReadWriteMany storage renders successfully${NC}"
+        else
+            echo -e "  ${RED}✗ File-backed artifact server with ReadWriteMany storage failed to render${NC}"
+            helm template test "$chart_dir" --set "$RWX_SETS" || true
+            chart_failed=1
+        fi
+
         if [ "$chart_failed" -ne 0 ]; then
             HELM_EXIT_CODE=1
         else

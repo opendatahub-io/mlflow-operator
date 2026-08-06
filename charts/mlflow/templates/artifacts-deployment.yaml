@@ -1,0 +1,247 @@
+{{- if .Values.artifactsServer.enabled }}
+{{- $healthPrefix := .Values.artifactsServer.staticPrefix | trimSuffix "/" -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mlflow-artifacts{{ .Values.resourceSuffix }}
+  namespace: {{ .Values.namespace }}
+  labels:
+    app: mlflow
+    {{- with .Values.commonLabels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  replicas: {{ .Values.artifactsServer.replicaCount }}
+  strategy:
+    {{- if .Values.storage.enabled }}
+    type: Recreate
+    {{- else }}
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+    {{- end }}
+  selector:
+    matchLabels:
+      app: mlflow-artifacts{{ .Values.resourceSuffix }}
+  template:
+    metadata:
+      labels:
+        app: mlflow-artifacts{{ .Values.resourceSuffix }}
+        app.kubernetes.io/instance: mlflow{{ .Values.resourceSuffix }}
+        {{- with .Values.commonLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ .Values.serviceAccount.name }}
+      automountServiceAccountToken: true
+      {{- with .Values.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.resourceClaims }}
+      resourceClaims:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 128Mi
+        {{- if .Values.storage.enabled }}
+        - name: mlflow-storage
+          persistentVolumeClaim:
+            claimName: mlflow-pvc{{ .Values.resourceSuffix }}
+        {{- end }}
+        - name: mlflow-artifacts-tls
+          secret:
+            secretName: {{ .Values.artifactsServer.tls.secretName }}
+            defaultMode: {{ .Values.artifactsServer.tls.defaultMode | default 420 }}
+        {{- include "mlflow.caBundleVolumes" . | nindent 8 }}
+      {{- include "mlflow.caBundleInitContainers" . | nindent 6 }}
+
+      containers:
+        - name: mlflow-artifacts
+          image: {{ .Values.image.name }}
+          {{- if .Values.image.imagePullPolicy }}
+          imagePullPolicy: {{ .Values.image.imagePullPolicy }}
+          {{- end }}
+          command:
+            - mlflow
+          args:
+            - server
+            - --artifacts-only
+            - --artifacts-destination={{ .Values.artifactsServer.artifactsDestination }}
+            - --app-name=kubernetes-auth
+            - --enable-workspaces
+            - --workspace-store-uri={{ .Values.artifactsServer.workspaceStoreUri }}
+            - --host=0.0.0.0
+            - --port={{ .Values.artifactsServer.port }}
+            - --workers={{ .Values.artifactsServer.workers }}
+            - "--uvicorn-opts=--ssl-keyfile=/etc/tls/private/tls.key --ssl-certfile=/etc/tls/private/tls.crt --proxy-headers"
+            {{- if .Values.artifactsServer.allowedHosts }}
+            - --allowed-hosts
+            - "{{ join "," .Values.artifactsServer.allowedHosts }}"
+            {{- end }}
+            {{- if .Values.artifactsServer.staticPrefix }}
+            - --static-prefix={{ .Values.artifactsServer.staticPrefix }}
+            {{- end }}
+          env:
+            - name: MLFLOW_DISABLE_TELEMETRY
+              value: "true"
+            - name: MLFLOW_SERVER_ENABLE_JOB_EXECUTION
+              value: "false"
+            - name: MLFLOW_K8S_AUTH_AUTHORIZATION_MODE
+              value: "self_subject_access_review"
+            {{- if .Values.artifactsServer.workspaceLabelSelector }}
+            - name: MLFLOW_K8S_WORKSPACE_LABEL_SELECTOR
+              value: {{ .Values.artifactsServer.workspaceLabelSelector | quote }}
+            {{- end }}
+            {{- range .Values.env }}
+            - name: {{ .name }}
+              {{- if .valueFrom }}
+              valueFrom:
+                {{- toYaml .valueFrom | nindent 16 }}
+              {{- else }}
+              value: {{ .value | quote }}
+              {{- end }}
+            {{- end }}
+            - name: MLFLOW_SERVER_DISABLE_SECURITY_MIDDLEWARE
+              value: "false"
+            {{- if .Values.caBundle.configMaps }}
+            - name: SSL_CERT_FILE
+              value: {{ .Values.caBundle.outputPath | quote }}
+            - name: REQUESTS_CA_BUNDLE
+              value: {{ .Values.caBundle.outputPath | quote }}
+            - name: CURL_CA_BUNDLE
+              value: {{ .Values.caBundle.outputPath | quote }}
+            - name: AWS_CA_BUNDLE
+              value: {{ .Values.caBundle.outputPath | quote }}
+            - name: MLFLOW_S3_IGNORE_TLS
+              value: "false"
+            {{- end }}
+          {{- if .Values.envFrom }}
+          envFrom:
+            {{- toYaml .Values.envFrom | nindent 12 }}
+          {{- end }}
+          ports:
+            - name: https
+              containerPort: {{ .Values.artifactsServer.port }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            {{- if .Values.storage.enabled }}
+            - name: mlflow-storage
+              mountPath: /mlflow
+            {{- end }}
+            - name: mlflow-artifacts-tls
+              mountPath: /etc/tls/private
+              readOnly: true
+            {{- if .Values.caBundle.configMaps }}
+            - name: combined-ca-bundle
+              mountPath: {{ dir .Values.caBundle.outputPath }}
+              readOnly: true
+            {{- end }}
+          livenessProbe:
+            httpGet:
+              path: {{ printf "%s/health" $healthPrefix }}
+              port: https
+              scheme: HTTPS
+            initialDelaySeconds: 30
+            timeoutSeconds: 1
+            periodSeconds: 10
+            successThreshold: 1
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: {{ printf "%s/health" $healthPrefix }}
+              port: https
+              scheme: HTTPS
+            initialDelaySeconds: 5
+            timeoutSeconds: 1
+            periodSeconds: 5
+            successThreshold: 1
+            failureThreshold: 3
+          {{- with .Values.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with (.Values.artifactsServer.resources | default .Values.resources) }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+
+        {{- if .Values.caBundle.configMaps }}
+        - name: ca-bundle-watcher
+          image: {{ .Values.image.name }}
+          {{- if .Values.image.imagePullPolicy }}
+          imagePullPolicy: {{ .Values.image.imagePullPolicy }}
+          {{- end }}
+          command:
+            - /bin/sh
+            - -c
+            - |
+{{ include "mlflow.caBundleFunctions" . | indent 14 }}
+
+              LAST_CHECKSUM=$(compute_checksum)
+              while true; do
+                sleep "$CA_BUNDLE_WATCH_INTERVAL"
+                CURRENT_CHECKSUM=$(compute_checksum)
+                if [ "$CURRENT_CHECKSUM" != "$LAST_CHECKSUM" ]; then
+                  if combine_ca_bundles; then
+                    LAST_CHECKSUM="$CURRENT_CHECKSUM"
+                  fi
+                fi
+              done
+          env:
+            - name: CA_BUNDLE_WATCH_INTERVAL
+              value: "{{ .Values.caBundle.watchInterval | default 30 }}"
+            - name: CA_BUNDLE_FILE_PATHS
+              value: {{ include "mlflow.caBundleFilePaths" . | quote }}
+            - name: CA_BUNDLE_MOUNT_PATHS
+              value: {{ include "mlflow.caBundleMountPaths" . | quote }}
+            - name: CA_BUNDLE_OUTPUT
+              value: {{ .Values.caBundle.outputPath | quote }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            - name: combined-ca-bundle
+              mountPath: {{ dir .Values.caBundle.outputPath }}
+            {{- range $i, $cm := .Values.caBundle.configMaps }}
+            - name: ca-bundle-{{ $i }}
+              mountPath: {{ $cm.mountPath }}
+              readOnly: true
+            {{- end }}
+          {{- with .Values.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          resources:
+            requests:
+              cpu: 5m
+              memory: 8Mi
+            limits:
+              cpu: 50m
+              memory: 32Mi
+        {{- end }}
+{{- end }}
+
+

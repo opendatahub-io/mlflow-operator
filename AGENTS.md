@@ -152,6 +152,8 @@ charts/mlflow/
     ├── rbac.yaml
     ├── pvc.yaml
     ├── deployment.yaml           # MLflow server with kubernetes-auth and TLS
+    ├── artifacts-deployment.yaml # Optional workspace-aware artifacts-only server
+    ├── artifacts-service.yaml    # Optional artifacts-only Service
     ├── cronjob.yaml              # Garbage collection CronJob
     └── service.yaml
 ```
@@ -165,6 +167,10 @@ When deploying on OpenShift (`openShift.enabled: true`), the deployment includes
 - **FIPS compatibility**: On OpenShift, the operator sets `UVICORN_SSL_CIPHERS=PROFILE=SYSTEM` by default so uvicorn follows the platform crypto policy and continues to accept both TLS 1.2 and TLS 1.3; if the MLflow CR sets `UVICORN_SSL_CIPHERS` in `spec.env`, the operator preserves that value
 
 The Helm chart does not create an OpenShift Route. Create your own Route if you need external exposure on OpenShift.
+
+### Dedicated artifact server
+
+`spec.artifactsServer.enabled` creates an independently scalable `mlflow-artifacts` Deployment and Service. The operator also creates a `/mlflow-artifacts` `HTTPRoute`, configures the tracking server with `--no-serve-artifacts`, and advertises the dedicated route as the tracking server's default artifact root. The artifact pod runs with `--artifacts-only`, `--enable-workspaces`, and `--workspace-store-uri=kubernetes://`; this requires an MLflow runtime containing the workspace-aware artifacts-only support introduced upstream in `mlflow/mlflow#24452`. The split mode requires `spec.artifactsDestination`, an explicitly configured external `MLFLOW_URL`, and the Gateway API `HTTPRoute` resource. A `file://` destination also requires shared storage whose first access mode is `ReadWriteMany`, because both Deployments mount the same PVC. `serveArtifacts` and `artifactsServer.enabled` are mutually exclusive.
 
 ### Customizing Values
 
@@ -378,7 +384,13 @@ The `config/samples/` directory contains example MLflow custom resource configur
    - Configures archival location, retention, schedule, and max traces per pass
    - Local `file://` archival requires storage whose first access mode is `ReadWriteMany`
 
-7. **mlflow_v1_mlflowconfig.yaml** - Namespace artifact storage override
+7. **mlflow_v1_mlflow_artifacts_server.yaml** - Dedicated artifact server
+   - Separate tracking and workspace-aware artifacts-only Deployments
+   - Independent artifact-server replicas and resources
+   - PostgreSQL metadata plus shared S3 artifact storage
+   - Requires the external MLflow gateway URL and Gateway API `HTTPRoute`
+
+8. **mlflow_v1_mlflowconfig.yaml** - Namespace artifact storage override
    - Override artifact storage with custom bucket and path
    - Example of namespace-specific artifact configuration
    - Requires Secret with S3 credentials in the same namespace

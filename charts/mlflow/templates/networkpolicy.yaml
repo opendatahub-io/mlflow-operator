@@ -19,6 +19,10 @@ spec:
     - ports:
         - protocol: TCP
           port: {{ .Values.mlflow.port }}
+        {{- if and .Values.artifactsServer.enabled (ne (.Values.artifactsServer.port | int) (.Values.mlflow.port | int)) }}
+        - protocol: TCP
+          port: {{ .Values.artifactsServer.port }}
+        {{- end }}
       from:
         - podSelector: {}
         # MLflow is a cluster-wide service accessed by the ODH/RHOAI gateway,

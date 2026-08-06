@@ -169,6 +169,37 @@ mlflow:
   # Leave empty for direct access without a prefix
   staticPrefix: ""
 
+# Optional dedicated artifacts-only MLflow server. The operator supplies artifactRoot from
+# its external gateway URL and creates the matching HTTPRoute. Standalone chart users must
+# expose the Service themselves and set artifactRoot to that externally reachable artifact API.
+# Operator deployments keep port, staticPrefix, TLS, and Service settings fixed so they stay
+# aligned with the managed HTTPRoute and serving-certificate contract.
+artifactsServer:
+  enabled: false
+  replicaCount: 1
+  # Storage destination used by the artifacts-only server. A file:// destination requires
+  # storage.enabled=true and storage.accessMode=ReadWriteMany when this server is enabled.
+  artifactsDestination: "file:///mlflow/artifacts"
+  # Externally reachable artifact API root advertised by the tracking server, for example:
+  # https://mlflow.example.com/mlflow-artifacts/api/2.0/mlflow-artifacts/artifacts
+  artifactRoot: ""
+  workspaceStoreUri: "kubernetes://"
+  # Optional label selector applied to the Kubernetes workspace provider.
+  workspaceLabelSelector: ""
+  workers: 1
+  port: 8443
+  allowedHosts: []
+  staticPrefix: "/mlflow-artifacts"
+  # Empty resources inherit the main server resources.
+  resources: {}
+  tls:
+    secretName: mlflow-artifacts-tls
+    defaultMode: 420
+  service:
+    type: ClusterIP
+    port: 8443
+    annotations: {}
+
 # Environment variables for MLflow container
 # Supports both direct values and references to secrets/configmaps
 env:

@@ -78,6 +78,46 @@ func TestBuildStatusURL(t *testing.T) {
 	}
 }
 
+func TestBuildArtifactsURL(t *testing.T) {
+	tests := []struct {
+		name       string
+		mlflowName string
+		baseURL    string
+		configured bool
+		want       string
+	}{
+		{
+			name:       "default CR name",
+			mlflowName: "mlflow",
+			baseURL:    "https://gateway.example.com/",
+			configured: true,
+			want:       "https://gateway.example.com/mlflow-artifacts/api/2.0/mlflow-artifacts/artifacts",
+		},
+		{
+			name:       "custom CR name and existing base path",
+			mlflowName: "dev",
+			baseURL:    "https://gateway.example.com/base",
+			configured: true,
+			want:       "https://gateway.example.com/base/mlflow-artifacts-dev/api/2.0/mlflow-artifacts/artifacts",
+		},
+		{
+			name:       "unconfigured URL",
+			mlflowName: "mlflow",
+			baseURL:    config.DefaultMLflowURL,
+			configured: false,
+			want:       "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := buildArtifactsURL(tt.mlflowName, tt.baseURL, tt.configured); got != tt.want {
+				t.Fatalf("buildArtifactsURL() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestBuildStatusAddress(t *testing.T) {
 	tests := []struct {
 		name       string

@@ -368,6 +368,59 @@ When trace archival is disabled or the CR is deleted, the operator cleans up the
 
 See `config/samples/mlflow_v1_mlflow_trace_archival.yaml` for a complete example.
 
+### Dedicated Artifact Server
+
+Artifact traffic can be isolated from tracking traffic by enabling a dedicated MLflow
+artifacts-only server:
+
+```yaml
+spec:
+  backendStoreUriFrom:
+    name: mlflow-db-credentials
+    key: backend-store-uri
+  artifactsDestination: s3://mlflow-artifacts
+  serveArtifacts: false
+  artifactsServer:
+    enabled: true
+    replicas: 2
+    resources:
+      requests:
+        cpu: 500m
+        memory: 1Gi
+```
+
+The split topology requires the operator's external `MLFLOW_URL` to be configured and the
+Gateway API `HTTPRoute` resource to be available. `artifactsDestination` must be set explicitly.
+For a `file://` destination, configure shared storage with `ReadWriteMany` as its first access
+mode because both Deployments mount the same PVC. The operator creates:
+
+- The normal `mlflow` tracking Deployment, Service, and `/mlflow` HTTPRoute
+- An `mlflow-artifacts` Deployment running with `--artifacts-only`
+- An `mlflow-artifacts` Service and `/mlflow-artifacts` HTTPRoute
+- A separate `mlflow-artifacts-tls` serving-certificate request on OpenShift; on other
+  Kubernetes distributions, provide that Secret before enabling the feature
+
+The tracking server runs with `--no-serve-artifacts` and advertises
+`<MLFLOW_URL>/mlflow-artifacts/api/2.0/mlflow-artifacts/artifacts` as its default artifact
+root. MLflow clients therefore continue to use the tracking server for metadata while sending
+artifact uploads and downloads to the dedicated route.
+
+Both deployments use `kubernetes://` as the workspace provider and Kubernetes authorization.
+They share the image, ServiceAccount, workspace label selector, environment, credentials, CA
+bundles, security contexts, and scheduling configuration. `artifactsServer.replicas` and
+`artifactsServer.resources` can scale artifact processing independently; artifact resources
+inherit the main server resources when omitted. `serveArtifacts` and
+`artifactsServer.enabled` cannot both be enabled.
+
+The artifacts-only server validates `X-MLFLOW-WORKSPACE` and scopes proxied paths under the
+request workspace. A namespace-specific `MLflowConfig.spec.artifactRootSecret` remains a direct
+storage override: experiments in that workspace receive the configured object-storage URI and
+bypass the shared artifact proxy. The artifacts-only server has one global
+`artifactsDestination` and does not dynamically select per-namespace storage credentials.
+
+Disabling `artifactsServer` removes its Deployment, Service, and HTTPRoute. See
+`config/samples/mlflow_v1_mlflow_artifacts_server.yaml` for a complete remote-storage example.
+
 ### CORS Configuration
 
 The operator automatically configures `MLFLOW_SERVER_CORS_ALLOWED_ORIGINS` with safe defaults:
@@ -464,6 +517,7 @@ When CA bundles are present (platform or custom), PostgreSQL connections use `PG
 See the [config/samples](./config/samples/) directory for complete examples:
 - `mlflow_v1_mlflow.yaml` - OpenShift deployment with local storage, service-ca TLS, and a commented DRA example
 - `mlflow_v1_mlflow_remote_storage.yaml` - PostgreSQL primary/read-replica routing + S3 storage with horizontal scaling and a temporary storage override for proxied artifact serving
+- `mlflow_v1_mlflow_artifacts_server.yaml` - Split tracking and workspace-aware artifacts-only servers using PostgreSQL and S3
 - `mlflow_v1_mlflowconfig.yaml` - Namespace-scoped artifact storage override using the upstream `MLflowConfig` CRD
 
 ## Development

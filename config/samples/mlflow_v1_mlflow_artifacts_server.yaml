@@ -1,0 +1,50 @@
+# Split deployment with a tracking server and a dedicated artifacts-only server.
+# The operator must have MLFLOW_URL configured to the external gateway base URL,
+# and the cluster must provide the Gateway API HTTPRoute resource.
+apiVersion: mlflow.opendatahub.io/v1
+kind: MLflow
+metadata:
+  name: mlflow
+spec:
+  image:
+    image: quay.io/opendatahub/mlflow:odh-stable
+    imagePullPolicy: Always
+
+  replicas: 2
+  resources:
+    requests:
+      cpu: 500m
+      memory: 1Gi
+    limits:
+      cpu: "2"
+      memory: 2Gi
+
+  backendStoreUriFrom:
+    name: mlflow-db-credentials
+    key: backend-store-uri
+
+  # Required for the dedicated server; both artifact pods use this remote destination.
+  artifactsDestination: s3://my-mlflow-bucket/artifacts
+  serveArtifacts: false
+  artifactsServer:
+    enabled: true
+    replicas: 2
+    resources:
+      requests:
+        cpu: 500m
+        memory: 1Gi
+      limits:
+        cpu: "2"
+        memory: 2Gi
+
+  workspaceLabelSelector:
+    matchLabels:
+      opendatahub.io/mlflow-workspace: "true"
+
+  envFrom:
+    - secretRef:
+        name: aws-credentials
+  env:
+    - name: AWS_DEFAULT_REGION
+      value: us-east-1
+
