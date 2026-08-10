@@ -91,7 +91,7 @@ spec:
       volumes:
         - name: tmp
           emptyDir:
-            sizeLimit: 128Mi
+            sizeLimit: {{ .Values.temporaryStorage.sizeLimit }}
         {{- if .Values.storage.enabled }}
         - name: mlflow-storage
           persistentVolumeClaim:

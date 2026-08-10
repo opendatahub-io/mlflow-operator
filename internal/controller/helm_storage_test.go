@@ -119,3 +119,60 @@ func TestMlflowToHelmValues_Storage(t *testing.T) {
 		})
 	}
 }
+
+func TestMlflowToHelmValues_TemporaryStorage(t *testing.T) {
+	renderer := &HelmRenderer{}
+
+	tests := []struct {
+		name          string
+		mlflow        *mlflowv1.MLflow
+		wantSizeLimit string
+	}{
+		{
+			name: "temporary storage not configured - should use default",
+			mlflow: &mlflowv1.MLflow{
+				ObjectMeta: metav1.ObjectMeta{Name: "test"},
+				Spec: mlflowv1.MLflowSpec{
+					BackendStoreURI: ptr(testBackendStoreURI),
+				},
+			},
+			wantSizeLimit: defaultTemporaryStorageSize,
+		},
+		{
+			name: "temporary storage configured with custom size",
+			mlflow: &mlflowv1.MLflow{
+				ObjectMeta: metav1.ObjectMeta{Name: "test"},
+				Spec: mlflowv1.MLflowSpec{
+					BackendStoreURI: ptr(testBackendStoreURI),
+					TemporaryStorage: &mlflowv1.TemporaryStorageSpec{
+						SizeLimit: quantityPtr("4Gi"),
+					},
+				},
+			},
+			wantSizeLimit: "4Gi",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			g := gomega.NewWithT(t)
+
+			values, err := renderer.mlflowToHelmValues(tt.mlflow, "test-namespace", RenderOptions{}, nil)
+			g.Expect(err).NotTo(gomega.HaveOccurred())
+
+			temporaryStorage, ok := values["temporaryStorage"].(map[string]interface{})
+			if !ok {
+				t.Fatal("temporaryStorage not found in values or wrong type")
+			}
+
+			if got := temporaryStorage["sizeLimit"].(string); got != tt.wantSizeLimit {
+				t.Errorf("temporaryStorage.sizeLimit = %v, want %v", got, tt.wantSizeLimit)
+			}
+		})
+	}
+}
+
+func quantityPtr(value string) *resource.Quantity {
+	quantity := resource.MustParse(value)
+	return &quantity
+}

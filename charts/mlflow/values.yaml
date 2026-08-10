@@ -65,6 +65,12 @@ storage:
   storageClassName: ""  # Use default storage class
   accessMode: ReadWriteOnce
 
+# Writable temporary storage shared by the MLflow pod containers and related Jobs.
+# This matters most when serveArtifacts is enabled against remote artifact storage,
+# because proxied upload/download flows can spool artifact data through /tmp.
+temporaryStorage:
+  sizeLimit: 1Gi
+
 # MLflow server configuration
 mlflow:
   # Backend store URI (where MLflow stores experiment and run metadata)

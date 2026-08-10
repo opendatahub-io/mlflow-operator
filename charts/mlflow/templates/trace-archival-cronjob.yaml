@@ -51,7 +51,7 @@ spec:
           volumes:
             - name: tmp
               emptyDir:
-                sizeLimit: 128Mi
+                sizeLimit: {{ .Values.temporaryStorage.sizeLimit }}
             - name: trace-archival-config
               configMap:
                 name: mlflow-trace-archival-config{{ .Values.resourceSuffix }}

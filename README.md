@@ -241,6 +241,11 @@ spec:
   defaultArtifactRoot: "s3://my-mlflow-bucket/artifacts/runs"
   serveArtifacts: true
 
+  # Optional: increase writable /tmp capacity for proxied artifact serving.
+  # The operator/chart default is 1Gi.
+  temporaryStorage:
+    sizeLimit: 2Gi
+
   # S3 credentials via secret
   envFrom:
     - secretRef:
@@ -260,6 +265,11 @@ kubectl create secret generic mlflow-db-credentials \
   --from-literal=read-replica-backend-store-uri='postgresql://mlflow:password@postgres-reader.example.com:5432/mlflow' \
   -n <namespace>
 ```
+
+When `serveArtifacts` is enabled against remote storage such as S3, MLflow can spool
+artifact bytes through `/tmp` during proxied upload/download flows. Use
+`spec.temporaryStorage.sizeLimit` to raise that writable `emptyDir` above the 1Gi default
+for deployments that expect larger or more concurrent artifact transfers.
 
 ### Read-Replica Backend Routing
 
@@ -451,7 +461,7 @@ When CA bundles are present (platform or custom), PostgreSQL connections use `PG
 
 See the [config/samples](./config/samples/) directory for complete examples:
 - `mlflow_v1_mlflow.yaml` - OpenShift deployment with local storage, service-ca TLS, and a commented DRA example
-- `mlflow_v1_mlflow_remote_storage.yaml` - PostgreSQL primary/read-replica routing + S3 storage with horizontal scaling
+- `mlflow_v1_mlflow_remote_storage.yaml` - PostgreSQL primary/read-replica routing + S3 storage with horizontal scaling and a temporary storage override for proxied artifact serving
 - `mlflow_v1_mlflowconfig.yaml` - Namespace-scoped artifact storage override using the upstream `MLflowConfig` CRD
 
 ## Development

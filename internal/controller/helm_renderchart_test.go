@@ -186,6 +186,89 @@ func TestRenderChart(t *testing.T) {
 			},
 		},
 		{
+			name: "temporary storage size should be rendered across deployment and jobs",
+			mlflow: &mlflowv1.MLflow{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "test-mlflow",
+				},
+				Spec: mlflowv1.MLflowSpec{
+					BackendStoreURI:      ptr("postgresql://postgres.example.com:5432/mlflow"),
+					RegistryStoreURI:     ptr("postgresql://postgres.example.com:5432/mlflow"),
+					ArtifactsDestination: ptr("s3://my-bucket/artifacts"),
+					ServeArtifacts:       ptr(true),
+					TemporaryStorage: &mlflowv1.TemporaryStorageSpec{
+						SizeLimit: quantityPtr("5Gi"),
+					},
+					GarbageCollection: &mlflowv1.GarbageCollectionSpec{
+						Schedule: "0 2 * * 0",
+					},
+					TraceArchival: &mlflowv1.TraceArchivalSpec{
+						Enabled:   true,
+						Schedule:  ptr("0 3 * * *"),
+						Location:  ptr("s3://my-bucket/trace-archive"),
+						Retention: ptr("30d"),
+					},
+				},
+			},
+			namespace: "test-ns",
+			wantErr:   false,
+			validateObjs: func(t *testing.T, objs []*unstructured.Unstructured) {
+				resourceSuffix := getResourceSuffix("test-mlflow")
+				expected := map[string]string{
+					deploymentKind + "/mlflow" + resourceSuffix:      "5Gi",
+					"CronJob/mlflow-gc" + resourceSuffix:             "5Gi",
+					"CronJob/mlflow-trace-archival" + resourceSuffix: "5Gi",
+				}
+
+				for _, obj := range objs {
+					key := obj.GetKind() + "/" + obj.GetName()
+					wantSize, ok := expected[key]
+					if !ok {
+						continue
+					}
+
+					var volumes []interface{}
+					var found bool
+					var err error
+					switch obj.GetKind() {
+					case deploymentKind:
+						volumes, found, err = unstructured.NestedSlice(obj.Object, "spec", "template", "spec", "volumes")
+					case "CronJob":
+						volumes, found, err = unstructured.NestedSlice(obj.Object, "spec", "jobTemplate", "spec", "template", "spec", "volumes")
+					}
+					if err != nil || !found {
+						t.Fatalf("failed to get volumes for %s: found=%v err=%v", key, found, err)
+					}
+
+					foundTmp := false
+					for _, volume := range volumes {
+						volumeMap, ok := volume.(map[string]interface{})
+						if !ok || volumeMap["name"] != "tmp" {
+							continue
+						}
+						foundTmp = true
+						emptyDir, ok := volumeMap["emptyDir"].(map[string]interface{})
+						if !ok {
+							t.Fatalf("%s tmp volume missing emptyDir", key)
+						}
+						if got := emptyDir["sizeLimit"]; got != wantSize {
+							t.Errorf("%s tmp emptyDir sizeLimit = %v, want %v", key, got, wantSize)
+						}
+						break
+					}
+					if !foundTmp {
+						t.Fatalf("%s missing tmp volume", key)
+					}
+
+					delete(expected, key)
+				}
+
+				if len(expected) != 0 {
+					t.Fatalf("missing rendered objects for: %v", expected)
+				}
+			},
+		},
+		{
 			name: "RBAC resources should use static ClusterRole and ClusterRoleBinding names",
 			mlflow: &mlflowv1.MLflow{
 				ObjectMeta: metav1.ObjectMeta{
