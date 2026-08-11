@@ -244,11 +244,32 @@ func main() {
 	}
 	tlsOpts = append(tlsOpts, tlsConfigFn)
 
+	tlsAdherenceFetched := false
 	tlsAdherence, err := tlspkg.FetchAPIServerTLSAdherencePolicy(bootstrapCtx, bootstrapClient)
 	if err != nil {
-		setupLog.Info("unable to fetch TLS adherence policy, watcher will retry", "error", err)
+		switch {
+		case apierrors.IsNotFound(err), apimeta.IsNoMatchError(err):
+			if tlsProfileFetched {
+				// Profile was readable (OpenShift) but adherence lookup failed transiently — keep watcher active.
+				setupLog.Info("TLS adherence policy lookup unavailable, watcher will retry", "error", err)
+				tlsAdherenceFetched = true
+			} else {
+				setupLog.Info("TLS adherence policy API unavailable, skipping adherence watcher")
+			}
+		case apierrors.IsServiceUnavailable(err),
+			apierrors.IsTimeout(err),
+			apierrors.IsServerTimeout(err),
+			apierrors.IsTooManyRequests(err),
+			errors.Is(err, context.DeadlineExceeded):
+			setupLog.Info("Transient API error reading TLS adherence policy, watcher will retry", "error", err)
+			tlsAdherenceFetched = true
+		default:
+			setupLog.Error(err, "unable to fetch TLS adherence policy")
+			os.Exit(1)
+		}
+	} else {
+		tlsAdherenceFetched = true
 	}
-	tlsAdherenceFetched := true
 
 	tlsOpts = append(tlsOpts, func(c *tls.Config) {
 		c.NextProtos = []string{"h2", "http/1.1"}
