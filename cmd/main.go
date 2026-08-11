@@ -227,6 +227,7 @@ func main() {
 			apierrors.IsTimeout(err),
 			apierrors.IsServerTimeout(err),
 			apierrors.IsTooManyRequests(err),
+			apierrors.IsInternalError(err),
 			errors.Is(err, context.DeadlineExceeded):
 			setupLog.Info("Transient API error reading TLS profile, using Intermediate defaults", "error", err)
 			tlsProfileFetched = true // watcher self-heals when the API recovers
@@ -260,6 +261,7 @@ func main() {
 			apierrors.IsTimeout(err),
 			apierrors.IsServerTimeout(err),
 			apierrors.IsTooManyRequests(err),
+			apierrors.IsInternalError(err),
 			errors.Is(err, context.DeadlineExceeded):
 			setupLog.Info("Transient API error reading TLS adherence policy, watcher will retry", "error", err)
 			tlsAdherenceFetched = true
