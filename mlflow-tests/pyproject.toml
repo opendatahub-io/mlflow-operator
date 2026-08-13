@@ -6,7 +6,7 @@ readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
     "kubernetes>=35,<37",
-    "mlflow>=3.11",
+    "mlflow>=3.13.0rc0",
     "pytest>=9.0.2",
     "boto3>=1.42.40",
     "pydantic>=2.0.0",
