@@ -374,3 +374,54 @@ def action_create_upgrade_prompt_version(test_context: TestContext) -> None:
         prompt_name,
         [],
     ).append(created.version)
+
+
+def action_ensure_upgrade_mcp_server(test_context: TestContext) -> None:
+    """Create the current upgrade MCP server if needed."""
+    server_payload = _require_upgrade_payload(test_context, "current_mcp_server")
+    server_name = server_payload["name"]
+    try:
+        mlflow.genai.get_mcp_server(server_name)
+        raise AssertionError(
+            f"Upgrade MCP server '{server_name}' already exists in workspace "
+            f"'{test_context.active_workspace}'. Clean the static upgrade workspace before reseeding."
+        )
+    except MlflowException as exc:
+        if not _is_missing_resource_error(exc):
+            raise
+        mlflow.genai.register_mcp_server(
+            server_json={
+                "name": server_name,
+                "version": server_payload["version"],
+                "description": server_payload["description"],
+            },
+            tools=None,
+        )
+        logger.info("Created upgrade MCP server '%s'", server_name)
+    test_context.active_mcp_server_name = server_name
+
+
+def action_tag_upgrade_mcp_server(test_context: TestContext) -> None:
+    """Set the configured tags on the active upgrade MCP server."""
+    server_payload = _require_upgrade_payload(test_context, "current_mcp_server")
+    if not test_context.active_mcp_server_name:
+        raise ValueError("active_mcp_server_name must be set before tagging an upgrade MCP server")
+    server_name = test_context.active_mcp_server_name
+    for key, value in server_payload["tags"].items():
+        mlflow.genai.set_mcp_server_tag(server_name, key, value)
+
+
+def action_create_upgrade_mcp_access_endpoint(test_context: TestContext) -> None:
+    """Create the configured access endpoint for the active upgrade MCP server."""
+    server_payload = _require_upgrade_payload(test_context, "current_mcp_server")
+    if not test_context.active_mcp_server_name:
+        raise ValueError("active_mcp_server_name must be set before creating an upgrade MCP access endpoint")
+    server_name = test_context.active_mcp_server_name
+    endpoint_payload = server_payload["access_endpoint"]
+    endpoint = mlflow.genai.create_mcp_access_endpoint(
+        server_name=server_name,
+        url=endpoint_payload["url"],
+        transport_type=endpoint_payload["transport_type"],
+        server_version=server_payload["version"],
+    )
+    test_context.upgrade_observed_state["mcp_access_endpoint_id"] = endpoint.id

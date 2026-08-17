@@ -268,6 +268,34 @@ class TestBase:
                     logger.warning(error_msg)
                     cleanup_errors.append(error_msg)
 
+        # Cleanup MCP servers with workspace awareness
+        if self.test_context.mcp_servers_to_delete:
+            logger.info(f"Cleaning up {len(self.test_context.mcp_servers_to_delete)} MCP servers")
+            for server_name, workspace in self.test_context.mcp_servers_to_delete.items():
+                try:
+                    # Switch to the correct workspace
+                    if not self._switch_workspace(workspace, cleanup_errors):
+                        # Workspace switch failed, skip this resource
+                        continue
+
+                    try:
+                        server = mlflow.genai.get_mcp_server(server_name)
+                        if server:
+                            mlflow.genai.delete_mcp_server(server_name)
+                            logger.info(f"Deleted MCP server {server_name} in workspace {workspace}")
+                    except Exception as get_error:
+                        # Server may not exist (already deleted or never created)
+                        if "RESOURCE_DOES_NOT_EXIST" in str(get_error) or "does not exist" in str(get_error).lower():
+                            logger.debug(f"MCP server {server_name} already deleted or not found")
+                        else:
+                            error_msg = f"Failed to check MCP server {server_name} in workspace {workspace}: {get_error}"
+                            logger.warning(error_msg)
+                            cleanup_errors.append(error_msg)
+                except Exception as e:
+                    error_msg = f"Failed to delete MCP server {server_name} in workspace {workspace}: {e}"
+                    logger.warning(error_msg)
+                    cleanup_errors.append(error_msg)
+
         # Cleanup users (users are global, no workspace switching needed)
         if self.test_context.users_to_delete:
             logger.info(f"Cleaning up {len(self.test_context.users_to_delete)} users")
@@ -337,7 +365,6 @@ class TestBase:
         # Restore original workspace if it was set
         if original_workspace:
             try:
-                import mlflow
                 mlflow.set_workspace(original_workspace)
                 logger.debug(f"Restored original workspace: {original_workspace}")
             except Exception as e:
@@ -374,7 +401,6 @@ class TestBase:
                 return False
 
             # Attempt workspace switch
-            import mlflow
             mlflow.set_workspace(workspace)
             logger.debug(f"Switched to workspace: {workspace}")
             return True
