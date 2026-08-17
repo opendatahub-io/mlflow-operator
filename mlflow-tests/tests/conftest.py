@@ -155,8 +155,11 @@ def setup_clients():
 
     # Set environment variables to disable SSL verification
     os.environ['MLFLOW_TRACKING_INSECURE_TLS'] = Config.DISABLE_TLS
-    os.environ['CURL_CA_BUNDLE'] = ''
-    os.environ['REQUESTS_CA_BUNDLE'] = ''
+    # Unset rather than blank: newer botocore raises InvalidConfigError when
+    # REQUESTS_CA_BUNDLE/CURL_CA_BUNDLE resolve to an empty string instead of
+    # being absent, which breaks the boto3 S3 client used when SERVE_ARTIFACTS=false.
+    os.environ.pop('CURL_CA_BUNDLE', None)
+    os.environ.pop('REQUESTS_CA_BUNDLE', None)
     logger.debug("Set SSL environment variables for insecure testing")
     if Config.ARTIFACT_STORAGE == "s3" and not Config.SERVE_ARTIFACTS:
         logger.debug("Set AWS Credentials because artifact store is s3 and server_artifacts=false")

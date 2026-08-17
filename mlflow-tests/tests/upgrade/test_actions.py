@@ -122,3 +122,164 @@ def test_action_create_upgrade_model_version_requires_active_model_name() -> Non
 
     with pytest.raises(ValueError, match="active_model_name must be set"):
         upgrade_actions.action_create_upgrade_model_version(test_context)
+
+
+def test_action_ensure_upgrade_mcp_server_creates_when_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    not_found = MlflowException(
+        message="RESOURCE_DOES_NOT_EXIST: MCP server does not exist"
+    )
+    register_calls = []
+
+    monkeypatch.setattr(
+        upgrade_actions.mlflow.genai,
+        "get_mcp_server",
+        lambda name: (_ for _ in ()).throw(not_found),
+    )
+    monkeypatch.setattr(
+        upgrade_actions.mlflow.genai,
+        "register_mcp_server",
+        lambda **kwargs: register_calls.append(kwargs),
+    )
+
+    test_context = TestContext(
+        upgrade_state={
+            "current_mcp_server": {
+                "name": "io.opendatahub.upgrade-tests/upgrade-mcp-server-1",
+                "version": "1.0.0",
+                "description": "Static upgrade-test MCP server",
+            }
+        }
+    )
+
+    upgrade_actions.action_ensure_upgrade_mcp_server(test_context)
+
+    assert register_calls == [
+        {
+            "server_json": {
+                "name": "io.opendatahub.upgrade-tests/upgrade-mcp-server-1",
+                "version": "1.0.0",
+                "description": "Static upgrade-test MCP server",
+            },
+            "tools": None,
+        }
+    ]
+    assert test_context.active_mcp_server_name == "io.opendatahub.upgrade-tests/upgrade-mcp-server-1"
+
+
+def test_action_ensure_upgrade_mcp_server_fails_if_already_exists(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        upgrade_actions.mlflow.genai,
+        "get_mcp_server",
+        lambda name: SimpleNamespace(name=name),
+    )
+
+    test_context = TestContext(
+        active_workspace="mlflow-upgrade-test-workspace",
+        upgrade_state={
+            "current_mcp_server": {
+                "name": "io.opendatahub.upgrade-tests/upgrade-mcp-server-1",
+                "version": "1.0.0",
+                "description": "Static upgrade-test MCP server",
+            }
+        },
+    )
+
+    with pytest.raises(AssertionError, match="already exists"):
+        upgrade_actions.action_ensure_upgrade_mcp_server(test_context)
+
+
+def test_action_tag_upgrade_mcp_server_requires_active_mcp_server_name() -> None:
+    test_context = TestContext(
+        upgrade_state={"current_mcp_server": {"tags": {"key": "value"}}},
+    )
+
+    with pytest.raises(ValueError, match="active_mcp_server_name must be set"):
+        upgrade_actions.action_tag_upgrade_mcp_server(test_context)
+
+
+def test_action_tag_upgrade_mcp_server_sets_each_configured_tag(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    set_tag_calls = []
+    monkeypatch.setattr(
+        upgrade_actions.mlflow.genai,
+        "set_mcp_server_tag",
+        lambda name, key, value: set_tag_calls.append((name, key, value)),
+    )
+
+    test_context = TestContext(
+        active_mcp_server_name="io.opendatahub.upgrade-tests/upgrade-mcp-server-1",
+        upgrade_state={
+            "current_mcp_server": {"tags": {"upgrade-tag-key": "upgrade-tag-value"}}
+        },
+    )
+
+    upgrade_actions.action_tag_upgrade_mcp_server(test_context)
+
+    assert set_tag_calls == [
+        (
+            "io.opendatahub.upgrade-tests/upgrade-mcp-server-1",
+            "upgrade-tag-key",
+            "upgrade-tag-value",
+        )
+    ]
+
+
+def test_action_create_upgrade_mcp_access_endpoint_requires_active_mcp_server_name() -> None:
+    test_context = TestContext(
+        upgrade_state={
+            "current_mcp_server": {
+                "access_endpoint": {"url": "https://example.invalid/upgrade-mcp", "transport_type": "streamable-http"},
+                "version": "1.0.0",
+            }
+        }
+    )
+
+    with pytest.raises(ValueError, match="active_mcp_server_name must be set"):
+        upgrade_actions.action_create_upgrade_mcp_access_endpoint(test_context)
+
+
+def test_action_create_upgrade_mcp_access_endpoint_records_endpoint_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    created_endpoint = SimpleNamespace(id="endpoint-123")
+    create_calls = []
+
+    def fake_create_mcp_access_endpoint(**kwargs):
+        create_calls.append(kwargs)
+        return created_endpoint
+
+    monkeypatch.setattr(
+        upgrade_actions.mlflow.genai,
+        "create_mcp_access_endpoint",
+        fake_create_mcp_access_endpoint,
+    )
+
+    test_context = TestContext(
+        active_mcp_server_name="io.opendatahub.upgrade-tests/upgrade-mcp-server-1",
+        upgrade_state={
+            "current_mcp_server": {
+                "version": "1.0.0",
+                "access_endpoint": {
+                    "url": "https://example.invalid/upgrade-mcp",
+                    "transport_type": "streamable-http",
+                },
+            }
+        },
+    )
+
+    upgrade_actions.action_create_upgrade_mcp_access_endpoint(test_context)
+
+    assert create_calls == [
+        {
+            "server_name": "io.opendatahub.upgrade-tests/upgrade-mcp-server-1",
+            "url": "https://example.invalid/upgrade-mcp",
+            "transport_type": "streamable-http",
+            "server_version": "1.0.0",
+        }
+    ]
+    assert test_context.upgrade_observed_state["mcp_access_endpoint_id"] == "endpoint-123"

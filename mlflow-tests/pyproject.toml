@@ -6,7 +6,7 @@ readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
     "kubernetes>=35,<37",
-    "mlflow>=3.15.0",
+    "mlflow>=3.15.0,<4",
     "pytest>=9.0.2",
     "boto3>=1.42.40",
     "pydantic>=2.0.0",
@@ -36,6 +36,7 @@ markers = [
     "Models: Test registered model RBAC and management operations",
     "Traces: Test trace RBAC and direct trace-ingestion behavior",
     "Workspaces: Test Kubernetes workspace discovery and filtering",
+    "MCPRegistry: Test MCP Server Registry RBAC and lifecycle operations",
     "pre_upgrade: Seed static MLflow state before an upgrade",
     "post_upgrade: Validate static MLflow state after an upgrade",
 ]

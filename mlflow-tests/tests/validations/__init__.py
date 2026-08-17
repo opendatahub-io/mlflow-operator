@@ -14,6 +14,17 @@ from .model_validations import (
     validate_model_created,
     validate_model_deleted,
 )
+from .mcp_validations import (
+    validate_mcp_server_retrieved,
+    validate_mcp_server_created,
+    validate_mcp_server_deleted,
+    validate_mcp_server_version_and_endpoint_created,
+    validate_mcp_server_search_excludes_other_workspace,
+    validate_mcp_access_endpoint_created,
+    validate_mcp_access_endpoint_retrieved,
+    validate_mcp_access_endpoint_search_excludes_other_workspace,
+    validate_mcp_access_endpoint_updated,
+)
 from .artifact_validations import (
     validate_artifact_logged,
     validate_artifact_downloaded,
@@ -45,6 +56,15 @@ __all__ = [
     "validate_model_created",
     "validate_local_model_created",
     "validate_model_deleted",
+    "validate_mcp_server_retrieved",
+    "validate_mcp_server_created",
+    "validate_mcp_server_deleted",
+    "validate_mcp_server_version_and_endpoint_created",
+    "validate_mcp_server_search_excludes_other_workspace",
+    "validate_mcp_access_endpoint_created",
+    "validate_mcp_access_endpoint_retrieved",
+    "validate_mcp_access_endpoint_search_excludes_other_workspace",
+    "validate_mcp_access_endpoint_updated",
     "validate_artifact_logged",
     "validate_artifact_downloaded",
     "validate_model_logged",
