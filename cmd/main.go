@@ -476,6 +476,7 @@ func main() {
 
 	if err := (&controller.MLflowReconciler{
 		Client:                  mgr.GetClient(),
+		APIReader:               mgr.GetAPIReader(),
 		Scheme:                  mgr.GetScheme(),
 		Namespace:               namespace,
 		ChartPath:               "charts/mlflow",

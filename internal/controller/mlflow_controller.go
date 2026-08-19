@@ -60,6 +60,7 @@ const (
 // MLflowReconciler reconciles a MLflow object
 type MLflowReconciler struct {
 	client.Client
+	APIReader               client.Reader
 	Scheme                  *runtime.Scheme
 	Namespace               string
 	ChartPath               string
@@ -212,17 +213,16 @@ func (r *MLflowReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		}{
 			{&appsv1.Deployment{}, "Deployment"},
 			{&corev1.Service{}, "Service"},
-		}
-		if r.HTTPRouteAvailable {
-			artifactResources = append(artifactResources, struct {
-				obj  client.Object
-				kind string
-			}{&gatewayv1.HTTPRoute{}, "HTTPRoute"})
+			{&gatewayv1.HTTPRoute{}, "HTTPRoute"},
 		}
 		for _, res := range artifactResources {
 			key := types.NamespacedName{Name: resourceName, Namespace: targetNamespace}
-			if err := r.Get(ctx, key, res.obj); err != nil {
-				if errors.IsNotFound(err) {
+			reader := client.Reader(r.Client)
+			if res.kind == "HTTPRoute" && !r.HTTPRouteAvailable && r.APIReader != nil {
+				reader = r.APIReader
+			}
+			if err := reader.Get(ctx, key, res.obj); err != nil {
+				if errors.IsNotFound(err) || meta.IsNoMatchError(err) {
 					continue
 				}
 				return ctrl.Result{}, err
@@ -236,7 +236,8 @@ func (r *MLflowReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 			deleteOpts := &client.DeleteOptions{
 				Preconditions: &metav1.Preconditions{UID: &uid, ResourceVersion: &resourceVersion},
 			}
-			if err := r.Delete(ctx, res.obj, deleteOpts); err != nil && !errors.IsNotFound(err) {
+			if err := r.Delete(ctx, res.obj, deleteOpts); err != nil &&
+				!errors.IsNotFound(err) && !meta.IsNoMatchError(err) {
 				log.Error(err, "Failed to delete artifact server resource", "kind", res.kind, "name", resourceName)
 				return ctrl.Result{}, err
 			}
@@ -544,6 +545,9 @@ func (r *MLflowReconciler) applyObject(ctx context.Context, obj client.Object) e
 func (r *MLflowReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	log := ctrl.Log.WithName("setup")
 
+	if r.APIReader == nil {
+		return fmt.Errorf("APIReader must be configured")
+	}
 	if r.GCRBACWatchCache == nil {
 		return fmt.Errorf("GCRBACWatchCache must be configured")
 	}

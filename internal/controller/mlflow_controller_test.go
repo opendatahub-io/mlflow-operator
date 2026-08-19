@@ -29,6 +29,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/api/resource"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
@@ -40,6 +41,25 @@ import (
 	mlflowv1 "github.com/opendatahub-io/mlflow-operator/api/v1"
 	"github.com/opendatahub-io/mlflow-operator/internal/config"
 )
+
+type httpRouteUnavailableClient struct {
+	client.Client
+}
+
+func (c *httpRouteUnavailableClient) Get(
+	ctx context.Context,
+	key client.ObjectKey,
+	obj client.Object,
+	opts ...client.GetOption,
+) error {
+	if _, ok := obj.(*gatewayv1.HTTPRoute); ok {
+		return &meta.NoKindMatchError{
+			GroupKind:        schema.GroupKind{Group: gatewayv1.GroupVersion.Group, Kind: "HTTPRoute"},
+			SearchedVersions: []string{gatewayv1.GroupVersion.Version},
+		}
+	}
+	return c.Client.Get(ctx, key, obj, opts...)
+}
 
 var _ = Describe("MLflow Controller", func() {
 	pgStoreURI := "postgresql://user:pass@host:5432/db"
@@ -374,7 +394,7 @@ var _ = Describe("MLflow Controller", func() {
 			Expect(available.Message).To(ContainSubstring(ArtifactsResourceName))
 		})
 
-		It("should create and clean up dedicated artifact resources", func() {
+		It("should clean up dedicated artifact resources when HTTPRoute discovery becomes unavailable", func() {
 			Expect(k8sClient.Get(ctx, typeNamespacedName, mlflow)).To(Succeed())
 			mlflow.Spec.BackendStoreURI = &pgStoreURI
 			mlflow.Spec.DefaultArtifactRoot = nil
@@ -473,6 +493,9 @@ var _ = Describe("MLflow Controller", func() {
 			mlflow.Spec.ArtifactsServer = nil
 			mlflow.Spec.DefaultArtifactRoot = ptr("s3://default/artifacts")
 			Expect(k8sClient.Update(ctx, mlflow)).To(Succeed())
+			controllerReconciler.HTTPRouteAvailable = false
+			controllerReconciler.Client = &httpRouteUnavailableClient{Client: k8sClient}
+			controllerReconciler.APIReader = k8sClient
 			_, reconcileErr := controllerReconciler.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
 			Expect(reconcileErr).NotTo(HaveOccurred())
 
