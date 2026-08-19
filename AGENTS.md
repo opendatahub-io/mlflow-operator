@@ -233,7 +233,7 @@ spec:
 
 Optional read-replica routing is configured with exactly one of `readReplicaBackendStoreUri` or `readReplicaBackendStoreUriFrom`. The replica must already have a compatible schema. One replica URI is used for both tracking and model-registry reads, so deployments with separate tracking and registry databases should configure it only when that endpoint can correctly serve both stores.
 
-PVC mounts are workload-specific. GC mounts storage only for local or secret-backed backend metadata, not PostgreSQL with proxied remote artifacts. Trace archival mounts storage for local archive output or local/secret-backed metadata.
+PVC mounts are workload-specific. GC mounts storage only for local or secret-backed backend metadata, not PostgreSQL with proxied remote artifacts. Its `MLFLOW_TRACKING_URI` includes the active server's static prefix and targets the dedicated artifact Service in split mode so persisted `mlflow-artifacts:/` locations remain deletable. Trace archival mounts storage for local archive output or local/secret-backed metadata.
 
 ### Operator-managed database migration
 

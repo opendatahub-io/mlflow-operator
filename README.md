@@ -439,9 +439,13 @@ bypass the shared artifact proxy. The artifacts-only server has one global
 Disabling `artifactsServer` removes its Deployment, Service, and HTTPRoute. See
 `config/samples/mlflow_v1_mlflow_artifacts_server.yaml` for a complete remote-storage example.
 
-The garbage-collection CronJob mounts persistent storage only when its backend metadata URI may
-be local, so PostgreSQL with proxied remote artifacts does not attach an unused PVC. Trace archival
-mounts storage for a `file://` archive location or local/secret-backed metadata.
+The garbage-collection CronJob resolves proxy-backed artifact locations through the internal
+tracking Service normally and through the internal artifacts-only Service in split mode. This
+keeps historical `mlflow-artifacts:/` locations deletable after enabling the dedicated server
+without depending on the external Gateway. The CronJob mounts persistent storage only when its
+backend metadata URI may be local, so PostgreSQL with proxied remote artifacts does not attach an
+unused PVC. Trace archival mounts storage for a `file://` archive location or local/secret-backed
+metadata.
 
 ### CORS Configuration
 

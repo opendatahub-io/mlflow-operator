@@ -52,6 +52,9 @@ replica may use `ReadWriteOnce`, while multiple replicas require `ReadWriteMany`
 destinations such as S3 do not mount persistent storage.
 `temporaryStorage.sizeLimit` configures the writable `/tmp` `emptyDir` in both server pods and
 defaults to `1Gi`; increase it for larger or more concurrent proxied artifact transfers.
+When garbage collection is enabled, the CronJob resolves `mlflow-artifacts:/` locations through
+the internal artifacts-only Service and its static prefix. Without a dedicated server, it uses the
+tracking Service and tracking static prefix instead.
 
 The standalone chart creates only the artifacts Deployment and Service. It does not create an
 Ingress or `HTTPRoute`; expose the Service at the configured `artifactRoot` yourself. Both servers

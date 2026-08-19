@@ -95,7 +95,7 @@ spec:
                   value: {{ .Values.mlflow.backendStoreUri | quote }}
                   {{- end }}
                 - name: MLFLOW_TRACKING_URI
-                  value: "https://mlflow{{ .Values.resourceSuffix }}.{{ .Values.namespace }}.svc:{{ .Values.mlflow.port }}"
+                  value: {{ include "mlflow.garbageCollectionTrackingURI" . | quote }}
                 - name: MLFLOW_TRACKING_INSECURE_TLS
                   value: "false"
                 - name: MLFLOW_TRACKING_AUTH

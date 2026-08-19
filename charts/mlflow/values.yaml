@@ -304,6 +304,8 @@ resourceClaims: []
 # Permanently removes soft-deleted runs, experiments, and logged models
 # along with their artifacts. Resources must be soft-deleted first
 # (e.g. via the UI or API) before garbage collection will remove them.
+# Proxied artifact locations are resolved through the tracking Service normally
+# and through the dedicated artifact Service when artifactsServer is enabled.
 garbageCollection:
   # Set to true to create the CronJob. Default: false (no garbage collection).
   enabled: false
