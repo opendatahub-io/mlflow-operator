@@ -886,6 +886,27 @@ var _ = Describe("MLflow Controller", func() {
 			Expect(k8sClient.Create(ctx, mlflow)).To(Succeed())
 		})
 
+		It("allows split serving with secret-backed metadata and ReadWriteOnce artifact storage", func() {
+			replicas := int32(3)
+			artifactsDestination := "file:///mlflow/artifacts"
+			mlflow := &mlflowv1.MLflow{
+				ObjectMeta: metav1.ObjectMeta{Name: resourceName},
+				Spec: mlflowv1.MLflowSpec{
+					Replicas: &replicas,
+					BackendStoreURIFrom: &corev1.SecretKeySelector{
+						LocalObjectReference: corev1.LocalObjectReference{Name: "remote-db-credentials"},
+						Key:                  "backend-uri",
+					},
+					ArtifactsDestination: &artifactsDestination,
+					ArtifactsServer:      &mlflowv1.ArtifactsServerSpec{Enabled: true},
+					Storage: &corev1.PersistentVolumeClaimSpec{
+						AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
+					},
+				},
+			}
+			Expect(k8sClient.Create(ctx, mlflow)).To(Succeed())
+		})
+
 		It("rejects trace archival sharing ReadWriteOnce SQLite metadata storage", func() {
 			serveArtifactsTrue := true
 			sqliteURI := "sqlite:////mlflow/mlflow.db"

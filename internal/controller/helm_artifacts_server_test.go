@@ -421,6 +421,49 @@ func TestRenderChartArtifactsServerStorageMounts(t *testing.T) {
 	}
 }
 
+func TestRenderChartArtifactsServerSecretBackedMetadataStorageIsolation(t *testing.T) {
+	renderer := NewHelmRenderer("../../charts/mlflow")
+	replicas := int32(3)
+	mlflow := &mlflowv1.MLflow{
+		ObjectMeta: metav1.ObjectMeta{Name: ResourceName},
+		Spec: mlflowv1.MLflowSpec{
+			Replicas: &replicas,
+			BackendStoreURIFrom: &corev1.SecretKeySelector{
+				LocalObjectReference: corev1.LocalObjectReference{Name: "remote-db-credentials"},
+				Key:                  "backend-uri",
+			},
+			ArtifactsDestination: ptr("file:///mlflow/artifacts"),
+			Storage: &corev1.PersistentVolumeClaimSpec{
+				AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
+			},
+			ArtifactsServer: &mlflowv1.ArtifactsServerSpec{Enabled: true},
+		},
+	}
+
+	objects, err := renderer.RenderChart(mlflow, "test-ns", RenderOptions{}, &config.OperatorConfig{
+		MLflowURL:           "https://gateway.example.com",
+		MLflowURLConfigured: true,
+	})
+	if err != nil {
+		t.Fatalf("RenderChart() error = %v", err)
+	}
+
+	tracking, err := renderedDeployment(objects, ResourceName, "test-ns")
+	if err != nil {
+		t.Fatal(err)
+	}
+	artifacts, err := renderedDeployment(objects, ArtifactsResourceName, "test-ns")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if deploymentMountsStorage(tracking) {
+		t.Fatal("tracking Deployment mounted artifact storage in dedicated artifact mode")
+	}
+	if !deploymentMountsStorage(artifacts) {
+		t.Fatal("artifact Deployment did not mount file-backed artifact storage")
+	}
+}
+
 func TestRenderChartArtifactsServerRequiresExternalURL(t *testing.T) {
 	renderer := NewHelmRenderer("../../charts/mlflow")
 	mlflow := &mlflowv1.MLflow{
