@@ -254,6 +254,7 @@ var _ = Describe("MLflow Controller", func() {
 
 		It("should reconcile an enabled dedicated artifact server and evaluate its readiness", func() {
 			Expect(k8sClient.Get(ctx, typeNamespacedName, mlflow)).To(Succeed())
+			mlflow.Spec.BackendStoreURI = &pgStoreURI
 			mlflow.Spec.ArtifactsServer = &mlflowv1.ArtifactsServerSpec{Enabled: true}
 			mlflow.Spec.ArtifactsDestination = ptr("s3://bucket/artifacts")
 			Expect(k8sClient.Update(ctx, mlflow)).To(Succeed())
@@ -307,6 +308,7 @@ var _ = Describe("MLflow Controller", func() {
 
 		It("should create and clean up dedicated artifact resources", func() {
 			Expect(k8sClient.Get(ctx, typeNamespacedName, mlflow)).To(Succeed())
+			mlflow.Spec.BackendStoreURI = &pgStoreURI
 			mlflow.Spec.ArtifactsServer = &mlflowv1.ArtifactsServerSpec{Enabled: true}
 			mlflow.Spec.ArtifactsDestination = ptr("s3://bucket/artifacts")
 			Expect(k8sClient.Update(ctx, mlflow)).To(Succeed())
@@ -620,7 +622,7 @@ var _ = Describe("MLflow Controller", func() {
 			Expect(err.Error()).To(ContainSubstring("artifactsDestination must be set when artifactsServer is enabled"))
 		})
 
-		It("rejects a file-backed artifact server without ReadWriteMany storage", func() {
+		It("allows one file-backed artifact server replica with ReadWriteOnce storage", func() {
 			artifactsDestination := "file:///mlflow/artifacts"
 			mlflow := &mlflowv1.MLflow{
 				ObjectMeta: metav1.ObjectMeta{Name: resourceName},
@@ -636,19 +638,37 @@ var _ = Describe("MLflow Controller", func() {
 					},
 				},
 			}
-			err := k8sClient.Create(ctx, mlflow)
-			Expect(errors.IsInvalid(err)).To(BeTrue())
-			Expect(err.Error()).To(ContainSubstring("ReadWriteMany"))
+			Expect(k8sClient.Create(ctx, mlflow)).To(Succeed())
 		})
 
-		It("allows a file-backed artifact server with ReadWriteMany storage", func() {
+		It("rejects multiple file-backed artifact server replicas with ReadWriteOnce storage", func() {
 			artifactsDestination := "file:///mlflow/artifacts"
+			replicas := int32(2)
 			mlflow := &mlflowv1.MLflow{
 				ObjectMeta: metav1.ObjectMeta{Name: resourceName},
 				Spec: mlflowv1.MLflowSpec{
 					BackendStoreURI:      &pgStoreURI,
 					ArtifactsDestination: &artifactsDestination,
-					ArtifactsServer:      &mlflowv1.ArtifactsServerSpec{Enabled: true},
+					ArtifactsServer:      &mlflowv1.ArtifactsServerSpec{Enabled: true, Replicas: &replicas},
+					Storage: &corev1.PersistentVolumeClaimSpec{
+						AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
+					},
+				},
+			}
+			err := k8sClient.Create(ctx, mlflow)
+			Expect(errors.IsInvalid(err)).To(BeTrue())
+			Expect(err.Error()).To(ContainSubstring("multiple artifact server replicas"))
+		})
+
+		It("allows multiple file-backed artifact server replicas with ReadWriteMany storage", func() {
+			artifactsDestination := "file:///mlflow/artifacts"
+			replicas := int32(2)
+			mlflow := &mlflowv1.MLflow{
+				ObjectMeta: metav1.ObjectMeta{Name: resourceName},
+				Spec: mlflowv1.MLflowSpec{
+					BackendStoreURI:      &pgStoreURI,
+					ArtifactsDestination: &artifactsDestination,
+					ArtifactsServer:      &mlflowv1.ArtifactsServerSpec{Enabled: true, Replicas: &replicas},
 					Storage: &corev1.PersistentVolumeClaimSpec{
 						AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteMany},
 						Resources: corev1.VolumeResourceRequirements{Requests: corev1.ResourceList{
@@ -658,6 +678,102 @@ var _ = Describe("MLflow Controller", func() {
 				},
 			}
 			Expect(k8sClient.Create(ctx, mlflow)).To(Succeed())
+		})
+
+		DescribeTable("rejects an artifact server with inline SQLite metadata",
+			func(storeField string) {
+				artifactsDestination := "s3://bucket/artifacts"
+				sqliteURI := "sqlite:////mlflow/mlflow.db"
+				spec := mlflowv1.MLflowSpec{
+					BackendStoreURI:      &pgStoreURI,
+					ArtifactsDestination: &artifactsDestination,
+					ArtifactsServer:      &mlflowv1.ArtifactsServerSpec{Enabled: true},
+					Storage:              &corev1.PersistentVolumeClaimSpec{},
+				}
+				switch storeField {
+				case "backendStoreUri":
+					spec.BackendStoreURI = &sqliteURI
+				case "registryStoreUri":
+					spec.RegistryStoreURI = &sqliteURI
+				case "readReplicaBackendStoreUri":
+					spec.ReadReplicaBackendStoreURI = &sqliteURI
+				}
+				err := k8sClient.Create(ctx, &mlflowv1.MLflow{
+					ObjectMeta: metav1.ObjectMeta{Name: resourceName},
+					Spec:       spec,
+				})
+				Expect(errors.IsInvalid(err)).To(BeTrue())
+				Expect(err.Error()).To(ContainSubstring("artifactsServer cannot be enabled with an inline SQLite"))
+			},
+			Entry("backend store", "backendStoreUri"),
+			Entry("registry store", "registryStoreUri"),
+			Entry("read replica", "readReplicaBackendStoreUri"),
+		)
+
+		It("rejects multiple tracking replicas sharing ReadWriteOnce storage", func() {
+			serveArtifactsTrue := true
+			replicas := int32(2)
+			sqliteURI := "sqlite:////mlflow/mlflow.db"
+			mlflow := &mlflowv1.MLflow{
+				ObjectMeta: metav1.ObjectMeta{Name: resourceName},
+				Spec: mlflowv1.MLflowSpec{
+					Replicas:         &replicas,
+					ServeArtifacts:   &serveArtifactsTrue,
+					BackendStoreURI:  &sqliteURI,
+					RegistryStoreURI: &sqliteURI,
+					Storage: &corev1.PersistentVolumeClaimSpec{
+						AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
+					},
+				},
+			}
+			err := k8sClient.Create(ctx, mlflow)
+			Expect(errors.IsInvalid(err)).To(BeTrue())
+			Expect(err.Error()).To(ContainSubstring("multiple tracking replicas that use persistent storage"))
+		})
+
+		It("allows multiple tracking replicas with unused ReadWriteOnce storage", func() {
+			serveArtifactsTrue := true
+			replicas := int32(2)
+			mlflow := &mlflowv1.MLflow{
+				ObjectMeta: metav1.ObjectMeta{Name: resourceName},
+				Spec: mlflowv1.MLflowSpec{
+					Replicas:         &replicas,
+					ServeArtifacts:   &serveArtifactsTrue,
+					BackendStoreURI:  &pgStoreURI,
+					RegistryStoreURI: &pgStoreURI,
+					Storage: &corev1.PersistentVolumeClaimSpec{
+						AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
+					},
+				},
+			}
+			Expect(k8sClient.Create(ctx, mlflow)).To(Succeed())
+		})
+
+		It("rejects trace archival sharing ReadWriteOnce SQLite metadata storage", func() {
+			serveArtifactsTrue := true
+			sqliteURI := "sqlite:////mlflow/mlflow.db"
+			location := "s3://bucket/traces"
+			schedule := "0 */6 * * *"
+			retention := "30d"
+			mlflow := &mlflowv1.MLflow{
+				ObjectMeta: metav1.ObjectMeta{Name: resourceName},
+				Spec: mlflowv1.MLflowSpec{
+					ServeArtifacts:  &serveArtifactsTrue,
+					BackendStoreURI: &sqliteURI,
+					Storage: &corev1.PersistentVolumeClaimSpec{
+						AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
+					},
+					TraceArchival: &mlflowv1.TraceArchivalSpec{
+						Enabled:   true,
+						Schedule:  &schedule,
+						Location:  &location,
+						Retention: &retention,
+					},
+				},
+			}
+			err := k8sClient.Create(ctx, mlflow)
+			Expect(errors.IsInvalid(err)).To(BeTrue())
+			Expect(err.Error()).To(ContainSubstring("trace archival with persistent metadata storage"))
 		})
 
 		It("rejects when backend store is missing", func() {

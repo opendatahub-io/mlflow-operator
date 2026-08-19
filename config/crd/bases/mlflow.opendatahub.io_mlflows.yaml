@@ -3002,12 +3002,25 @@ spec:
               rule: '!has(self.artifactsServer) || !self.artifactsServer.enabled ||
                 (has(self.artifactsDestination) && size(self.artifactsDestination)
                 > 0)'
-            - message: file-based artifactsDestination requires storage with ReadWriteMany
-                as its first access mode when artifactsServer is enabled
+            - message: multiple artifact server replicas with a file-based artifactsDestination
+                require storage with ReadWriteMany as its first access mode
               rule: '!has(self.artifactsServer) || !self.artifactsServer.enabled ||
                 !has(self.artifactsDestination) || !self.artifactsDestination.startsWith(''file://'')
-                || (has(self.storage) && size(self.storage.accessModes) > 0 && self.storage.accessModes[0]
-                == ''ReadWriteMany'')'
+                || !has(self.artifactsServer.replicas) || self.artifactsServer.replicas
+                <= 1 || (has(self.storage) && size(self.storage.accessModes) > 0 &&
+                self.storage.accessModes[0] == ''ReadWriteMany'')'
+            - message: artifactsServer cannot be enabled with an inline SQLite backendStoreUri
+              rule: '!has(self.artifactsServer) || !self.artifactsServer.enabled ||
+                !has(self.backendStoreUri) || (!self.backendStoreUri.startsWith(''sqlite://'')
+                && !self.backendStoreUri.startsWith(''sqlite+''))'
+            - message: artifactsServer cannot be enabled with an inline SQLite registryStoreUri
+              rule: '!has(self.artifactsServer) || !self.artifactsServer.enabled ||
+                !has(self.registryStoreUri) || (!self.registryStoreUri.startsWith(''sqlite://'')
+                && !self.registryStoreUri.startsWith(''sqlite+''))'
+            - message: artifactsServer cannot be enabled with an inline SQLite readReplicaBackendStoreUri
+              rule: '!has(self.artifactsServer) || !self.artifactsServer.enabled ||
+                !has(self.readReplicaBackendStoreUri) || (!self.readReplicaBackendStoreUri.startsWith(''sqlite://'')
+                && !self.readReplicaBackendStoreUri.startsWith(''sqlite+''))'
             - message: backendStoreUri or backendStoreUriFrom must be set
               rule: (has(self.backendStoreUri) && size(self.backendStoreUri) > 0)
                 || (has(self.backendStoreUriFrom) && size(self.backendStoreUriFrom.name)
@@ -3108,6 +3121,28 @@ spec:
               rule: '!has(self.traceArchival) || !has(self.traceArchival.enabled)
                 || self.traceArchival.enabled == false || (has(self.traceArchival.retention)
                 && size(self.traceArchival.retention) > 0)'
+            - message: multiple tracking replicas that use persistent storage require
+                ReadWriteMany as its first access mode
+              rule: '!has(self.replicas) || self.replicas <= 1 || !has(self.storage)
+                || (has(self.artifactsServer) && self.artifactsServer.enabled) ||
+                !((has(self.backendStoreUri) && (self.backendStoreUri.startsWith(''sqlite://'')
+                || self.backendStoreUri.startsWith(''sqlite+''))) || has(self.backendStoreUriFrom)
+                || (has(self.registryStoreUri) && (self.registryStoreUri.startsWith(''sqlite://'')
+                || self.registryStoreUri.startsWith(''sqlite+''))) || has(self.registryStoreUriFrom)
+                || (has(self.readReplicaBackendStoreUri) && (self.readReplicaBackendStoreUri.startsWith(''sqlite://'')
+                || self.readReplicaBackendStoreUri.startsWith(''sqlite+''))) || has(self.readReplicaBackendStoreUriFrom)
+                || (has(self.serveArtifacts) && self.serveArtifacts && has(self.artifactsDestination)
+                && self.artifactsDestination.startsWith(''file://''))) || (size(self.storage.accessModes)
+                > 0 && self.storage.accessModes[0] == ''ReadWriteMany'')'
+            - message: trace archival with persistent metadata storage requires ReadWriteMany
+                as its first access mode
+              rule: '!has(self.traceArchival) || !self.traceArchival.enabled || !has(self.storage)
+                || !((has(self.backendStoreUri) && (self.backendStoreUri.startsWith(''sqlite://'')
+                || self.backendStoreUri.startsWith(''sqlite+''))) || has(self.backendStoreUriFrom)
+                || (has(self.registryStoreUri) && (self.registryStoreUri.startsWith(''sqlite://'')
+                || self.registryStoreUri.startsWith(''sqlite+''))) || has(self.registryStoreUriFrom))
+                || (size(self.storage.accessModes) > 0 && self.storage.accessModes[0]
+                == ''ReadWriteMany'')'
             - message: storage and its accessModes are immutable once configured;
                 an omitted legacy access mode may only be set to ReadWriteOnce
               optionalOldSelf: true

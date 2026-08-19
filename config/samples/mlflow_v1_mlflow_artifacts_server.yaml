@@ -19,6 +19,7 @@ spec:
       cpu: "2"
       memory: 2Gi
 
+  # Dedicated artifact serving requires a remote SQL URI; SQLite is unsupported.
   backendStoreUriFrom:
     name: mlflow-db-credentials
     key: backend-store-uri

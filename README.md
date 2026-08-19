@@ -221,6 +221,8 @@ spec:
 
 Once `spec.storage` is configured, it and its access modes cannot be changed or removed in place because the existing PVC is retained and its access modes are immutable. Preserve any required data and recreate the MLflow resource and PVC to use a different access mode. Older resources that omitted access modes may normalize them once to `ReadWriteOnce`, matching the operator's legacy default.
 
+Multiple tracking replicas require `ReadWriteMany` when they use the PVC for SQLite, a secret-backed metadata store whose scheme cannot be inspected, or locally served artifacts. A configured but otherwise unused RWO PVC does not prevent scaling tracking pods that use remote stores.
+
 #### Remote Storage (Production)
 ```yaml
 spec:
@@ -396,8 +398,11 @@ spec:
 
 The split topology requires the operator's external `MLFLOW_URL` to be configured and the
 Gateway API `HTTPRoute` resource to be available. `artifactsDestination` must be set explicitly.
-For a `file://` destination, configure shared storage with `ReadWriteMany` as its first access
-mode because both Deployments mount the same PVC. The operator creates:
+It requires a remote SQL metadata store; inline SQLite backend, registry, and read-replica URIs
+are rejected. CEL cannot inspect Secret values, so `backendStoreUriFrom` and related Secret
+references must resolve to remote SQL URIs. For a `file://` artifact destination, one artifact
+replica may use `ReadWriteOnce`; multiple artifact replicas require `ReadWriteMany` as the first
+storage access mode. The operator creates:
 
 - The normal `mlflow` tracking Deployment, Service, and `/mlflow` HTTPRoute
 - An `mlflow-artifacts` Deployment running with `--artifacts-only`

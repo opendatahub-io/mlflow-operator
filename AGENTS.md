@@ -170,7 +170,7 @@ The Helm chart does not create an OpenShift Route. Create your own Route if you 
 
 ### Dedicated artifact server
 
-`spec.artifactsServer.enabled` creates an independently scalable `mlflow-artifacts` Deployment and Service; `spec.artifactsServer.replicas` and `spec.artifactsServer.workers` control its pod and per-pod uvicorn worker counts. The operator also creates a `/mlflow-artifacts` `HTTPRoute`, configures the tracking server with `--no-serve-artifacts`, and advertises the dedicated route as the tracking server's default artifact root. The artifact pod runs with `--artifacts-only`, `--enable-workspaces`, and `--workspace-store-uri=kubernetes://`; this requires an MLflow runtime containing the workspace-aware artifacts-only support introduced upstream in `mlflow/mlflow#24452`. `spec.temporaryStorage.sizeLimit` configures the writable `/tmp` `emptyDir` for both tracking and artifact-server pods. The split mode requires `spec.artifactsDestination`, an explicitly configured external `MLFLOW_URL`, and the Gateway API `HTTPRoute` resource. A `file://` destination also requires shared storage whose first access mode is `ReadWriteMany`, because both Deployments mount the same PVC. `serveArtifacts` and `artifactsServer.enabled` are mutually exclusive.
+`spec.artifactsServer.enabled` creates an independently scalable `mlflow-artifacts` Deployment and Service; `spec.artifactsServer.replicas` and `spec.artifactsServer.workers` control its pod and per-pod uvicorn worker counts. The operator also creates a `/mlflow-artifacts` `HTTPRoute`, configures the tracking server with `--no-serve-artifacts`, and advertises the dedicated route as the tracking server's default artifact root. The artifact pod runs with `--artifacts-only`, `--enable-workspaces`, and `--workspace-store-uri=kubernetes://`; this requires an MLflow runtime containing the workspace-aware artifacts-only support introduced upstream in `mlflow/mlflow#24452`. `spec.temporaryStorage.sizeLimit` configures the writable `/tmp` `emptyDir` for both tracking and artifact-server pods. The split mode requires `spec.artifactsDestination`, an explicitly configured external `MLFLOW_URL`, the Gateway API `HTTPRoute` resource, and remote SQL metadata stores. Inline SQLite metadata URIs are rejected; Secret-backed metadata URIs cannot be inspected by CEL and must resolve to remote SQL. For a `file://` destination, one artifact replica may use `ReadWriteOnce`, while multiple replicas require `ReadWriteMany` as the first access mode. `serveArtifacts` and `artifactsServer.enabled` are mutually exclusive.
 
 ### Customizing Values
 
@@ -189,6 +189,7 @@ MLflow has three independent storage components:
 The `storage` field in the MLflow CR is **optional** and only needed for file-based storage:
 
 Once `spec.storage` is configured, admission prevents removing it or changing its access modes because the operator retains the existing PVC and Kubernetes access modes are immutable. Legacy resources with omitted access modes may normalize them once to `ReadWriteOnce`.
+Multiple tracking replicas require `ReadWriteMany` when tracking uses persistent storage for SQLite, secret-backed metadata with an unknown scheme, or locally served artifacts; an otherwise unused configured PVC does not impose that restriction.
 
 **When to configure storage:**
 - Using `sqlite://` for backend/registry store
