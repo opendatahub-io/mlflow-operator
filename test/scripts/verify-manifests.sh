@@ -171,11 +171,16 @@ for chart_dir in charts/*/; do
 
         echo "  Rejecting multiple file-backed artifact server replicas with ReadWriteOnce storage..."
         MULTI_RWO_SETS="$FILE_ARTIFACT_SERVER_SETS,artifactsServer.replicaCount=2,storage.accessMode=ReadWriteOnce"
-        if helm template test "$chart_dir" --set "$MULTI_RWO_SETS" > /dev/null 2>&1; then
+        MULTI_RWO_ERROR=$(helm template test "$chart_dir" --set "$MULTI_RWO_SETS" 2>&1) && multi_rwo_accepted=1 || multi_rwo_accepted=0
+        if [ "$multi_rwo_accepted" -eq 1 ]; then
             echo -e "  ${RED}✗ Multiple file-backed replicas with ReadWriteOnce storage were accepted${NC}"
             chart_failed=1
-        else
+        elif grep -Fq "multiple file-backed artifact server replicas require storage.accessMode=ReadWriteMany" <<< "$MULTI_RWO_ERROR"; then
             echo -e "  ${GREEN}✓ Multiple file-backed replicas with ReadWriteOnce storage rejected${NC}"
+        else
+            echo -e "  ${RED}✗ Multiple file-backed replicas with ReadWriteOnce storage returned an unexpected error${NC}"
+            printf '%s\n' "$MULTI_RWO_ERROR"
+            chart_failed=1
         fi
 
         echo "  Rendering multiple file-backed artifact server replicas with ReadWriteMany storage..."
@@ -189,11 +194,16 @@ for chart_dir in charts/*/; do
         fi
 
         echo "  Rejecting dedicated artifact serving with SQLite metadata..."
-        if helm template test "$chart_dir" --set "$FILE_ARTIFACT_SERVER_SETS,mlflow.backendStoreUri=sqlite:////mlflow/mlflow.db" > /dev/null 2>&1; then
+        SQLITE_ERROR=$(helm template test "$chart_dir" --set "$FILE_ARTIFACT_SERVER_SETS,mlflow.backendStoreUri=sqlite:////mlflow/mlflow.db" 2>&1) && sqlite_accepted=1 || sqlite_accepted=0
+        if [ "$sqlite_accepted" -eq 1 ]; then
             echo -e "  ${RED}✗ Dedicated artifact serving with SQLite was accepted${NC}"
             chart_failed=1
-        else
+        elif grep -Fq "artifactsServer cannot be enabled with inline SQLite metadata stores" <<< "$SQLITE_ERROR"; then
             echo -e "  ${GREEN}✓ Dedicated artifact serving with SQLite rejected${NC}"
+        else
+            echo -e "  ${RED}✗ Dedicated artifact serving with SQLite returned an unexpected error${NC}"
+            printf '%s\n' "$SQLITE_ERROR"
+            chart_failed=1
         fi
 
         if [ "$chart_failed" -ne 0 ]; then
