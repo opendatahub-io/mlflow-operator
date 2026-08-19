@@ -546,6 +546,12 @@ type MLflowStatus struct {
 	// +kubebuilder:validation:MaxLength=2048
 	URL string `json:"url,omitempty"`
 
+	// artifactsUrl is the externally reachable API root for the dedicated artifacts server.
+	// It is set only when dedicated artifact serving is enabled.
+	// +optional
+	// +kubebuilder:validation:MaxLength=2048
+	ArtifactsURL string `json:"artifactsUrl,omitempty"`
+
 	// address holds the internal addressable endpoint for the managed MLflow Service.
 	// +optional
 	Address *MLflowAddressStatus `json:"address,omitempty"`

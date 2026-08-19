@@ -47,7 +47,13 @@ func setObservedURLs(mlflow *mlflowv1.MLflow, namespace string, publicRouteAvail
 
 	if publicRouteAvailable && cfg != nil {
 		mlflow.Status.URL = buildStatusURL(mlflow.Name, cfg.MLflowURL, cfg.MLflowURLConfigured)
+		if isArtifactsServerEnabled(mlflow) {
+			mlflow.Status.ArtifactsURL = buildArtifactsURL(mlflow.Name, cfg.MLflowURL, cfg.MLflowURLConfigured)
+		} else {
+			mlflow.Status.ArtifactsURL = ""
+		}
 	} else {
 		mlflow.Status.URL = ""
+		mlflow.Status.ArtifactsURL = ""
 	}
 }

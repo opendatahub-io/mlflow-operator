@@ -148,10 +148,11 @@ The operator will automatically:
 You can inspect the published MLflow endpoints directly from the custom resource status:
 
 ```sh
-kubectl get mlflow mlflow -o jsonpath='{.status.url}{"\n"}{.status.address.url}{"\n"}'
+kubectl get mlflow mlflow -o jsonpath='{.status.url}{"\n"}{.status.artifactsUrl}{"\n"}{.status.address.url}{"\n"}'
 ```
 
 - `status.url` is the external MLflow URL exposed through the data science gateway when Gateway API support is available
+- `status.artifactsUrl` is the external artifact API root and is published only when the dedicated artifact server is enabled
 - `status.address.url` is the in-cluster HTTPS URL for the managed MLflow `Service`
 
 ### Standalone Helm Deployment

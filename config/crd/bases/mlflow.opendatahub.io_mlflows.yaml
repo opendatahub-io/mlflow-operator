@@ -3213,6 +3213,12 @@ spec:
                     maxLength: 2048
                     type: string
                 type: object
+              artifactsUrl:
+                description: |-
+                  artifactsUrl is the externally reachable API root for the dedicated artifacts server.
+                  It is set only when dedicated artifact serving is enabled.
+                maxLength: 2048
+                type: string
               conditions:
                 description: |-
                   conditions represent the current state of the MLflow resource.
