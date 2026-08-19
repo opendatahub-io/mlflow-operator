@@ -464,6 +464,52 @@ func TestRenderChartArtifactsServerSecretBackedMetadataStorageIsolation(t *testi
 	}
 }
 
+func TestRenderChartArtifactsServerRejectsInlineSQLiteMetadata(t *testing.T) {
+	tests := []struct {
+		name      string
+		configure func(*mlflowv1.MLflowSpec)
+	}{
+		{
+			name: "backend store",
+			configure: func(spec *mlflowv1.MLflowSpec) {
+				spec.BackendStoreURI = ptr("sqlite:////mlflow/mlflow.db")
+			},
+		},
+		{
+			name: "registry store",
+			configure: func(spec *mlflowv1.MLflowSpec) {
+				spec.RegistryStoreURI = ptr("sqlite:////mlflow/registry.db")
+			},
+		},
+		{
+			name: "read replica",
+			configure: func(spec *mlflowv1.MLflowSpec) {
+				spec.ReadReplicaBackendStoreURI = ptr("sqlite:////mlflow/read-replica.db")
+			},
+		},
+	}
+
+	renderer := NewHelmRenderer("../../charts/mlflow")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mlflow := &mlflowv1.MLflow{
+				ObjectMeta: metav1.ObjectMeta{Name: ResourceName},
+				Spec: mlflowv1.MLflowSpec{
+					BackendStoreURI:      ptr("postgresql://db.example.com/mlflow"),
+					ArtifactsDestination: ptr("s3://bucket/artifacts"),
+					ArtifactsServer:      &mlflowv1.ArtifactsServerSpec{Enabled: true},
+				},
+			}
+			tt.configure(&mlflow.Spec)
+
+			_, err := renderer.RenderChart(mlflow, "test-ns", RenderOptions{}, artifactServerTestConfig())
+			if err == nil || !strings.Contains(err.Error(), "artifactsServer cannot be enabled with inline SQLite metadata stores") {
+				t.Fatalf("RenderChart() error = %v, want inline SQLite rejection", err)
+			}
+		})
+	}
+}
+
 func TestRenderChartArtifactsServerRequiresExternalURL(t *testing.T) {
 	renderer := NewHelmRenderer("../../charts/mlflow")
 	mlflow := &mlflowv1.MLflow{

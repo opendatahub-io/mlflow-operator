@@ -11,6 +11,7 @@
 {{- if or .Values.mlflow.readReplicaBackendStoreUriFrom (hasPrefix "sqlite://" (.Values.mlflow.readReplicaBackendStoreUri | default "")) (hasPrefix "sqlite+" (.Values.mlflow.readReplicaBackendStoreUri | default "")) -}}true{{- else -}}false{{- end -}}
 {{- end -}}
 
+{{/* Split serving requires remote metadata stores; tracking must not mount artifact storage. */}}
 {{- define "mlflow.trackingMountsStorage" -}}
 {{- if and .Values.storage.enabled (not .Values.artifactsServer.enabled) (or (eq (include "mlflow.backendUsesStorage" .) "true") (eq (include "mlflow.registryUsesStorage" .) "true") (eq (include "mlflow.readReplicaUsesStorage" .) "true") (and .Values.mlflow.serveArtifacts (hasPrefix "file://" .Values.mlflow.artifactsDestination))) -}}true{{- else -}}false{{- end -}}
 {{- end -}}

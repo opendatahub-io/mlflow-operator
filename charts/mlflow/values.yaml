@@ -175,6 +175,9 @@ mlflow:
 # expose the Service themselves and set artifactRoot to that externally reachable artifact API.
 # Operator deployments keep port, staticPrefix, TLS, and Service settings fixed so they stay
 # aligned with the managed HTTPRoute and serving-certificate contract.
+# Dedicated serving requires remote SQL metadata stores and does not mount storage in the
+# tracking pod. Inline SQLite metadata URIs are rejected; Secret-backed metadata URIs cannot
+# be inspected by Helm and must resolve to remote SQL.
 artifactsServer:
   enabled: false
   replicaCount: 1
