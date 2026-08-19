@@ -158,23 +158,42 @@ for chart_dir in charts/*/; do
             echo -e "  ${GREEN}✓ Mutually exclusive artifact serving modes rejected${NC}"
         fi
 
-        echo "  Rejecting file-backed artifact server without ReadWriteMany storage..."
-        FILE_ARTIFACT_SERVER_SETS="mlflow.backendStoreUri=postgresql://db/mlflow,mlflow.serveArtifacts=false,artifactsServer.enabled=true,artifactsServer.artifactsDestination=file:///mlflow/artifacts,artifactsServer.artifactRoot=https://mlflow.example.com/mlflow-artifacts/api/2.0/mlflow-artifacts/artifacts"
-        if helm template test "$chart_dir" --set "$FILE_ARTIFACT_SERVER_SETS" > /dev/null 2>&1; then
-            echo -e "  ${RED}✗ File-backed artifact server with ReadWriteOnce storage was accepted${NC}"
-            chart_failed=1
+        FILE_ARTIFACT_SERVER_SETS="mlflow.backendStoreUri=postgresql://db/mlflow,mlflow.serveArtifacts=false,artifactsServer.enabled=true,artifactsServer.artifactsDestination=file:///mlflow/artifacts,artifactsServer.artifactRoot=https://mlflow.example.com/mlflow-artifacts/api/2.0/mlflow-artifacts/artifacts,storage.enabled=true"
+        echo "  Rendering one file-backed artifact server replica with ReadWriteOnce storage..."
+        RWO_SETS="$FILE_ARTIFACT_SERVER_SETS,artifactsServer.replicaCount=1,storage.accessMode=ReadWriteOnce"
+        if helm template test "$chart_dir" --set "$RWO_SETS" > /dev/null 2>&1; then
+            echo -e "  ${GREEN}✓ One file-backed replica with ReadWriteOnce storage renders successfully${NC}"
         else
-            echo -e "  ${GREEN}✓ File-backed artifact server with ReadWriteOnce storage rejected${NC}"
+            echo -e "  ${RED}✗ One file-backed replica with ReadWriteOnce storage failed to render${NC}"
+            helm template test "$chart_dir" --set "$RWO_SETS" || true
+            chart_failed=1
         fi
 
-        echo "  Rendering file-backed artifact server with ReadWriteMany storage..."
-        RWX_SETS="$FILE_ARTIFACT_SERVER_SETS,storage.enabled=true,storage.accessMode=ReadWriteMany"
-        if helm template test "$chart_dir" --set "$RWX_SETS" > /dev/null 2>&1; then
-            echo -e "  ${GREEN}✓ File-backed artifact server with ReadWriteMany storage renders successfully${NC}"
+        echo "  Rejecting multiple file-backed artifact server replicas with ReadWriteOnce storage..."
+        MULTI_RWO_SETS="$FILE_ARTIFACT_SERVER_SETS,artifactsServer.replicaCount=2,storage.accessMode=ReadWriteOnce"
+        if helm template test "$chart_dir" --set "$MULTI_RWO_SETS" > /dev/null 2>&1; then
+            echo -e "  ${RED}✗ Multiple file-backed replicas with ReadWriteOnce storage were accepted${NC}"
+            chart_failed=1
         else
-            echo -e "  ${RED}✗ File-backed artifact server with ReadWriteMany storage failed to render${NC}"
+            echo -e "  ${GREEN}✓ Multiple file-backed replicas with ReadWriteOnce storage rejected${NC}"
+        fi
+
+        echo "  Rendering multiple file-backed artifact server replicas with ReadWriteMany storage..."
+        RWX_SETS="$FILE_ARTIFACT_SERVER_SETS,artifactsServer.replicaCount=2,storage.accessMode=ReadWriteMany"
+        if helm template test "$chart_dir" --set "$RWX_SETS" > /dev/null 2>&1; then
+            echo -e "  ${GREEN}✓ Multiple file-backed replicas with ReadWriteMany storage render successfully${NC}"
+        else
+            echo -e "  ${RED}✗ Multiple file-backed replicas with ReadWriteMany storage failed to render${NC}"
             helm template test "$chart_dir" --set "$RWX_SETS" || true
             chart_failed=1
+        fi
+
+        echo "  Rejecting dedicated artifact serving with SQLite metadata..."
+        if helm template test "$chart_dir" --set "$FILE_ARTIFACT_SERVER_SETS,mlflow.backendStoreUri=sqlite:////mlflow/mlflow.db" > /dev/null 2>&1; then
+            echo -e "  ${RED}✗ Dedicated artifact serving with SQLite was accepted${NC}"
+            chart_failed=1
+        else
+            echo -e "  ${GREEN}✓ Dedicated artifact serving with SQLite rejected${NC}"
         fi
 
         if [ "$chart_failed" -ne 0 ]; then

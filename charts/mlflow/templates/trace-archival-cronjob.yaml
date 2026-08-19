@@ -1,6 +1,10 @@
 {{- if .Values.traceArchival.enabled }}
+{{- $traceArchivalMountsStorage := eq (include "mlflow.traceArchivalMountsStorage" .) "true" -}}
 {{- if and .Values.traceArchival.location (hasPrefix "file://" .Values.traceArchival.location) (or (not .Values.storage.enabled) (ne .Values.storage.accessMode "ReadWriteMany")) }}
 {{- fail "enabled file-based traceArchival.location requires storage.enabled=true and storage.accessMode=ReadWriteMany" }}
+{{- end }}
+{{- if and (or (eq (include "mlflow.backendUsesStorage" .) "true") (eq (include "mlflow.registryUsesStorage" .) "true")) (or (not .Values.storage.enabled) (ne .Values.storage.accessMode "ReadWriteMany")) }}
+{{- fail "trace archival with persistent metadata storage requires storage.enabled=true and storage.accessMode=ReadWriteMany" }}
 {{- end }}
 apiVersion: batch/v1
 kind: CronJob
@@ -55,7 +59,7 @@ spec:
             - name: trace-archival-config
               configMap:
                 name: mlflow-trace-archival-config{{ .Values.resourceSuffix }}
-            {{- if .Values.storage.enabled }}
+            {{- if $traceArchivalMountsStorage }}
             - name: mlflow-storage
               persistentVolumeClaim:
                 claimName: mlflow-pvc{{ .Values.resourceSuffix }}
@@ -129,7 +133,7 @@ spec:
                 - name: trace-archival-config
                   mountPath: /etc/mlflow
                   readOnly: true
-                {{- if .Values.storage.enabled }}
+                {{- if $traceArchivalMountsStorage }}
                 - name: mlflow-storage
                   mountPath: /mlflow
                 {{- end }}

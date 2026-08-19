@@ -446,6 +446,31 @@ func TestRenderChart_GarbageCollection(t *testing.T) {
 			},
 		},
 		{
+			name: "gc with PostgreSQL and proxied remote artifacts - CronJob does not mount PVC",
+			mlflow: &mlflowv1.MLflow{
+				ObjectMeta: metav1.ObjectMeta{Name: "mlflow"},
+				Spec: mlflowv1.MLflowSpec{
+					BackendStoreURI:      ptr(testBackendStoreURI),
+					ArtifactsDestination: ptr("s3://bucket/artifacts"),
+					ServeArtifacts:       ptr(true),
+					Storage: &corev1.PersistentVolumeClaimSpec{
+						AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
+					},
+					GarbageCollection: &mlflowv1.GarbageCollectionSpec{Schedule: "0 2 * * 0"},
+				},
+			},
+			namespace: "test-ns",
+			validateObjs: func(t *testing.T, objs []*unstructured.Unstructured) {
+				cronJob := findObject(objs, "CronJob", "mlflow-gc")
+				if cronJob == nil {
+					t.Fatal("CronJob not found in rendered objects")
+				}
+				if cronJobHasStorageVolume(t, cronJob) {
+					t.Error("garbage collection CronJob unexpectedly mounts mlflow-storage")
+				}
+			},
+		},
+		{
 			name: "gc with resource suffix - CronJob name includes suffix",
 			mlflow: &mlflowv1.MLflow{
 				ObjectMeta: metav1.ObjectMeta{Name: "my-instance"},
@@ -477,4 +502,21 @@ func TestRenderChart_GarbageCollection(t *testing.T) {
 			}
 		})
 	}
+}
+
+func cronJobHasStorageVolume(t *testing.T, cronJob *unstructured.Unstructured) bool {
+	t.Helper()
+	volumes, found, err := unstructured.NestedSlice(
+		cronJob.Object, "spec", "jobTemplate", "spec", "template", "spec", "volumes",
+	)
+	if err != nil || !found {
+		t.Fatalf("failed to get CronJob volumes: found=%v, err=%v", found, err)
+	}
+	for _, value := range volumes {
+		volume := value.(map[string]interface{})
+		if volume["name"] == "mlflow-storage" {
+			return true
+		}
+	}
+	return false
 }

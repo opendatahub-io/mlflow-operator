@@ -1,5 +1,6 @@
 {{- if .Values.artifactsServer.enabled }}
 {{- $healthPrefix := .Values.artifactsServer.staticPrefix | trimSuffix "/" -}}
+{{- $artifactsMountStorage := eq (include "mlflow.artifactsMountsStorage" .) "true" -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -13,7 +14,7 @@ metadata:
 spec:
   replicas: {{ .Values.artifactsServer.replicaCount }}
   strategy:
-    {{- if .Values.storage.enabled }}
+    {{- if $artifactsMountStorage }}
     type: Recreate
     {{- else }}
     type: RollingUpdate
@@ -66,7 +67,7 @@ spec:
         - name: tmp
           emptyDir:
             sizeLimit: {{ .Values.temporaryStorage.sizeLimit }}
-        {{- if .Values.storage.enabled }}
+        {{- if $artifactsMountStorage }}
         - name: mlflow-storage
           persistentVolumeClaim:
             claimName: mlflow-pvc{{ .Values.resourceSuffix }}
@@ -148,7 +149,7 @@ spec:
           volumeMounts:
             - name: tmp
               mountPath: /tmp
-            {{- if .Values.storage.enabled }}
+            {{- if $artifactsMountStorage }}
             - name: mlflow-storage
               mountPath: /mlflow
             {{- end }}

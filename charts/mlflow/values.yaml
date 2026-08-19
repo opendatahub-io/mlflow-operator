@@ -59,6 +59,7 @@ resources:
 # Persistent storage
 # Only required if using file-based or SQLite backend/registry stores or file-based artifacts.
 # Set false when using remote storage (S3, PostgreSQL, etc.)
+# Workloads mount this claim only when their configured URIs require local storage.
 storage:
   enabled: true  # Enable by default - disable for remote file-based storage
   size: 2Gi
@@ -178,7 +179,8 @@ artifactsServer:
   enabled: false
   replicaCount: 1
   # Storage destination used by the artifacts-only server. A file:// destination requires
-  # storage.enabled=true and storage.accessMode=ReadWriteMany when this server is enabled.
+  # storage.enabled=true. One replica may use ReadWriteOnce; multiple replicas require
+  # storage.accessMode=ReadWriteMany.
   artifactsDestination: "file:///mlflow/artifacts"
   # Externally reachable artifact API root advertised by the tracking server, for example:
   # https://mlflow.example.com/mlflow-artifacts/api/2.0/mlflow-artifacts/artifacts

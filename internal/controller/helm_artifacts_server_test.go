@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -217,6 +218,99 @@ func TestRenderChartArtifactsServerInheritsResources(t *testing.T) {
 	}
 }
 
+func TestRenderChartArtifactsServerStorageMounts(t *testing.T) {
+	tests := []struct {
+		name              string
+		destination       string
+		replicas          int32
+		accessMode        corev1.PersistentVolumeAccessMode
+		wantArtifactMount bool
+		wantErr           bool
+	}{
+		{
+			name:        "remote destination leaves configured storage unmounted",
+			destination: "s3://bucket/artifacts",
+			replicas:    2,
+			accessMode:  corev1.ReadWriteOnce,
+		},
+		{
+			name:              "one file-backed replica mounts ReadWriteOnce storage",
+			destination:       "file:///mlflow/artifacts",
+			replicas:          1,
+			accessMode:        corev1.ReadWriteOnce,
+			wantArtifactMount: true,
+		},
+		{
+			name:        "multiple file-backed replicas reject ReadWriteOnce storage",
+			destination: "file:///mlflow/artifacts",
+			replicas:    2,
+			accessMode:  corev1.ReadWriteOnce,
+			wantErr:     true,
+		},
+		{
+			name:              "multiple file-backed replicas mount ReadWriteMany storage",
+			destination:       "file:///mlflow/artifacts",
+			replicas:          2,
+			accessMode:        corev1.ReadWriteMany,
+			wantArtifactMount: true,
+		},
+	}
+
+	renderer := NewHelmRenderer("../../charts/mlflow")
+	operatorConfig := &config.OperatorConfig{
+		MLflowURL:           "https://gateway.example.com",
+		MLflowURLConfigured: true,
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mlflow := &mlflowv1.MLflow{
+				ObjectMeta: metav1.ObjectMeta{Name: ResourceName},
+				Spec: mlflowv1.MLflowSpec{
+					BackendStoreURI:      ptr("postgresql://db.example.com/mlflow"),
+					ArtifactsDestination: ptr(tt.destination),
+					Storage: &corev1.PersistentVolumeClaimSpec{
+						AccessModes: []corev1.PersistentVolumeAccessMode{tt.accessMode},
+					},
+					ArtifactsServer: &mlflowv1.ArtifactsServerSpec{
+						Enabled:  true,
+						Replicas: ptr(tt.replicas),
+					},
+				},
+			}
+
+			objects, err := renderer.RenderChart(mlflow, "test-ns", RenderOptions{}, operatorConfig)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("RenderChart() error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if tt.wantErr {
+				return
+			}
+
+			tracking, err := renderedDeployment(objects, ResourceName, "test-ns")
+			if err != nil {
+				t.Fatal(err)
+			}
+			artifacts, err := renderedDeployment(objects, ArtifactsResourceName, "test-ns")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if deploymentMountsStorage(tracking) {
+				t.Fatal("tracking Deployment mounted storage in dedicated artifact mode")
+			}
+			if got := deploymentMountsStorage(artifacts); got != tt.wantArtifactMount {
+				t.Errorf("artifact Deployment storage mount = %v, want %v", got, tt.wantArtifactMount)
+			}
+			wantStrategy := appsv1.RollingUpdateDeploymentStrategyType
+			if tt.wantArtifactMount {
+				wantStrategy = appsv1.RecreateDeploymentStrategyType
+			}
+			if artifacts.Spec.Strategy.Type != wantStrategy {
+				t.Errorf("artifact Deployment strategy = %s, want %s", artifacts.Spec.Strategy.Type, wantStrategy)
+			}
+		})
+	}
+}
+
 func TestRenderChartArtifactsServerRequiresExternalURL(t *testing.T) {
 	renderer := NewHelmRenderer("../../charts/mlflow")
 	mlflow := &mlflowv1.MLflow{
@@ -255,6 +349,15 @@ func hasEnvValue(env []corev1.EnvVar, name, value string) bool {
 func hasSecretVolume(volumes []corev1.Volume, secretName string) bool {
 	for _, volume := range volumes {
 		if volume.Secret != nil && volume.Secret.SecretName == secretName {
+			return true
+		}
+	}
+	return false
+}
+
+func deploymentMountsStorage(deployment *appsv1.Deployment) bool {
+	for _, volume := range deployment.Spec.Template.Spec.Volumes {
+		if volume.Name == "mlflow-storage" {
 			return true
 		}
 	}

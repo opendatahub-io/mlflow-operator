@@ -45,9 +45,11 @@ artifactsServer:
   artifactRoot: https://mlflow.example.com/mlflow-artifacts/api/2.0/mlflow-artifacts/artifacts
 ```
 
-When `artifactsServer.artifactsDestination` uses `file://`, also set
-`storage.enabled=true` and `storage.accessMode=ReadWriteMany`; both Deployments mount the shared
-PVC. Remote artifact destinations such as S3 do not require this storage configuration.
+Dedicated artifact serving requires remote SQL metadata stores; inline SQLite metadata URIs are
+rejected. The tracking Deployment does not mount the PVC in this mode. When
+`artifactsServer.artifactsDestination` uses `file://`, set `storage.enabled=true`; one artifact
+replica may use `ReadWriteOnce`, while multiple replicas require `ReadWriteMany`. Remote artifact
+destinations such as S3 do not mount persistent storage.
 `temporaryStorage.sizeLimit` configures the writable `/tmp` `emptyDir` in both server pods and
 defaults to `1Gi`; increase it for larger or more concurrent proxied artifact transfers.
 

@@ -413,7 +413,8 @@ storage access mode. The operator creates:
 The tracking server runs with `--no-serve-artifacts` and advertises
 `<MLFLOW_URL>/mlflow-artifacts/api/2.0/mlflow-artifacts/artifacts` as its default artifact
 root. MLflow clients therefore continue to use the tracking server for metadata while sending
-artifact uploads and downloads to the dedicated route.
+artifact uploads and downloads to the dedicated route. The tracking Deployment does not mount
+`spec.storage` in this mode; a file-backed destination is mounted only by the artifact Deployment.
 
 `spec.temporaryStorage.sizeLimit` configures the writable `/tmp` `emptyDir` for both the
 tracking and artifacts-only pods; increase it for larger or more concurrent proxied transfers.
@@ -433,6 +434,10 @@ bypass the shared artifact proxy. The artifacts-only server has one global
 
 Disabling `artifactsServer` removes its Deployment, Service, and HTTPRoute. See
 `config/samples/mlflow_v1_mlflow_artifacts_server.yaml` for a complete remote-storage example.
+
+The garbage-collection CronJob mounts persistent storage only when its backend metadata URI may
+be local, so PostgreSQL with proxied remote artifacts does not attach an unused PVC. Trace archival
+mounts storage for a `file://` archive location or local/secret-backed metadata.
 
 ### CORS Configuration
 

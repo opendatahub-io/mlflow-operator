@@ -1,4 +1,5 @@
 {{- if .Values.garbageCollection.enabled }}
+{{- $garbageCollectionMountsStorage := eq (include "mlflow.garbageCollectionMountsStorage" .) "true" -}}
 apiVersion: batch/v1
 kind: CronJob
 metadata:
@@ -49,7 +50,7 @@ spec:
             - name: tmp
               emptyDir:
                 sizeLimit: {{ .Values.temporaryStorage.sizeLimit }}
-            {{- if .Values.storage.enabled }}
+            {{- if $garbageCollectionMountsStorage }}
             - name: mlflow-storage
               persistentVolumeClaim:
                 claimName: mlflow-pvc{{ .Values.resourceSuffix }}
@@ -124,7 +125,7 @@ spec:
               volumeMounts:
                 - name: tmp
                   mountPath: /tmp
-                {{- if .Values.storage.enabled }}
+                {{- if $garbageCollectionMountsStorage }}
                 - name: mlflow-storage
                   mountPath: /mlflow
                 {{- end }}

@@ -31,8 +31,18 @@
 {{- if and .Values.artifactsServer.enabled (empty .Values.artifactsServer.artifactsDestination) }}
 {{- fail "artifactsServer.artifactsDestination must be set when artifactsServer.enabled is true" }}
 {{- end }}
-{{- if and .Values.artifactsServer.enabled (hasPrefix "file://" .Values.artifactsServer.artifactsDestination) (or (not .Values.storage.enabled) (ne .Values.storage.accessMode "ReadWriteMany")) }}
-{{- fail "file-based artifactsServer.artifactsDestination requires storage.enabled=true and storage.accessMode=ReadWriteMany" }}
+{{- if and .Values.artifactsServer.enabled (hasPrefix "file://" .Values.artifactsServer.artifactsDestination) (not .Values.storage.enabled) }}
+{{- fail "file-based artifactsServer.artifactsDestination requires storage.enabled=true" }}
+{{- end }}
+{{- if and .Values.artifactsServer.enabled (hasPrefix "file://" .Values.artifactsServer.artifactsDestination) (gt (int .Values.artifactsServer.replicaCount) 1) (ne .Values.storage.accessMode "ReadWriteMany") }}
+{{- fail "multiple file-backed artifact server replicas require storage.accessMode=ReadWriteMany" }}
+{{- end }}
+{{- if and .Values.artifactsServer.enabled (or (hasPrefix "sqlite://" .Values.mlflow.backendStoreUri) (hasPrefix "sqlite+" .Values.mlflow.backendStoreUri) (hasPrefix "sqlite://" (.Values.mlflow.registryStoreUri | default "")) (hasPrefix "sqlite+" (.Values.mlflow.registryStoreUri | default "")) (hasPrefix "sqlite://" (.Values.mlflow.readReplicaBackendStoreUri | default "")) (hasPrefix "sqlite+" (.Values.mlflow.readReplicaBackendStoreUri | default ""))) }}
+{{- fail "artifactsServer cannot be enabled with inline SQLite metadata stores" }}
+{{- end }}
+{{- $trackingMountsStorage := eq (include "mlflow.trackingMountsStorage" .) "true" -}}
+{{- if and (gt (int .Values.replicaCount) 1) $trackingMountsStorage (ne .Values.storage.accessMode "ReadWriteMany") }}
+{{- fail "multiple tracking replicas that mount storage require storage.accessMode=ReadWriteMany" }}
 {{- end }}
 {{- $healthPrefix := .Values.mlflow.staticPrefix | trimSuffix "/" -}}
 apiVersion: apps/v1
@@ -48,7 +58,7 @@ metadata:
 spec:
   replicas: {{ .Values.replicaCount }}
   strategy:
-    {{- if .Values.storage.enabled }}
+    {{- if $trackingMountsStorage }}
     # Use Recreate strategy when PVC is attached to prevent conflicts
     # (ReadWriteOnce volumes cannot be shared between pods during rolling updates)
     type: Recreate
@@ -104,7 +114,7 @@ spec:
         - name: tmp
           emptyDir:
             sizeLimit: {{ .Values.temporaryStorage.sizeLimit }}
-        {{- if .Values.storage.enabled }}
+        {{- if $trackingMountsStorage }}
         - name: mlflow-storage
           persistentVolumeClaim:
             claimName: mlflow-pvc{{ .Values.resourceSuffix }}
@@ -255,7 +265,7 @@ spec:
           volumeMounts:
             - name: tmp
               mountPath: /tmp
-            {{- if .Values.storage.enabled }}
+            {{- if $trackingMountsStorage }}
             - name: mlflow-storage
               mountPath: /mlflow
             {{- end }}
