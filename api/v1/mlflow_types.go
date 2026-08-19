@@ -338,6 +338,7 @@ type MLflowSpec struct {
 }
 
 // ArtifactsServerSpec configures the dedicated artifacts-only MLflow deployment.
+// +kubebuilder:validation:XValidation:rule="!has(self.resourceClaims) || self.resourceClaims.all(c, ((has(c.resourceClaimName) && size(c.resourceClaimName) > 0) != (has(c.resourceClaimTemplateName) && size(c.resourceClaimTemplateName) > 0)))",message="each artifactsServer.resourceClaims entry must set exactly one non-empty value: resourceClaimName or resourceClaimTemplateName"
 type ArtifactsServerSpec struct {
 	// Enabled controls whether the dedicated artifacts-only Deployment, Service, and HTTPRoute
 	// are created.

@@ -1130,6 +1130,12 @@ spec:
                     minimum: 1
                     type: integer
                 type: object
+                x-kubernetes-validations:
+                - message: 'each artifactsServer.resourceClaims entry must set exactly
+                    one non-empty value: resourceClaimName or resourceClaimTemplateName'
+                  rule: '!has(self.resourceClaims) || self.resourceClaims.all(c, ((has(c.resourceClaimName)
+                    && size(c.resourceClaimName) > 0) != (has(c.resourceClaimTemplateName)
+                    && size(c.resourceClaimTemplateName) > 0)))'
               backendStoreUri:
                 description: |-
                   BackendStoreURI is the URI for the MLflow backend store (metadata).

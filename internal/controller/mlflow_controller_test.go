@@ -784,6 +784,47 @@ var _ = Describe("MLflow Controller", func() {
 			Expect(err.Error()).To(ContainSubstring("spec.artifactsServer.replicas"))
 		})
 
+		DescribeTable("validates artifact server resource claim sources",
+			func(claim corev1.PodResourceClaim, wantValid bool) {
+				artifactsDestination := "s3://bucket/artifacts"
+				mlflow := &mlflowv1.MLflow{
+					ObjectMeta: metav1.ObjectMeta{Name: resourceName},
+					Spec: mlflowv1.MLflowSpec{
+						BackendStoreURI:      &pgStoreURI,
+						ArtifactsDestination: &artifactsDestination,
+						ArtifactsServer: &mlflowv1.ArtifactsServerSpec{
+							Enabled:        true,
+							ResourceClaims: []corev1.PodResourceClaim{claim},
+						},
+					},
+				}
+				err := k8sClient.Create(ctx, mlflow)
+				if wantValid {
+					Expect(err).NotTo(HaveOccurred())
+					return
+				}
+				Expect(errors.IsInvalid(err)).To(BeTrue())
+				Expect(err.Error()).To(ContainSubstring(
+					"each artifactsServer.resourceClaims entry must set exactly one non-empty value",
+				))
+			},
+			Entry("accepts a direct claim", corev1.PodResourceClaim{
+				Name: "artifact-gpu", ResourceClaimName: ptr("existing-artifact-gpu"),
+			}, true),
+			Entry("accepts a claim template", corev1.PodResourceClaim{
+				Name: "artifact-gpu", ResourceClaimTemplateName: ptr("artifact-gpu-template"),
+			}, true),
+			Entry("rejects both sources", corev1.PodResourceClaim{
+				Name:                      "artifact-gpu",
+				ResourceClaimName:         ptr("existing-artifact-gpu"),
+				ResourceClaimTemplateName: ptr("artifact-gpu-template"),
+			}, false),
+			Entry("rejects neither source", corev1.PodResourceClaim{Name: "artifact-gpu"}, false),
+			Entry("rejects an empty source", corev1.PodResourceClaim{
+				Name: "artifact-gpu", ResourceClaimName: ptr(""),
+			}, false),
+		)
+
 		It("rejects an artifact server without an explicit destination", func() {
 			mlflow := &mlflowv1.MLflow{
 				ObjectMeta: metav1.ObjectMeta{Name: resourceName},
