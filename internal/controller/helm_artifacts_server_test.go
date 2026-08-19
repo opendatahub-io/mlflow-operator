@@ -213,6 +213,66 @@ func TestRenderChartArtifactsServer(t *testing.T) {
 	}
 }
 
+func TestRenderChartArtifactsServerResourceSuffixLabels(t *testing.T) {
+	renderer := NewHelmRenderer("../../charts/mlflow")
+	mlflow := &mlflowv1.MLflow{
+		ObjectMeta: metav1.ObjectMeta{Name: "dev"},
+		Spec: mlflowv1.MLflowSpec{
+			BackendStoreURI:      ptr("postgresql://db.example.com/mlflow"),
+			ArtifactsDestination: ptr("s3://bucket/artifacts"),
+			ArtifactsServer:      &mlflowv1.ArtifactsServerSpec{Enabled: true},
+		},
+	}
+
+	objects, err := renderer.RenderChart(mlflow, "test-ns", RenderOptions{}, &config.OperatorConfig{
+		MLflowURL:           "https://gateway.example.com",
+		MLflowURLConfigured: true,
+	})
+	if err != nil {
+		t.Fatalf("RenderChart() error = %v", err)
+	}
+
+	tracking, err := renderedDeployment(objects, "mlflow-dev", "test-ns")
+	if err != nil {
+		t.Fatal(err)
+	}
+	artifacts, err := renderedDeployment(objects, "mlflow-artifacts-dev", "test-ns")
+	if err != nil {
+		t.Fatal(err)
+	}
+	artifactService := findObject(objects, "Service", "mlflow-artifacts-dev")
+	if artifactService == nil {
+		t.Fatal("suffixed artifacts Service was not rendered")
+		return
+	}
+
+	const instanceLabel = "mlflow-dev"
+	for object, labels := range map[string]map[string]string{
+		"tracking Deployment": tracking.Labels,
+		"artifact Deployment": artifacts.Labels,
+		"artifact Service":    artifactService.GetLabels(),
+	} {
+		if got := labels["app"]; got != instanceLabel {
+			t.Errorf("%s app label = %q, want %q", object, got, instanceLabel)
+		}
+	}
+
+	const artifactPodLabel = "mlflow-artifacts-dev"
+	if got := artifacts.Spec.Selector.MatchLabels["app"]; got != artifactPodLabel {
+		t.Errorf("artifact Deployment selector = %q, want %q", got, artifactPodLabel)
+	}
+	if got := artifacts.Spec.Template.Labels["app"]; got != artifactPodLabel {
+		t.Errorf("artifact pod app label = %q, want %q", got, artifactPodLabel)
+	}
+	serviceSelector, found, err := unstructured.NestedStringMap(artifactService.Object, "spec", "selector")
+	if err != nil || !found {
+		t.Fatalf("artifact Service selector: found=%v, err=%v", found, err)
+	}
+	if got := serviceSelector["app"]; got != artifactPodLabel {
+		t.Errorf("artifact Service selector = %q, want %q", got, artifactPodLabel)
+	}
+}
+
 func TestRenderChartArtifactsServerDisabled(t *testing.T) {
 	renderer := NewHelmRenderer("../../charts/mlflow")
 	mlflow := &mlflowv1.MLflow{
