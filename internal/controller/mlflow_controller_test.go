@@ -328,9 +328,39 @@ var _ = Describe("MLflow Controller", func() {
 			artifactKey := types.NamespacedName{Name: ArtifactsResourceName, Namespace: "opendatahub"}
 			artifactRoute := &gatewayv1.HTTPRoute{}
 			Expect(k8sClient.Get(ctx, artifactKey, artifactRoute)).To(Succeed())
-			Expect(artifactRoute.Spec.Rules).To(HaveLen(1))
-			Expect(*artifactRoute.Spec.Rules[0].Matches[0].Path.Value).To(Equal("/" + ArtifactsResourceName))
-			Expect(artifactRoute.Spec.Rules[0].BackendRefs[0].Name).To(Equal(gatewayv1.ObjectName(ArtifactsResourceName)))
+			Expect(artifactRoute.Spec.Rules).To(HaveLen(2))
+
+			legacyRule := artifactRoute.Spec.Rules[0]
+			Expect(legacyRule.Matches).To(HaveLen(1))
+			Expect(legacyRule.Matches[0].Path).NotTo(BeNil())
+			Expect(legacyRule.Matches[0].Path.Type).NotTo(BeNil())
+			Expect(*legacyRule.Matches[0].Path.Type).To(Equal(gatewayv1.PathMatchPathPrefix))
+			Expect(legacyRule.Matches[0].Path.Value).NotTo(BeNil())
+			Expect(*legacyRule.Matches[0].Path.Value).To(Equal("/mlflow/api/2.0/mlflow-artifacts/artifacts"))
+			Expect(legacyRule.Filters).To(HaveLen(1))
+			Expect(legacyRule.Filters[0].Type).To(Equal(gatewayv1.HTTPRouteFilterURLRewrite))
+			Expect(legacyRule.Filters[0].URLRewrite).NotTo(BeNil())
+			Expect(legacyRule.Filters[0].URLRewrite.Path).NotTo(BeNil())
+			Expect(legacyRule.Filters[0].URLRewrite.Path.Type).To(Equal(gatewayv1.PrefixMatchHTTPPathModifier))
+			Expect(legacyRule.Filters[0].URLRewrite.Path.ReplacePrefixMatch).NotTo(BeNil())
+			Expect(*legacyRule.Filters[0].URLRewrite.Path.ReplacePrefixMatch).To(Equal(
+				"/mlflow-artifacts/api/2.0/mlflow-artifacts/artifacts",
+			))
+			Expect(legacyRule.BackendRefs).To(HaveLen(1))
+			Expect(legacyRule.BackendRefs[0].Name).To(Equal(gatewayv1.ObjectName(ArtifactsResourceName)))
+			Expect(legacyRule.BackendRefs[0].Port).NotTo(BeNil())
+			Expect(*legacyRule.BackendRefs[0].Port).To(Equal(gatewayv1.PortNumber(8443)))
+			Expect(legacyRule.BackendRefs[0].Weight).NotTo(BeNil())
+			Expect(*legacyRule.BackendRefs[0].Weight).To(Equal(int32(1)))
+
+			artifactRule := artifactRoute.Spec.Rules[1]
+			Expect(artifactRule.Matches).To(HaveLen(1))
+			Expect(artifactRule.Matches[0].Path).NotTo(BeNil())
+			Expect(artifactRule.Matches[0].Path.Value).NotTo(BeNil())
+			Expect(*artifactRule.Matches[0].Path.Value).To(Equal("/" + ArtifactsResourceName))
+			Expect(artifactRule.Filters).To(BeEmpty())
+			Expect(artifactRule.BackendRefs).To(HaveLen(1))
+			Expect(artifactRule.BackendRefs[0].Name).To(Equal(gatewayv1.ObjectName(ArtifactsResourceName)))
 			Expect(artifactRoute.Labels).To(HaveKeyWithValue("app", ResourceName))
 
 			artifactLabels := map[string]string{"app": ArtifactsResourceName}
@@ -379,6 +409,47 @@ var _ = Describe("MLflow Controller", func() {
 			Expect(errors.IsNotFound(k8sClient.Get(ctx, artifactKey, &appsv1.Deployment{}))).To(BeTrue())
 			Expect(errors.IsNotFound(k8sClient.Get(ctx, artifactKey, &corev1.Service{}))).To(BeTrue())
 			Expect(errors.IsNotFound(k8sClient.Get(ctx, artifactKey, &gatewayv1.HTTPRoute{}))).To(BeTrue())
+		})
+
+		It("should include the resource suffix in dedicated artifact routes", func() {
+			customMLflow := &mlflowv1.MLflow{
+				ObjectMeta: metav1.ObjectMeta{Name: "custom", UID: types.UID("custom-uid")},
+				Spec: mlflowv1.MLflowSpec{
+					ArtifactsServer: &mlflowv1.ArtifactsServerSpec{Enabled: true},
+				},
+			}
+			controllerReconciler := &MLflowReconciler{
+				Client:             k8sClient,
+				Scheme:             k8sClient.Scheme(),
+				HTTPRouteAvailable: true,
+			}
+			Expect(controllerReconciler.reconcileArtifactsHTTPRoute(
+				ctx,
+				customMLflow,
+				"opendatahub",
+				&config.OperatorConfig{GatewayName: "data-science-gateway"},
+			)).To(Succeed())
+
+			artifactKey := types.NamespacedName{Name: "mlflow-artifacts-custom", Namespace: "opendatahub"}
+			DeferCleanup(func() {
+				Expect(client.IgnoreNotFound(k8sClient.Delete(ctx, &gatewayv1.HTTPRoute{
+					ObjectMeta: metav1.ObjectMeta{Name: artifactKey.Name, Namespace: artifactKey.Namespace},
+				}))).To(Succeed())
+			})
+
+			artifactRoute := &gatewayv1.HTTPRoute{}
+			Expect(k8sClient.Get(ctx, artifactKey, artifactRoute)).To(Succeed())
+			Expect(artifactRoute.Spec.Rules).To(HaveLen(2))
+			Expect(*artifactRoute.Spec.Rules[0].Matches[0].Path.Value).To(Equal(
+				"/mlflow-custom/api/2.0/mlflow-artifacts/artifacts",
+			))
+			Expect(*artifactRoute.Spec.Rules[0].Filters[0].URLRewrite.Path.ReplacePrefixMatch).To(Equal(
+				"/mlflow-artifacts-custom/api/2.0/mlflow-artifacts/artifacts",
+			))
+			Expect(*artifactRoute.Spec.Rules[1].Matches[0].Path.Value).To(Equal("/mlflow-artifacts-custom"))
+			Expect(artifactRoute.Spec.Rules[0].BackendRefs[0].Name).To(Equal(
+				gatewayv1.ObjectName("mlflow-artifacts-custom"),
+			))
 		})
 
 		It("should preserve unowned artifact resources when split serving is disabled", func() {

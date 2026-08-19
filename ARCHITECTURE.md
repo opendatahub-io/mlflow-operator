@@ -101,7 +101,10 @@ This lets the service keep its normal internal API paths while still fitting beh
 When the dedicated artifact server is enabled, the gateway additionally exposes
 `/mlflow-artifacts`. The tracking server advertises the full artifact API root at
 `/mlflow-artifacts/api/2.0/mlflow-artifacts/artifacts`, so clients direct artifact traffic to
-the second Service without changing the tracking URI.
+the second Service without changing the tracking URI. A more-specific compatibility match routes
+the legacy `/mlflow/api/2.0/mlflow-artifacts/artifacts` path to the same Service and rewrites it to
+the dedicated prefix. Existing `mlflow-artifacts:/` experiment and run locations therefore remain
+usable after split serving is enabled without giving the tracking Deployment artifact storage.
 
 ```mermaid
 flowchart LR

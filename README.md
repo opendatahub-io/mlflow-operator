@@ -415,6 +415,10 @@ The tracking server runs with `--no-serve-artifacts` and advertises
 root. MLflow clients therefore continue to use the tracking server for metadata while sending
 artifact uploads and downloads to the dedicated route. The tracking Deployment does not mount
 `spec.storage` in this mode; a file-backed destination is mounted only by the artifact Deployment.
+Experiments created before split serving may retain `mlflow-artifacts:/` artifact locations. The
+artifact HTTPRoute also matches their tracking-relative `/mlflow/api/2.0/mlflow-artifacts/artifacts`
+requests and rewrites them to the dedicated route, so enabling split serving does not require
+rewriting existing experiment or run metadata. Per-resource suffixes are preserved on both paths.
 
 `spec.temporaryStorage.sizeLimit` configures the writable `/tmp` `emptyDir` for both the
 tracking and artifacts-only pods; increase it for larger or more concurrent proxied transfers.

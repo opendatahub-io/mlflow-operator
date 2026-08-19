@@ -382,6 +382,8 @@ func (r *MLflowReconciler) reconcileArtifactsHTTPRoute(
 	suffix := getResourceSuffix(mlflow.Name)
 	resourceName := ArtifactsResourceName + suffix
 	pathPrefix := "/" + resourceName
+	legacyArtifactPathPrefix := "/" + ResourceName + suffix + ArtifactsAPIPath
+	artifactPathPrefix := pathPrefix + ArtifactsAPIPath
 	pathMatchType := gatewayv1.PathMatchPathPrefix
 	servicePort := gatewayv1.PortNumber(8443)
 	weight := int32(1)
@@ -409,6 +411,38 @@ func (r *MLflowReconciler) reconcileArtifactsHTTPRoute(
 				},
 			},
 			Rules: []gatewayv1.HTTPRouteRule{
+				{
+					Matches: []gatewayv1.HTTPRouteMatch{
+						{
+							Path: &gatewayv1.HTTPPathMatch{
+								Type:  &pathMatchType,
+								Value: &legacyArtifactPathPrefix,
+							},
+						},
+					},
+					Filters: []gatewayv1.HTTPRouteFilter{
+						{
+							Type: gatewayv1.HTTPRouteFilterURLRewrite,
+							URLRewrite: &gatewayv1.HTTPURLRewriteFilter{
+								Path: &gatewayv1.HTTPPathModifier{
+									Type:               gatewayv1.PrefixMatchHTTPPathModifier,
+									ReplacePrefixMatch: &artifactPathPrefix,
+								},
+							},
+						},
+					},
+					BackendRefs: []gatewayv1.HTTPBackendRef{
+						{
+							BackendRef: gatewayv1.BackendRef{
+								BackendObjectReference: gatewayv1.BackendObjectReference{
+									Name: gatewayv1.ObjectName(resourceName),
+									Port: &servicePort,
+								},
+								Weight: &weight,
+							},
+						},
+					},
+				},
 				{
 					Matches: []gatewayv1.HTTPRouteMatch{
 						{

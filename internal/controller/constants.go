@@ -21,6 +21,8 @@ const (
 	ResourceName = "mlflow"
 	// ArtifactsResourceName is the base name used for dedicated artifacts-only resources.
 	ArtifactsResourceName = "mlflow-artifacts"
+	// ArtifactsAPIPath is the MLflow proxied artifact API path.
+	ArtifactsAPIPath = "/api/2.0/mlflow-artifacts/artifacts"
 	// ClusterRoleName is the name of the shared ClusterRole used by all MLflow instances
 	ClusterRoleName = "mlflow"
 	// ClusterRoleBindingName is the name of the shared ClusterRoleBinding used by all MLflow instances

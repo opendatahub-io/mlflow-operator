@@ -19,7 +19,7 @@ func buildArtifactsURL(mlflowName, baseURL string, baseURLConfigured bool) strin
 	if baseURL == "" {
 		return ""
 	}
-	return baseURL + "/api/2.0/mlflow-artifacts/artifacts"
+	return baseURL + ArtifactsAPIPath
 }
 
 func buildResourceURL(mlflowName, resourceName, baseURL string, baseURLConfigured bool) string {
