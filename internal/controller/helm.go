@@ -304,6 +304,10 @@ func (h *HelmRenderer) mlflowToHelmValues(
 	if artifactsServerEnabled && mlflow.Spec.ArtifactsServer.Replicas != nil {
 		artifactsReplicas = *mlflow.Spec.ArtifactsServer.Replicas
 	}
+	artifactsWorkers := int32(1)
+	if artifactsServerEnabled && mlflow.Spec.ArtifactsServer.Workers != nil {
+		artifactsWorkers = *mlflow.Spec.ArtifactsServer.Workers
+	}
 	artifactsResources := values["resources"]
 	if artifactsServerEnabled && mlflow.Spec.ArtifactsServer.Resources != nil {
 		resourcesMap, err := runtime.DefaultUnstructuredConverter.ToUnstructured(mlflow.Spec.ArtifactsServer.Resources)
@@ -508,7 +512,7 @@ func (h *HelmRenderer) mlflowToHelmValues(
 		"artifactsDestination": artifactsDest,
 		"artifactRoot":         defaultArtifactRoot,
 		"workspaceStoreUri":    "kubernetes://",
-		"workers":              workers,
+		"workers":              artifactsWorkers,
 		"port":                 8443,
 		"allowedHosts":         allowedHosts,
 		"staticPrefix":         artifactsStaticPrefix,

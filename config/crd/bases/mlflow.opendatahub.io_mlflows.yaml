@@ -1071,6 +1071,13 @@ spec:
                           More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
                         type: object
                     type: object
+                  workers:
+                    default: 1
+                    description: Workers is the number of uvicorn worker processes
+                      in each artifacts-only server pod.
+                    format: int32
+                    minimum: 1
+                    type: integer
                 type: object
               backendStoreUri:
                 description: |-

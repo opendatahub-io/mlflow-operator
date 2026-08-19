@@ -26,6 +26,7 @@ func TestRenderChartArtifactsServer(t *testing.T) {
 		Spec: mlflowv1.MLflowSpec{
 			BackendStoreURI:      ptr("postgresql://db.example.com/mlflow"),
 			ArtifactsDestination: ptr("s3://bucket/artifacts"),
+			Workers:              ptr(int32(3)),
 			WorkspaceLabelSelector: &metav1.LabelSelector{
 				MatchLabels: map[string]string{"mlflow-workspace": "true"},
 			},
@@ -36,6 +37,7 @@ func TestRenderChartArtifactsServer(t *testing.T) {
 			ArtifactsServer: &mlflowv1.ArtifactsServerSpec{
 				Enabled:  true,
 				Replicas: ptr(int32(2)),
+				Workers:  ptr(int32(4)),
 				Resources: &corev1.ResourceRequirements{
 					Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("500m")},
 				},
@@ -70,6 +72,9 @@ func TestRenderChartArtifactsServer(t *testing.T) {
 	if slices.Contains(trackingArgs, "--artifacts-only") {
 		t.Errorf("tracking args unexpectedly contain --artifacts-only: %v", trackingArgs)
 	}
+	if !slices.Contains(trackingArgs, "--workers=3") {
+		t.Errorf("tracking args missing custom worker count: %v", trackingArgs)
+	}
 
 	if artifacts.Spec.Replicas == nil || *artifacts.Spec.Replicas != 2 {
 		t.Fatalf("artifact replicas = %v, want 2", artifacts.Spec.Replicas)
@@ -82,6 +87,7 @@ func TestRenderChartArtifactsServer(t *testing.T) {
 		"--enable-workspaces",
 		"--workspace-store-uri=kubernetes://",
 		"--static-prefix=/mlflow-artifacts",
+		"--workers=4",
 	} {
 		if !slices.Contains(container.Args, arg) {
 			t.Errorf("artifact args missing %q: %v", arg, container.Args)
@@ -189,6 +195,9 @@ func TestRenderChartArtifactsServerInheritsResources(t *testing.T) {
 	}
 	if artifacts.Spec.Replicas == nil || *artifacts.Spec.Replicas != 1 {
 		t.Fatalf("artifact replicas = %v, want default 1", artifacts.Spec.Replicas)
+	}
+	if args := artifacts.Spec.Template.Spec.Containers[0].Args; !slices.Contains(args, "--workers=1") {
+		t.Errorf("artifact args missing default worker count: %v", args)
 	}
 }
 

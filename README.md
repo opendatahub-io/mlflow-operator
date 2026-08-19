@@ -383,6 +383,7 @@ spec:
   artifactsServer:
     enabled: true
     replicas: 2
+    workers: 2
     resources:
       requests:
         cpu: 500m
@@ -407,9 +408,9 @@ artifact uploads and downloads to the dedicated route.
 
 Both deployments use `kubernetes://` as the workspace provider and Kubernetes authorization.
 They share the image, ServiceAccount, workspace label selector, environment, credentials, CA
-bundles, security contexts, and scheduling configuration. `artifactsServer.replicas` and
-`artifactsServer.resources` can scale artifact processing independently; artifact resources
-inherit the main server resources when omitted. `serveArtifacts` and
+bundles, security contexts, and scheduling configuration. `artifactsServer.replicas`,
+`artifactsServer.workers`, and `artifactsServer.resources` can scale artifact processing
+independently; artifact resources inherit the main server resources when omitted. `serveArtifacts` and
 `artifactsServer.enabled` cannot both be enabled.
 
 The artifacts-only server validates `X-MLFLOW-WORKSPACE` and scopes proxied paths under the

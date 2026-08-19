@@ -345,6 +345,12 @@ type ArtifactsServerSpec struct {
 	// +optional
 	Replicas *int32 `json:"replicas,omitempty"`
 
+	// Workers is the number of uvicorn worker processes in each artifacts-only server pod.
+	// +kubebuilder:default=1
+	// +kubebuilder:validation:Minimum=1
+	// +optional
+	Workers *int32 `json:"workers,omitempty"`
+
 	// Resources specifies the compute resources for the artifacts-only server container.
 	// When omitted, the main MLflow server resources are used.
 	// +optional

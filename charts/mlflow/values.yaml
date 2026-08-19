@@ -186,6 +186,7 @@ artifactsServer:
   workspaceStoreUri: "kubernetes://"
   # Optional label selector applied to the Kubernetes workspace provider.
   workspaceLabelSelector: ""
+  # Number of uvicorn workers in each MLflow artifacts-server pod.
   workers: 1
   port: 8443
   allowedHosts: []
