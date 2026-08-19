@@ -53,6 +53,7 @@ import (
 // +kubebuilder:validation:XValidation:rule="!has(self.traceArchival) || !has(self.traceArchival.enabled) || self.traceArchival.enabled == false || (has(self.traceArchival.schedule) && size(self.traceArchival.schedule) > 0)",message="traceArchival.schedule is required when traceArchival.enabled is true"
 // +kubebuilder:validation:XValidation:rule="!has(self.traceArchival) || !has(self.traceArchival.enabled) || self.traceArchival.enabled == false || (has(self.traceArchival.location) && size(self.traceArchival.location) > 0)",message="traceArchival.location is required when traceArchival.enabled is true"
 // +kubebuilder:validation:XValidation:rule="!has(self.traceArchival) || !has(self.traceArchival.enabled) || self.traceArchival.enabled == false || (has(self.traceArchival.retention) && size(self.traceArchival.retention) > 0)",message="traceArchival.retention is required when traceArchival.enabled is true"
+// +kubebuilder:validation:XValidation:rule="!has(oldSelf.storage) || (has(self.storage) && (self.storage.accessModes == oldSelf.storage.accessModes.orValue([]) || (size(oldSelf.storage.accessModes.orValue([])) == 0 && self.storage.accessModes == ['ReadWriteOnce'])))",message="storage and its accessModes are immutable once configured; an omitted legacy access mode may only be set to ReadWriteOnce",optionalOldSelf=true
 type MLflowSpec struct {
 	// Image specifies the MLflow container image.
 	// If not specified, use the default image

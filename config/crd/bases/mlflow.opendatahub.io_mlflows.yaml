@@ -3108,6 +3108,12 @@ spec:
               rule: '!has(self.traceArchival) || !has(self.traceArchival.enabled)
                 || self.traceArchival.enabled == false || (has(self.traceArchival.retention)
                 && size(self.traceArchival.retention) > 0)'
+            - message: storage and its accessModes are immutable once configured;
+                an omitted legacy access mode may only be set to ReadWriteOnce
+              optionalOldSelf: true
+              rule: '!has(oldSelf.storage) || (has(self.storage) && (self.storage.accessModes
+                == oldSelf.storage.accessModes.orValue([]) || (size(oldSelf.storage.accessModes.orValue([]))
+                == 0 && self.storage.accessModes == [''ReadWriteOnce''])))'
           status:
             description: status defines the observed state of MLflow
             properties:

@@ -219,6 +219,8 @@ spec:
   serveArtifacts: true
 ```
 
+Once `spec.storage` is configured, it and its access modes cannot be changed or removed in place because the existing PVC is retained and its access modes are immutable. Preserve any required data and recreate the MLflow resource and PVC to use a different access mode. Older resources that omitted access modes may normalize them once to `ReadWriteOnce`, matching the operator's legacy default.
+
 #### Remote Storage (Production)
 ```yaml
 spec:

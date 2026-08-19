@@ -188,6 +188,8 @@ MLflow has three independent storage components:
 
 The `storage` field in the MLflow CR is **optional** and only needed for file-based storage:
 
+Once `spec.storage` is configured, admission prevents removing it or changing its access modes because the operator retains the existing PVC and Kubernetes access modes are immutable. Legacy resources with omitted access modes may normalize them once to `ReadWriteOnce`.
+
 **When to configure storage:**
 - Using `sqlite://` for backend/registry store
 - Using `file://` for artifacts destination

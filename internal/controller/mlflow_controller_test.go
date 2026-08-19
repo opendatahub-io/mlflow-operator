@@ -505,6 +505,62 @@ var _ = Describe("MLflow Controller", func() {
 			Expect(k8sClient.Create(ctx, mlflow)).To(Succeed())
 		})
 
+		It("allows a legacy omitted storage access mode to be set to ReadWriteOnce", func() {
+			serveArtifactsTrue := true
+			mlflow := &mlflowv1.MLflow{
+				ObjectMeta: metav1.ObjectMeta{Name: resourceName},
+				Spec: mlflowv1.MLflowSpec{
+					ServeArtifacts:  &serveArtifactsTrue,
+					BackendStoreURI: &pgStoreURI,
+					Storage:         &corev1.PersistentVolumeClaimSpec{},
+				},
+			}
+			Expect(k8sClient.Create(ctx, mlflow)).To(Succeed())
+
+			mlflow.Spec.Storage.AccessModes = []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce}
+			Expect(k8sClient.Update(ctx, mlflow)).To(Succeed())
+		})
+
+		It("rejects changing an established storage access mode", func() {
+			serveArtifactsTrue := true
+			mlflow := &mlflowv1.MLflow{
+				ObjectMeta: metav1.ObjectMeta{Name: resourceName},
+				Spec: mlflowv1.MLflowSpec{
+					ServeArtifacts:  &serveArtifactsTrue,
+					BackendStoreURI: &pgStoreURI,
+					Storage: &corev1.PersistentVolumeClaimSpec{
+						AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
+					},
+				},
+			}
+			Expect(k8sClient.Create(ctx, mlflow)).To(Succeed())
+
+			mlflow.Spec.Storage.AccessModes = []corev1.PersistentVolumeAccessMode{corev1.ReadWriteMany}
+			err := k8sClient.Update(ctx, mlflow)
+			Expect(errors.IsInvalid(err)).To(BeTrue())
+			Expect(err.Error()).To(ContainSubstring("storage and its accessModes are immutable once configured"))
+		})
+
+		It("rejects removing configured storage", func() {
+			serveArtifactsTrue := true
+			mlflow := &mlflowv1.MLflow{
+				ObjectMeta: metav1.ObjectMeta{Name: resourceName},
+				Spec: mlflowv1.MLflowSpec{
+					ServeArtifacts:  &serveArtifactsTrue,
+					BackendStoreURI: &pgStoreURI,
+					Storage: &corev1.PersistentVolumeClaimSpec{
+						AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
+					},
+				},
+			}
+			Expect(k8sClient.Create(ctx, mlflow)).To(Succeed())
+
+			mlflow.Spec.Storage = nil
+			err := k8sClient.Update(ctx, mlflow)
+			Expect(errors.IsInvalid(err)).To(BeTrue())
+			Expect(err.Error()).To(ContainSubstring("storage and its accessModes are immutable once configured"))
+		})
+
 		It("allows missing defaultArtifactRoot when artifactsServer is enabled", func() {
 			artifactsDestination := "s3://bucket/artifacts"
 			mlflow := &mlflowv1.MLflow{
