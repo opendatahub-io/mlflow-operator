@@ -190,6 +190,7 @@ The `storage` field in the MLflow CR is **optional** and only needed for file-ba
 
 Once `spec.storage` is configured, admission prevents removing it or changing its access modes because the operator retains the existing PVC and Kubernetes access modes are immutable. Legacy resources with omitted access modes may normalize them once to `ReadWriteOnce`.
 Multiple tracking replicas require `ReadWriteMany` when tracking uses persistent storage for SQLite, secret-backed metadata with an unknown scheme, or locally served artifacts; an otherwise unused configured PVC does not impose that restriction.
+Enabling trace archival on an existing `ReadWriteOnce` deployment that shares PVC-backed metadata or uses a local archive requires preserving the data and recreating the MLflow resource and PVC with `ReadWriteMany`; access modes cannot be widened in place.
 
 **When to configure storage:**
 - Using `sqlite://` for backend/registry store
