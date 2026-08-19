@@ -26,6 +26,9 @@ spec:
   # Required for the dedicated server; both artifact pods use this remote destination.
   artifactsDestination: s3://my-mlflow-bucket/artifacts
   serveArtifacts: false
+  # Writable /tmp capacity shared by the tracking and artifact-server pods.
+  temporaryStorage:
+    sizeLimit: 2Gi
   artifactsServer:
     enabled: true
     replicas: 2

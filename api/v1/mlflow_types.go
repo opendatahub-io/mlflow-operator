@@ -100,8 +100,8 @@ type MLflowSpec struct {
 	// +optional
 	Storage *corev1.PersistentVolumeClaimSpec `json:"storage,omitempty"`
 
-	// TemporaryStorage configures the writable /tmp emptyDir shared by the MLflow pod
-	// containers and related Jobs rendered from the chart.
+	// TemporaryStorage configures the writable /tmp emptyDir used by the MLflow tracking
+	// and dedicated artifact-server pods and related Jobs rendered from the chart.
 	// This is especially relevant when serving artifacts from remote storage because
 	// proxied upload/download flows can use temporary local disk space.
 	// +optional
@@ -366,8 +366,8 @@ type CABundleConfigMapSpec struct {
 	Name string `json:"name"`
 }
 
-// TemporaryStorageSpec configures the writable /tmp emptyDir shared by the MLflow
-// server pod containers and auxiliary Jobs that reuse the same chart setting.
+// TemporaryStorageSpec configures the writable /tmp emptyDir used by the MLflow
+// server pods and auxiliary Jobs that reuse the same chart setting.
 type TemporaryStorageSpec struct {
 	// SizeLimit caps the writable /tmp emptyDir volume.
 	// When omitted, the operator/chart default is used.

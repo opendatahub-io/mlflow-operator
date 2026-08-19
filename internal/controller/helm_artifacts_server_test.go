@@ -26,7 +26,10 @@ func TestRenderChartArtifactsServer(t *testing.T) {
 		Spec: mlflowv1.MLflowSpec{
 			BackendStoreURI:      ptr("postgresql://db.example.com/mlflow"),
 			ArtifactsDestination: ptr("s3://bucket/artifacts"),
-			Workers:              ptr(int32(3)),
+			TemporaryStorage: &mlflowv1.TemporaryStorageSpec{
+				SizeLimit: quantityPtr("3Gi"),
+			},
+			Workers: ptr(int32(3)),
 			WorkspaceLabelSelector: &metav1.LabelSelector{
 				MatchLabels: map[string]string{"mlflow-workspace": "true"},
 			},
@@ -114,6 +117,19 @@ func TestRenderChartArtifactsServer(t *testing.T) {
 	}
 	if !hasSecretVolume(artifacts.Spec.Template.Spec.Volumes, ArtifactsTLSSecretName) {
 		t.Errorf("artifacts Deployment does not mount TLS secret %q", ArtifactsTLSSecretName)
+	}
+	var tmpVolume *corev1.Volume
+	for i := range artifacts.Spec.Template.Spec.Volumes {
+		if artifacts.Spec.Template.Spec.Volumes[i].Name == "tmp" {
+			tmpVolume = &artifacts.Spec.Template.Spec.Volumes[i]
+			break
+		}
+	}
+	if tmpVolume == nil || tmpVolume.EmptyDir == nil || tmpVolume.EmptyDir.SizeLimit == nil {
+		t.Fatalf("artifacts Deployment tmp volume = %#v, want a size-limited emptyDir", tmpVolume)
+	}
+	if want := resource.MustParse("3Gi"); tmpVolume.EmptyDir.SizeLimit.Cmp(want) != 0 {
+		t.Errorf("artifacts Deployment tmp size limit = %s, want %s", tmpVolume.EmptyDir.SizeLimit, want.String())
 	}
 
 	if artifacts.Spec.Template.Spec.ServiceAccountName != tracking.Spec.Template.Spec.ServiceAccountName {

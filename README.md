@@ -266,8 +266,8 @@ kubectl create secret generic mlflow-db-credentials \
   -n <namespace>
 ```
 
-When `serveArtifacts` is enabled against remote storage such as S3, MLflow can spool
-artifact bytes through `/tmp` during proxied upload/download flows. Use
+When serving artifacts through the tracking or dedicated artifact server against remote storage
+such as S3, MLflow can spool artifact bytes through `/tmp` during proxied upload/download flows. Use
 `spec.temporaryStorage.sizeLimit` to raise that writable `emptyDir` above the 1Gi default
 for deployments that expect larger or more concurrent artifact transfers.
 
@@ -380,6 +380,8 @@ spec:
     key: backend-store-uri
   artifactsDestination: s3://mlflow-artifacts
   serveArtifacts: false
+  temporaryStorage:
+    sizeLimit: 2Gi
   artifactsServer:
     enabled: true
     replicas: 2
@@ -405,6 +407,9 @@ The tracking server runs with `--no-serve-artifacts` and advertises
 `<MLFLOW_URL>/mlflow-artifacts/api/2.0/mlflow-artifacts/artifacts` as its default artifact
 root. MLflow clients therefore continue to use the tracking server for metadata while sending
 artifact uploads and downloads to the dedicated route.
+
+`spec.temporaryStorage.sizeLimit` configures the writable `/tmp` `emptyDir` for both the
+tracking and artifacts-only pods; increase it for larger or more concurrent proxied transfers.
 
 Both deployments use `kubernetes://` as the workspace provider and Kubernetes authorization.
 They share the image, ServiceAccount, workspace label selector, environment, credentials, CA

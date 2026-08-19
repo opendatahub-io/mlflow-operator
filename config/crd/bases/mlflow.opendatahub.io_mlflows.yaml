@@ -2755,8 +2755,8 @@ spec:
                 type: object
               temporaryStorage:
                 description: |-
-                  TemporaryStorage configures the writable /tmp emptyDir shared by the MLflow pod
-                  containers and related Jobs rendered from the chart.
+                  TemporaryStorage configures the writable /tmp emptyDir used by the MLflow tracking
+                  and dedicated artifact-server pods and related Jobs rendered from the chart.
                   This is especially relevant when serving artifacts from remote storage because
                   proxied upload/download flows can use temporary local disk space.
                 properties:

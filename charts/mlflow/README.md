@@ -48,6 +48,8 @@ artifactsServer:
 When `artifactsServer.artifactsDestination` uses `file://`, also set
 `storage.enabled=true` and `storage.accessMode=ReadWriteMany`; both Deployments mount the shared
 PVC. Remote artifact destinations such as S3 do not require this storage configuration.
+`temporaryStorage.sizeLimit` configures the writable `/tmp` `emptyDir` in both server pods and
+defaults to `1Gi`; increase it for larger or more concurrent proxied artifact transfers.
 
 The standalone chart creates only the artifacts Deployment and Service. It does not create an
 Ingress or `HTTPRoute`; expose the Service at the configured `artifactRoot` yourself. Both servers
