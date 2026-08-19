@@ -308,11 +308,19 @@ func (h *HelmRenderer) mlflowToHelmValues(
 	if artifactsServerEnabled && mlflow.Spec.ArtifactsServer.Workers != nil {
 		artifactsWorkers = *mlflow.Spec.ArtifactsServer.Workers
 	}
-	artifactsResources := values["resources"]
+	var artifactsResources map[string]interface{}
 	if artifactsServerEnabled && mlflow.Spec.ArtifactsServer.Resources != nil {
 		resourcesMap, err := runtime.DefaultUnstructuredConverter.ToUnstructured(mlflow.Spec.ArtifactsServer.Resources)
 		if err != nil {
 			return nil, fmt.Errorf("failed to convert artifacts server resources: %w", err)
+		}
+		artifactsResources = resourcesMap
+	} else if artifactsServerEnabled && mlflow.Spec.Resources != nil {
+		inheritedResources := mlflow.Spec.Resources.DeepCopy()
+		inheritedResources.Claims = nil
+		resourcesMap, err := runtime.DefaultUnstructuredConverter.ToUnstructured(inheritedResources)
+		if err != nil {
+			return nil, fmt.Errorf("failed to convert inherited artifacts server resources: %w", err)
 		}
 		artifactsResources = resourcesMap
 	}
@@ -517,6 +525,10 @@ func (h *HelmRenderer) mlflowToHelmValues(
 		"allowedHosts":         allowedHosts,
 		"staticPrefix":         artifactsStaticPrefix,
 		"tls":                  artifactsTLSValues,
+		"resourceClaims":       []corev1.PodResourceClaim{},
+	}
+	if artifactsServerEnabled && len(mlflow.Spec.ArtifactsServer.ResourceClaims) > 0 {
+		artifactsServerValues["resourceClaims"] = mlflow.Spec.ArtifactsServer.ResourceClaims
 	}
 	if artifactsResources != nil {
 		artifactsServerValues["resources"] = artifactsResources

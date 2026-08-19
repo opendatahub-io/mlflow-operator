@@ -193,7 +193,10 @@ artifactsServer:
   port: 8443
   allowedHosts: []
   staticPrefix: "/mlflow-artifacts"
-  # Empty resources inherit the main server resources.
+  # Pod-level Dynamic Resource Allocation claims for artifact pods. Pair each entry
+  # with a same-named resources.claims reference below.
+  resourceClaims: []
+  # Empty resources inherit main-server requests and limits, but not claims.
   resources: {}
   tls:
     secretName: mlflow-artifacts-tls

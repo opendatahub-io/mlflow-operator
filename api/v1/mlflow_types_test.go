@@ -93,6 +93,35 @@ func TestMLflowSpecResourceClaimsJSONRoundTrip(t *testing.T) {
 	}
 }
 
+func TestArtifactsServerSpecResourceClaimsJSONRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	original := ArtifactsServerSpec{
+		Enabled: true,
+		ResourceClaims: []corev1.PodResourceClaim{{
+			Name:                      "artifact-gpu",
+			ResourceClaimTemplateName: ptr("artifact-gpu-template"),
+		}},
+	}
+
+	data, err := json.Marshal(original)
+	if err != nil {
+		t.Fatalf("marshal ArtifactsServerSpec: %v", err)
+	}
+
+	var roundTripped ArtifactsServerSpec
+	if err := json.Unmarshal(data, &roundTripped); err != nil {
+		t.Fatalf("unmarshal ArtifactsServerSpec: %v", err)
+	}
+	if len(roundTripped.ResourceClaims) != 1 {
+		t.Fatalf("resourceClaims length = %d, want 1", len(roundTripped.ResourceClaims))
+	}
+	claim := roundTripped.ResourceClaims[0]
+	if claim.Name != "artifact-gpu" || claim.ResourceClaimTemplateName == nil || *claim.ResourceClaimTemplateName != "artifact-gpu-template" {
+		t.Fatalf("resourceClaims[0] = %#v, want artifact-gpu template reference", claim)
+	}
+}
+
 func ptr[T any](v T) *T {
 	return &v
 }

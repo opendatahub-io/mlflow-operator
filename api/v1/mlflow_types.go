@@ -358,9 +358,19 @@ type ArtifactsServerSpec struct {
 	Workers *int32 `json:"workers,omitempty"`
 
 	// Resources specifies the compute resources for the artifacts-only server container.
-	// When omitted, the main MLflow server resources are used.
+	// When omitted, the main MLflow server requests and limits are used, but claims are not inherited.
 	// +optional
 	Resources *corev1.ResourceRequirements `json:"resources,omitempty"`
+
+	// ResourceClaims defines the Dynamic Resource Allocation claims available to artifact pods.
+	// Container claim references must be configured separately in Resources.Claims.
+	// +patchMergeKey=name
+	// +patchStrategy=merge,retainKeys
+	// +listType=map
+	// +listMapKey=name
+	// +featureGate=DynamicResourceAllocation
+	// +optional
+	ResourceClaims []corev1.PodResourceClaim `json:"resourceClaims,omitempty" patchStrategy:"merge,retainKeys" patchMergeKey:"name"`
 }
 
 // CABundleConfigMapSpec specifies a ConfigMap containing CA certificates.

@@ -315,6 +315,11 @@ For each `spec.resourceClaims[]` entry, set exactly one non-empty value:
 
 Setting both, neither, or an empty string value is rejected by CRD validation.
 
+Dedicated artifact pods use `spec.artifactsServer.resourceClaims` with matching
+`spec.artifactsServer.resources.claims` references. They do not inherit tracking pod claims because
+a claim cannot generally be consumed by both workloads. When artifact resources are omitted,
+tracking requests and limits are inherited without claim references.
+
 ### Database Migration
 
 Use `spec.migration.mode` to control operator-managed database migration orchestration:

@@ -42,6 +42,13 @@ spec:
       limits:
         cpu: "2"
         memory: 2Gi
+      # claims:
+      #   - name: artifact-gpu
+      #     request: gpu
+    # Artifact pods use workload-specific claims and never inherit spec.resourceClaims.
+    # resourceClaims:
+    #   - name: artifact-gpu
+    #     resourceClaimTemplateName: artifact-gpu-template
 
   workspaceLabelSelector:
     matchLabels:

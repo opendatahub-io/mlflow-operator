@@ -60,7 +60,7 @@ spec:
       tolerations:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      {{- with .Values.resourceClaims }}
+      {{- with .Values.artifactsServer.resourceClaims }}
       resourceClaims:
         {{- toYaml . | nindent 8 }}
       {{- end }}
@@ -193,7 +193,7 @@ spec:
           securityContext:
             {{- toYaml . | nindent 12 }}
           {{- end }}
-          {{- with (.Values.artifactsServer.resources | default .Values.resources) }}
+          {{- with (.Values.artifactsServer.resources | default (omit .Values.resources "claims")) }}
           resources:
             {{- toYaml . | nindent 12 }}
           {{- end }}

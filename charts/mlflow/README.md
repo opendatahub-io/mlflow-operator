@@ -55,6 +55,10 @@ defaults to `1Gi`; increase it for larger or more concurrent proxied artifact tr
 When garbage collection is enabled, the CronJob resolves `mlflow-artifacts:/` locations through
 the internal artifacts-only Service and its static prefix. Without a dedicated server, it uses the
 tracking Service and tracking static prefix instead.
+Dynamic Resource Allocation claims are workload-specific: configure artifact pod claims through
+`artifactsServer.resourceClaims` and reference them from `artifactsServer.resources.claims`.
+Artifact pods never inherit top-level tracking claims; only requests and limits are inherited when
+`artifactsServer.resources` is empty.
 
 The standalone chart creates only the artifacts Deployment and Service. It does not create an
 Ingress or `HTTPRoute`; expose the Service at the configured `artifactRoot` yourself. Both servers
