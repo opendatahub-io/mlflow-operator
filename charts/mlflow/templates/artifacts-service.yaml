@@ -23,4 +23,3 @@ spec:
       targetPort: https
   type: {{ .Values.artifactsServer.service.type }}
 {{- end }}
-

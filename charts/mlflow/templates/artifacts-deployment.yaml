@@ -241,5 +241,3 @@ spec:
               memory: 32Mi
         {{- end }}
 {{- end }}
-
-
