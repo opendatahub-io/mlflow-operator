@@ -20,6 +20,7 @@ import (
 	"testing"
 
 	gomega "github.com/onsi/gomega"
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -115,6 +116,85 @@ func TestMlflowToHelmValues_Storage(t *testing.T) {
 
 			if got := storage["accessMode"].(string); got != tt.wantAccessMode {
 				t.Errorf("storage.accessMode = %v, want %v", got, tt.wantAccessMode)
+			}
+		})
+	}
+}
+
+func TestRenderChartTrackingStorageMounts(t *testing.T) {
+	tests := []struct {
+		name       string
+		backendURI string
+		replicas   int32
+		accessMode corev1.PersistentVolumeAccessMode
+		wantMount  bool
+		wantErr    bool
+	}{
+		{
+			name:       "remote metadata leaves configured storage unmounted",
+			backendURI: testBackendStoreURI,
+			replicas:   2,
+			accessMode: corev1.ReadWriteOnce,
+		},
+		{
+			name:       "one local metadata replica mounts ReadWriteOnce storage",
+			backendURI: "sqlite:////mlflow/mlflow.db",
+			replicas:   1,
+			accessMode: corev1.ReadWriteOnce,
+			wantMount:  true,
+		},
+		{
+			name:       "multiple local metadata replicas reject ReadWriteOnce storage",
+			backendURI: "sqlite:////mlflow/mlflow.db",
+			replicas:   2,
+			accessMode: corev1.ReadWriteOnce,
+			wantErr:    true,
+		},
+		{
+			name:       "multiple local metadata replicas mount ReadWriteMany storage",
+			backendURI: "sqlite:////mlflow/mlflow.db",
+			replicas:   2,
+			accessMode: corev1.ReadWriteMany,
+			wantMount:  true,
+		},
+	}
+
+	renderer := NewHelmRenderer("../../charts/mlflow")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mlflow := &mlflowv1.MLflow{
+				ObjectMeta: metav1.ObjectMeta{Name: ResourceName},
+				Spec: mlflowv1.MLflowSpec{
+					BackendStoreURI:      ptr(tt.backendURI),
+					ArtifactsDestination: ptr("s3://bucket/artifacts"),
+					ServeArtifacts:       ptr(true),
+					Replicas:             ptr(tt.replicas),
+					Storage: &corev1.PersistentVolumeClaimSpec{
+						AccessModes: []corev1.PersistentVolumeAccessMode{tt.accessMode},
+					},
+				},
+			}
+
+			objects, err := renderer.RenderChart(mlflow, "test-ns", RenderOptions{}, nil)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("RenderChart() error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if tt.wantErr {
+				return
+			}
+			deployment, err := renderedDeployment(objects, ResourceName, "test-ns")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := deploymentMountsStorage(deployment); got != tt.wantMount {
+				t.Errorf("tracking Deployment storage mount = %v, want %v", got, tt.wantMount)
+			}
+			wantStrategy := appsv1.RollingUpdateDeploymentStrategyType
+			if tt.wantMount {
+				wantStrategy = appsv1.RecreateDeploymentStrategyType
+			}
+			if deployment.Spec.Strategy.Type != wantStrategy {
+				t.Errorf("tracking Deployment strategy = %s, want %s", deployment.Spec.Strategy.Type, wantStrategy)
 			}
 		})
 	}

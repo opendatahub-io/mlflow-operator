@@ -36,6 +36,28 @@ Usage: {{ include "mlflow.caBundleMountPaths" . }}
 {{- $paths | join " " -}}
 {{- end -}}
 
+{{/* Environment settings that point supported clients at the combined CA bundle. */}}
+{{- define "mlflow.caBundleEnv" -}}
+{{- if .Values.caBundle.configMaps }}
+- name: SSL_CERT_FILE
+  value: {{ .Values.caBundle.outputPath | quote }}
+- name: REQUESTS_CA_BUNDLE
+  value: {{ .Values.caBundle.outputPath | quote }}
+- name: CURL_CA_BUNDLE
+  value: {{ .Values.caBundle.outputPath | quote }}
+- name: AWS_CA_BUNDLE
+  value: {{ .Values.caBundle.outputPath | quote }}
+- name: PGSSLROOTCERT
+  value: {{ .Values.caBundle.outputPath | quote }}
+- name: PGSSLMODE
+  value: "verify-full"
+- name: MLFLOW_MYSQL_CA
+  value: {{ .Values.caBundle.outputPath | quote }}
+- name: MLFLOW_S3_IGNORE_TLS
+  value: "false"
+{{- end }}
+{{- end -}}
+
 {{/*
 Render CA bundle ConfigMap and combined output volumes.
 Usage: {{ include "mlflow.caBundleVolumes" . | nindent 8 }}

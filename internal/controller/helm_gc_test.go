@@ -26,6 +26,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	mlflowv1 "github.com/opendatahub-io/mlflow-operator/api/v1"
+	"github.com/opendatahub-io/mlflow-operator/internal/config"
 )
 
 func TestMlflowToHelmValues_GarbageCollection(t *testing.T) {
@@ -147,6 +148,7 @@ func TestRenderChart_GarbageCollection(t *testing.T) {
 		name         string
 		mlflow       *mlflowv1.MLflow
 		namespace    string
+		config       *config.OperatorConfig
 		wantErr      bool
 		validateObjs func(t *testing.T, objs []*unstructured.Unstructured)
 	}{
@@ -207,6 +209,14 @@ func TestRenderChart_GarbageCollection(t *testing.T) {
 				}
 				if policy != "Forbid" {
 					t.Errorf("CronJob concurrencyPolicy = %s, want Forbid", policy)
+				}
+
+				trackingURI, found := cronJobEnvValue(t, cronJob, "MLFLOW_TRACKING_URI")
+				if !found {
+					t.Fatal("MLFLOW_TRACKING_URI not found in CronJob environment")
+				}
+				if want := "https://mlflow.test-ns.svc:8443/mlflow"; trackingURI != want {
+					t.Errorf("MLFLOW_TRACKING_URI = %q, want %q", trackingURI, want)
 				}
 			},
 		},
@@ -446,6 +456,63 @@ func TestRenderChart_GarbageCollection(t *testing.T) {
 			},
 		},
 		{
+			name: "gc with PostgreSQL and proxied remote artifacts - CronJob does not mount PVC",
+			mlflow: &mlflowv1.MLflow{
+				ObjectMeta: metav1.ObjectMeta{Name: "mlflow"},
+				Spec: mlflowv1.MLflowSpec{
+					BackendStoreURI:      ptr(testBackendStoreURI),
+					ArtifactsDestination: ptr("s3://bucket/artifacts"),
+					ServeArtifacts:       ptr(true),
+					Storage: &corev1.PersistentVolumeClaimSpec{
+						AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
+					},
+					GarbageCollection: &mlflowv1.GarbageCollectionSpec{Schedule: "0 2 * * 0"},
+				},
+			},
+			namespace: "test-ns",
+			validateObjs: func(t *testing.T, objs []*unstructured.Unstructured) {
+				cronJob := findObject(objs, "CronJob", "mlflow-gc")
+				if cronJob == nil {
+					t.Fatal("CronJob not found in rendered objects")
+				}
+				if cronJobHasStorageVolume(t, cronJob) {
+					t.Error("garbage collection CronJob unexpectedly mounts mlflow-storage")
+				}
+			},
+		},
+		{
+			name: "gc with dedicated artifact server uses artifact service and static prefix",
+			mlflow: &mlflowv1.MLflow{
+				ObjectMeta: metav1.ObjectMeta{Name: "my-instance"},
+				Spec: mlflowv1.MLflowSpec{
+					BackendStoreURI:      ptr(testBackendStoreURI),
+					ArtifactsDestination: ptr("s3://bucket/artifacts"),
+					ArtifactsServer:      &mlflowv1.ArtifactsServerSpec{Enabled: true},
+					GarbageCollection:    &mlflowv1.GarbageCollectionSpec{Schedule: "0 2 * * 0"},
+				},
+			},
+			namespace: "test-ns",
+			config: &config.OperatorConfig{
+				MLflowURL:           "https://gateway.example.com",
+				MLflowURLConfigured: true,
+			},
+			validateObjs: func(t *testing.T, objs []*unstructured.Unstructured) {
+				cronJob := findObject(objs, "CronJob", "mlflow-gc-my-instance")
+				if cronJob == nil {
+					t.Fatal("CronJob with suffix not found in rendered objects")
+				}
+
+				trackingURI, found := cronJobEnvValue(t, cronJob, "MLFLOW_TRACKING_URI")
+				if !found {
+					t.Fatal("MLFLOW_TRACKING_URI not found in CronJob environment")
+				}
+				want := "https://mlflow-artifacts-my-instance.test-ns.svc:8443/mlflow-artifacts-my-instance"
+				if trackingURI != want {
+					t.Errorf("MLFLOW_TRACKING_URI = %q, want %q", trackingURI, want)
+				}
+			},
+		},
+		{
 			name: "gc with resource suffix - CronJob name includes suffix",
 			mlflow: &mlflowv1.MLflow{
 				ObjectMeta: metav1.ObjectMeta{Name: "my-instance"},
@@ -468,7 +535,7 @@ func TestRenderChart_GarbageCollection(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			objs, err := renderer.RenderChart(tt.mlflow, tt.namespace, RenderOptions{}, nil)
+			objs, err := renderer.RenderChart(tt.mlflow, tt.namespace, RenderOptions{}, tt.config)
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("RenderChart() error = %v, wantErr %v", err, tt.wantErr)
 			}
@@ -477,4 +544,43 @@ func TestRenderChart_GarbageCollection(t *testing.T) {
 			}
 		})
 	}
+}
+
+func cronJobEnvValue(t *testing.T, cronJob *unstructured.Unstructured, name string) (string, bool) {
+	t.Helper()
+	containers, found, err := unstructured.NestedSlice(
+		cronJob.Object, "spec", "jobTemplate", "spec", "template", "spec", "containers",
+	)
+	if err != nil || !found || len(containers) == 0 {
+		t.Fatalf("failed to get CronJob containers: found=%v, err=%v", found, err)
+	}
+	env, found, err := unstructured.NestedSlice(containers[0].(map[string]interface{}), "env")
+	if err != nil || !found {
+		t.Fatalf("failed to get CronJob environment: found=%v, err=%v", found, err)
+	}
+	for _, item := range env {
+		variable := item.(map[string]interface{})
+		if variable["name"] == name {
+			value, ok := variable["value"].(string)
+			return value, ok
+		}
+	}
+	return "", false
+}
+
+func cronJobHasStorageVolume(t *testing.T, cronJob *unstructured.Unstructured) bool {
+	t.Helper()
+	volumes, found, err := unstructured.NestedSlice(
+		cronJob.Object, "spec", "jobTemplate", "spec", "template", "spec", "volumes",
+	)
+	if err != nil || !found {
+		t.Fatalf("failed to get CronJob volumes: found=%v, err=%v", found, err)
+	}
+	for _, value := range volumes {
+		volume := value.(map[string]interface{})
+		if volume["name"] == "mlflow-storage" {
+			return true
+		}
+	}
+	return false
 }

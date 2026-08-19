@@ -11,12 +11,24 @@ import (
 const mlflowServicePort = 8443
 
 func buildStatusURL(mlflowName, baseURL string, baseURLConfigured bool) string {
+	return buildResourceURL(mlflowName, ResourceName, baseURL, baseURLConfigured)
+}
+
+func buildArtifactsURL(mlflowName, baseURL string, baseURLConfigured bool) string {
+	baseURL = buildResourceURL(mlflowName, ArtifactsResourceName, baseURL, baseURLConfigured)
+	if baseURL == "" {
+		return ""
+	}
+	return baseURL + ArtifactsAPIPath
+}
+
+func buildResourceURL(mlflowName, resourceName, baseURL string, baseURLConfigured bool) string {
 	baseURL = strings.TrimRight(baseURL, "/")
 	if baseURL == "" || !baseURLConfigured {
 		return ""
 	}
 
-	return fmt.Sprintf("%s/%s%s", baseURL, ResourceName, getResourceSuffix(mlflowName))
+	return fmt.Sprintf("%s/%s%s", baseURL, resourceName, getResourceSuffix(mlflowName))
 }
 
 func buildStatusAddress(mlflowName, namespace string) *mlflowv1.MLflowAddressStatus {
@@ -35,7 +47,13 @@ func setObservedURLs(mlflow *mlflowv1.MLflow, namespace string, publicRouteAvail
 
 	if publicRouteAvailable && cfg != nil {
 		mlflow.Status.URL = buildStatusURL(mlflow.Name, cfg.MLflowURL, cfg.MLflowURLConfigured)
+		if isArtifactsServerEnabled(mlflow) {
+			mlflow.Status.ArtifactsURL = buildArtifactsURL(mlflow.Name, cfg.MLflowURL, cfg.MLflowURLConfigured)
+		} else {
+			mlflow.Status.ArtifactsURL = ""
+		}
 	} else {
 		mlflow.Status.URL = ""
+		mlflow.Status.ArtifactsURL = ""
 	}
 }

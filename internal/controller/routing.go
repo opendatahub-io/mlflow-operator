@@ -364,3 +364,121 @@ func (r *MLflowReconciler) reconcileHttpRoute(
 	log.V(1).Info("Successfully reconciled HttpRoute", "name", httpRouteName, "pathPrefix", pathPrefix)
 	return nil
 }
+
+// reconcileArtifactsHTTPRoute creates or updates the route for the dedicated artifacts-only server.
+func (r *MLflowReconciler) reconcileArtifactsHTTPRoute(
+	ctx context.Context,
+	mlflow *mlflowv1.MLflow,
+	namespace string,
+	cfg *config.OperatorConfig,
+) error {
+	if !isArtifactsServerEnabled(mlflow) {
+		return nil
+	}
+	if !r.HTTPRouteAvailable {
+		return fmt.Errorf("%s", artifactsServerHTTPRouteRequiredMessage)
+	}
+
+	suffix := getResourceSuffix(mlflow.Name)
+	resourceName := ArtifactsResourceName + suffix
+	pathPrefix := "/" + resourceName
+	legacyArtifactPathPrefix := "/" + ResourceName + suffix + ArtifactsAPIPath
+	artifactPathPrefix := pathPrefix + ArtifactsAPIPath
+	pathMatchType := gatewayv1.PathMatchPathPrefix
+	servicePort := gatewayv1.PortNumber(8443)
+	weight := int32(1)
+	gatewayNamespace := gatewayv1.Namespace("openshift-ingress")
+
+	httpRoute := &gatewayv1.HTTPRoute{
+		TypeMeta: metav1.TypeMeta{
+			APIVersion: "gateway.networking.k8s.io/v1",
+			Kind:       "HTTPRoute",
+		},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      resourceName,
+			Namespace: namespace,
+			Labels: map[string]string{
+				"app": ResourceName,
+			},
+		},
+		Spec: gatewayv1.HTTPRouteSpec{
+			CommonRouteSpec: gatewayv1.CommonRouteSpec{
+				ParentRefs: []gatewayv1.ParentReference{
+					{
+						Name:      gatewayv1.ObjectName(cfg.GatewayName),
+						Namespace: &gatewayNamespace,
+					},
+				},
+			},
+			Rules: []gatewayv1.HTTPRouteRule{
+				{
+					Matches: []gatewayv1.HTTPRouteMatch{
+						{
+							Path: &gatewayv1.HTTPPathMatch{
+								Type:  &pathMatchType,
+								Value: &legacyArtifactPathPrefix,
+							},
+						},
+					},
+					Filters: []gatewayv1.HTTPRouteFilter{
+						{
+							Type: gatewayv1.HTTPRouteFilterURLRewrite,
+							URLRewrite: &gatewayv1.HTTPURLRewriteFilter{
+								Path: &gatewayv1.HTTPPathModifier{
+									Type:               gatewayv1.PrefixMatchHTTPPathModifier,
+									ReplacePrefixMatch: &artifactPathPrefix,
+								},
+							},
+						},
+					},
+					BackendRefs: []gatewayv1.HTTPBackendRef{
+						{
+							BackendRef: gatewayv1.BackendRef{
+								BackendObjectReference: gatewayv1.BackendObjectReference{
+									Name: gatewayv1.ObjectName(resourceName),
+									Port: &servicePort,
+								},
+								Weight: &weight,
+							},
+						},
+					},
+				},
+				{
+					Matches: []gatewayv1.HTTPRouteMatch{
+						{
+							Path: &gatewayv1.HTTPPathMatch{
+								Type:  &pathMatchType,
+								Value: &pathPrefix,
+							},
+						},
+					},
+					BackendRefs: []gatewayv1.HTTPBackendRef{
+						{
+							BackendRef: gatewayv1.BackendRef{
+								BackendObjectReference: gatewayv1.BackendObjectReference{
+									Name: gatewayv1.ObjectName(resourceName),
+									Port: &servicePort,
+								},
+								Weight: &weight,
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	if err := controllerutil.SetControllerReference(mlflow, httpRoute, r.Scheme); err != nil {
+		return fmt.Errorf("failed to set controller reference on artifacts HTTPRoute: %w", err)
+	}
+	if err := r.applyObject(ctx, httpRoute); err != nil {
+		return fmt.Errorf("failed to apply artifacts HTTPRoute: %w", err)
+	}
+
+	logf.FromContext(ctx).V(1).Info(
+		"Successfully reconciled artifacts HTTPRoute",
+		"name", resourceName,
+		"pathPrefix", pathPrefix,
+	)
+	return nil
+}

@@ -25,8 +25,15 @@ import (
 )
 
 // MLflowSpec defines the desired state of MLflow
-// +kubebuilder:validation:XValidation:rule="has(self.defaultArtifactRoot) || (has(self.serveArtifacts) && self.serveArtifacts)",message="defaultArtifactRoot must be set when serveArtifacts is not true"
-// +kubebuilder:validation:XValidation:rule="!has(self.defaultArtifactRoot) || !self.defaultArtifactRoot.startsWith('file://') || (has(self.serveArtifacts) && self.serveArtifacts)",message="serveArtifacts must be enabled when defaultArtifactRoot uses file-based storage (file:// prefix)"
+// +kubebuilder:validation:XValidation:rule="has(self.defaultArtifactRoot) || (has(self.serveArtifacts) && self.serveArtifacts) || (has(self.artifactsServer) && self.artifactsServer.enabled)",message="defaultArtifactRoot must be set when neither serveArtifacts nor artifactsServer is enabled"
+// +kubebuilder:validation:XValidation:rule="!has(self.defaultArtifactRoot) || !self.defaultArtifactRoot.startsWith('file://') || (has(self.serveArtifacts) && self.serveArtifacts) || (has(self.artifactsServer) && self.artifactsServer.enabled)",message="serveArtifacts or artifactsServer must be enabled when defaultArtifactRoot uses file-based storage (file:// prefix)"
+// +kubebuilder:validation:XValidation:rule="!(has(self.serveArtifacts) && self.serveArtifacts && has(self.artifactsServer) && self.artifactsServer.enabled)",message="serveArtifacts and artifactsServer.enabled are mutually exclusive"
+// +kubebuilder:validation:XValidation:rule="!has(self.artifactsServer) || !self.artifactsServer.enabled || !has(self.defaultArtifactRoot)",message="defaultArtifactRoot and artifactsServer.enabled are mutually exclusive"
+// +kubebuilder:validation:XValidation:rule="!has(self.artifactsServer) || !self.artifactsServer.enabled || (has(self.artifactsDestination) && size(self.artifactsDestination) > 0)",message="artifactsDestination must be set when artifactsServer is enabled"
+// +kubebuilder:validation:XValidation:rule="!has(self.artifactsServer) || !self.artifactsServer.enabled || !has(self.artifactsDestination) || !self.artifactsDestination.startsWith('file://') || !has(self.artifactsServer.replicas) || self.artifactsServer.replicas <= 1 || (has(self.storage) && size(self.storage.accessModes) > 0 && self.storage.accessModes[0] == 'ReadWriteMany')",message="multiple artifact server replicas with a file-based artifactsDestination require storage with ReadWriteMany as its first access mode"
+// +kubebuilder:validation:XValidation:rule="!has(self.artifactsServer) || !self.artifactsServer.enabled || !has(self.backendStoreUri) || (!self.backendStoreUri.startsWith('sqlite://') && !self.backendStoreUri.startsWith('sqlite+'))",message="artifactsServer cannot be enabled with an inline SQLite backendStoreUri"
+// +kubebuilder:validation:XValidation:rule="!has(self.artifactsServer) || !self.artifactsServer.enabled || !has(self.registryStoreUri) || (!self.registryStoreUri.startsWith('sqlite://') && !self.registryStoreUri.startsWith('sqlite+'))",message="artifactsServer cannot be enabled with an inline SQLite registryStoreUri"
+// +kubebuilder:validation:XValidation:rule="!has(self.artifactsServer) || !self.artifactsServer.enabled || !has(self.readReplicaBackendStoreUri) || (!self.readReplicaBackendStoreUri.startsWith('sqlite://') && !self.readReplicaBackendStoreUri.startsWith('sqlite+'))",message="artifactsServer cannot be enabled with an inline SQLite readReplicaBackendStoreUri"
 // +kubebuilder:validation:XValidation:rule="(has(self.backendStoreUri) && size(self.backendStoreUri) > 0) || (has(self.backendStoreUriFrom) && size(self.backendStoreUriFrom.name) > 0 && size(self.backendStoreUriFrom.key) > 0)",message="backendStoreUri or backendStoreUriFrom must be set"
 // +kubebuilder:validation:XValidation:rule="!(has(self.backendStoreUri) && has(self.backendStoreUriFrom))",message="backendStoreUri and backendStoreUriFrom are mutually exclusive"
 // +kubebuilder:validation:XValidation:rule="!(has(self.readReplicaBackendStoreUri) && has(self.readReplicaBackendStoreUriFrom))",message="readReplicaBackendStoreUri and readReplicaBackendStoreUriFrom are mutually exclusive"
@@ -40,16 +47,19 @@ import (
 // +kubebuilder:validation:XValidation:rule="!has(self.readReplicaBackendStoreUri) || !self.readReplicaBackendStoreUri.startsWith('sqlite://') || has(self.storage)",message="storage must be configured when using a file-based read-replica backend store (sqlite:// prefix)"
 // +kubebuilder:validation:XValidation:rule="!has(self.registryStoreUri) || (!self.registryStoreUri.startsWith('sqlite://') && !self.registryStoreUri.startsWith('file://')) || has(self.storage)",message="storage must be configured when using file-based registry store (sqlite:// or file:// prefix)"
 // +kubebuilder:validation:XValidation:rule="!has(self.artifactsDestination) || !self.artifactsDestination.startsWith('file://') || has(self.storage)",message="storage must be configured when artifactsDestination uses file-based storage (file:// prefix)"
-// +kubebuilder:validation:XValidation:rule="!has(self.artifactsDestination) || !self.artifactsDestination.startsWith('file://') || (has(self.serveArtifacts) && self.serveArtifacts)",message="serveArtifacts must be enabled when artifactsDestination uses file-based storage (file:// prefix)"
+// +kubebuilder:validation:XValidation:rule="!has(self.artifactsDestination) || !self.artifactsDestination.startsWith('file://') || (has(self.serveArtifacts) && self.serveArtifacts) || (has(self.artifactsServer) && self.artifactsServer.enabled)",message="serveArtifacts or artifactsServer must be enabled when artifactsDestination uses file-based storage (file:// prefix)"
 // +kubebuilder:validation:XValidation:rule="!has(self.env) || self.env.all(e, e.name != 'MLFLOW_SERVER_DISABLE_SECURITY_MIDDLEWARE')",message="setting the MLFLOW_SERVER_DISABLE_SECURITY_MIDDLEWARE environment variable is not allowed"
 // +kubebuilder:validation:XValidation:rule="!has(self.env) || self.env.all(e, e.name != 'MLFLOW_SERVER_ENABLE_JOB_EXECUTION')",message="setting the MLFLOW_SERVER_ENABLE_JOB_EXECUTION environment variable is not allowed; the operator manages job execution lifecycle"
 // +kubebuilder:validation:XValidation:rule="!has(self.networkPolicyEgressRules) || self.networkPolicyEgressRules.all(r, (has(r.ports) && size(r.ports) > 0) || (has(r.to) && size(r.to) > 0))",message="each networkPolicyEgressRules entry must specify at least one port or one destination"
 // +kubebuilder:validation:XValidation:rule="!has(self.networkPolicyAdditionalEgressRules) || self.networkPolicyAdditionalEgressRules.all(r, (has(r.ports) && size(r.ports) > 0) || (has(r.to) && size(r.to) > 0))",message="each networkPolicyAdditionalEgressRules entry must specify at least one port or one destination"
 // +kubebuilder:validation:XValidation:rule="!has(self.resourceClaims) || self.resourceClaims.all(c, ((has(c.resourceClaimName) && size(c.resourceClaimName) > 0) != (has(c.resourceClaimTemplateName) && size(c.resourceClaimTemplateName) > 0)))",message="each resourceClaims entry must set exactly one non-empty value: resourceClaimName or resourceClaimTemplateName"
-// +kubebuilder:validation:XValidation:rule="!has(self.traceArchival) || !has(self.traceArchival.location) || !self.traceArchival.location.startsWith('file://') || has(self.storage)",message="storage must be configured when traceArchival.location uses file-based storage (file:// prefix)"
+// +kubebuilder:validation:XValidation:rule="!has(self.traceArchival) || !self.traceArchival.enabled || !has(self.traceArchival.location) || !self.traceArchival.location.startsWith('file://') || (has(self.storage) && size(self.storage.accessModes) > 0 && self.storage.accessModes[0] == 'ReadWriteMany')",message="enabled file-based traceArchival.location requires storage with ReadWriteMany as its first access mode"
 // +kubebuilder:validation:XValidation:rule="!has(self.traceArchival) || !has(self.traceArchival.enabled) || self.traceArchival.enabled == false || (has(self.traceArchival.schedule) && size(self.traceArchival.schedule) > 0)",message="traceArchival.schedule is required when traceArchival.enabled is true"
 // +kubebuilder:validation:XValidation:rule="!has(self.traceArchival) || !has(self.traceArchival.enabled) || self.traceArchival.enabled == false || (has(self.traceArchival.location) && size(self.traceArchival.location) > 0)",message="traceArchival.location is required when traceArchival.enabled is true"
 // +kubebuilder:validation:XValidation:rule="!has(self.traceArchival) || !has(self.traceArchival.enabled) || self.traceArchival.enabled == false || (has(self.traceArchival.retention) && size(self.traceArchival.retention) > 0)",message="traceArchival.retention is required when traceArchival.enabled is true"
+// +kubebuilder:validation:XValidation:rule="!has(self.replicas) || self.replicas <= 1 || !has(self.storage) || (has(self.artifactsServer) && self.artifactsServer.enabled) || !((has(self.backendStoreUri) && (self.backendStoreUri.startsWith('sqlite://') || self.backendStoreUri.startsWith('sqlite+'))) || has(self.backendStoreUriFrom) || (has(self.registryStoreUri) && (self.registryStoreUri.startsWith('sqlite://') || self.registryStoreUri.startsWith('sqlite+'))) || has(self.registryStoreUriFrom) || (has(self.readReplicaBackendStoreUri) && (self.readReplicaBackendStoreUri.startsWith('sqlite://') || self.readReplicaBackendStoreUri.startsWith('sqlite+'))) || has(self.readReplicaBackendStoreUriFrom) || (has(self.serveArtifacts) && self.serveArtifacts && has(self.artifactsDestination) && self.artifactsDestination.startsWith('file://'))) || (size(self.storage.accessModes) > 0 && self.storage.accessModes[0] == 'ReadWriteMany')",message="multiple tracking replicas that use persistent storage require ReadWriteMany as its first access mode"
+// +kubebuilder:validation:XValidation:rule="!has(self.traceArchival) || !self.traceArchival.enabled || !has(self.storage) || !((has(self.backendStoreUri) && (self.backendStoreUri.startsWith('sqlite://') || self.backendStoreUri.startsWith('sqlite+'))) || has(self.backendStoreUriFrom) || (has(self.registryStoreUri) && (self.registryStoreUri.startsWith('sqlite://') || self.registryStoreUri.startsWith('sqlite+'))) || has(self.registryStoreUriFrom)) || (size(self.storage.accessModes) > 0 && self.storage.accessModes[0] == 'ReadWriteMany')",message="trace archival with persistent metadata storage requires ReadWriteMany as its first access mode"
+// +kubebuilder:validation:XValidation:rule="!has(oldSelf.storage) || (has(self.storage) && ((!has(oldSelf.storage.accessModes) && (!has(self.storage.accessModes) || self.storage.accessModes == ['ReadWriteOnce'])) || (has(oldSelf.storage.accessModes) && has(self.storage.accessModes) && self.storage.accessModes == oldSelf.storage.accessModes)))",message="storage and its accessModes are immutable once configured; an omitted legacy access mode may only be set to ReadWriteOnce"
 type MLflowSpec struct {
 	// Image specifies the MLflow container image.
 	// If not specified, use the default image
@@ -97,8 +107,8 @@ type MLflowSpec struct {
 	// +optional
 	Storage *corev1.PersistentVolumeClaimSpec `json:"storage,omitempty"`
 
-	// TemporaryStorage configures the writable /tmp emptyDir shared by the MLflow pod
-	// containers and related Jobs rendered from the chart.
+	// TemporaryStorage configures the writable /tmp emptyDir used by the MLflow tracking
+	// and dedicated artifact-server pods and related Jobs rendered from the chart.
 	// This is especially relevant when serving artifacts from remote storage because
 	// proxied upload/download flows can use temporary local disk space.
 	// +optional
@@ -154,14 +164,17 @@ type MLflowSpec struct {
 	RegistryStoreURIFrom *corev1.SecretKeySelector `json:"registryStoreUriFrom,omitempty"`
 
 	// ArtifactsDestination is the server-side destination for MLflow artifacts (models, plots, files).
-	// This setting only applies when ServeArtifacts is enabled. When ServeArtifacts is disabled,
-	// this field is ignored and clients access artifact storage directly.
+	// This setting applies when ServeArtifacts or ArtifactsServer is enabled. When neither
+	// serving mode is enabled, this field is ignored and clients access artifact storage directly.
 	// Supported schemes: file://, s3://, gs://, wasbs://, hdfs://, etc.
 	// Examples:
 	//   - "file:///mlflow/artifacts" (requires Storage to be configured)
 	//   - "s3://my-bucket/mlflow/artifacts" (no Storage needed)
 	//   - "gs://my-bucket/mlflow/artifacts" (no Storage needed)
-	// If not specified when ServeArtifacts is enabled, defaults to "file:///mlflow/artifacts"
+	// This field is required when ArtifactsServer is enabled. When only ServeArtifacts is
+	// enabled and this field is omitted, it defaults to "file:///mlflow/artifacts".
+	// A file-based destination used by ArtifactsServer requires Storage with ReadWriteMany
+	// as its first access mode because the tracking and artifact Deployments share the PVC.
 	//
 	// For cloud storage authentication, use EnvFrom to inject credentials from secrets or configmaps.
 	// Example for S3:
@@ -176,7 +189,9 @@ type MLflowSpec struct {
 	ArtifactsDestination *string `json:"artifactsDestination,omitempty"`
 
 	// DefaultArtifactRoot is the default artifact root path for MLflow runs on the server.
-	// This is required when serveArtifacts is false.
+	// This is required when both ServeArtifacts and ArtifactsServer are disabled. When the
+	// dedicated artifact server is enabled, this field must be omitted because the operator
+	// generates the URL from MLFLOW_URL.
 	// Supported schemes: file://, s3://, gs://, wasbs://, hdfs://, etc.
 	// Examples:
 	//   - "s3://my-bucket/mlflow/artifacts"
@@ -189,10 +204,18 @@ type MLflowSpec struct {
 	// When enabled, adds the --serve-artifacts flag to the MLflow server and uses ArtifactsDestination
 	// to configure where artifacts are stored. This allows clients to log and retrieve artifacts
 	// through the MLflow server's REST API instead of directly accessing the artifact storage.
-	// When disabled, ArtifactsDestination is ignored and clients must have direct access to artifact storage.
+	// When both this field and ArtifactsServer are disabled, ArtifactsDestination is ignored and
+	// clients must have direct access to artifact storage.
 	// +kubebuilder:default=false
 	// +optional
 	ServeArtifacts *bool `json:"serveArtifacts,omitempty"`
+
+	// ArtifactsServer configures a dedicated MLflow artifacts-only deployment. When enabled,
+	// the tracking server advertises the dedicated server's HTTPRoute as its artifact root and
+	// does not serve artifacts itself. The artifact server inherits the image, environment,
+	// workspace, security, scheduling, and storage settings from this MLflow spec.
+	// +optional
+	ArtifactsServer *ArtifactsServerSpec `json:"artifactsServer,omitempty"`
 
 	// Workers is the number of uvicorn worker processes for the MLflow server.
 	// Note: This is different from pod replicas. Each pod will run this many worker processes.
@@ -316,6 +339,43 @@ type MLflowSpec struct {
 	TraceArchival *TraceArchivalSpec `json:"traceArchival,omitempty"`
 }
 
+// ArtifactsServerSpec configures the dedicated artifacts-only MLflow deployment.
+// +kubebuilder:validation:XValidation:rule="!has(self.resourceClaims) || self.resourceClaims.all(c, ((has(c.resourceClaimName) && size(c.resourceClaimName) > 0) != (has(c.resourceClaimTemplateName) && size(c.resourceClaimTemplateName) > 0)))",message="each artifactsServer.resourceClaims entry must set exactly one non-empty value: resourceClaimName or resourceClaimTemplateName"
+type ArtifactsServerSpec struct {
+	// Enabled controls whether the dedicated artifacts-only Deployment, Service, and HTTPRoute
+	// are created.
+	// +kubebuilder:default=false
+	// +optional
+	Enabled bool `json:"enabled,omitempty"`
+
+	// Replicas is the number of artifacts-only server pods to run.
+	// +kubebuilder:default=1
+	// +kubebuilder:validation:Minimum=1
+	// +optional
+	Replicas *int32 `json:"replicas,omitempty"`
+
+	// Workers is the number of uvicorn worker processes in each artifacts-only server pod.
+	// +kubebuilder:default=1
+	// +kubebuilder:validation:Minimum=1
+	// +optional
+	Workers *int32 `json:"workers,omitempty"`
+
+	// Resources specifies the compute resources for the artifacts-only server container.
+	// When omitted, the main MLflow server requests and limits are used, but claims are not inherited.
+	// +optional
+	Resources *corev1.ResourceRequirements `json:"resources,omitempty"`
+
+	// ResourceClaims defines the Dynamic Resource Allocation claims available to artifact pods.
+	// Container claim references must be configured separately in Resources.Claims.
+	// +patchMergeKey=name
+	// +patchStrategy=merge,retainKeys
+	// +listType=map
+	// +listMapKey=name
+	// +featureGate=DynamicResourceAllocation
+	// +optional
+	ResourceClaims []corev1.PodResourceClaim `json:"resourceClaims,omitempty" patchStrategy:"merge,retainKeys" patchMergeKey:"name"`
+}
+
 // CABundleConfigMapSpec specifies a ConfigMap containing CA certificates.
 // All .crt and .pem files in the ConfigMap will be included in the combined CA bundle.
 type CABundleConfigMapSpec struct {
@@ -325,8 +385,8 @@ type CABundleConfigMapSpec struct {
 	Name string `json:"name"`
 }
 
-// TemporaryStorageSpec configures the writable /tmp emptyDir shared by the MLflow
-// server pod containers and auxiliary Jobs that reuse the same chart setting.
+// TemporaryStorageSpec configures the writable /tmp emptyDir used by the MLflow
+// server pods and auxiliary Jobs that reuse the same chart setting.
 type TemporaryStorageSpec struct {
 	// SizeLimit caps the writable /tmp emptyDir volume.
 	// When omitted, the operator/chart default is used.
@@ -377,7 +437,8 @@ type TraceArchivalSpec struct {
 	Schedule *string `json:"schedule,omitempty"`
 
 	// Location is the artifact repository URI where archived span payloads
-	// are stored. Supports s3:// and file:// (file:// requires Storage).
+	// are stored. Supports s3:// and file://. File-based storage requires
+	// Storage, with ReadWriteMany as its first access mode when enabled.
 	// Required when enabled is true.
 	// +kubebuilder:validation:MaxLength=2048
 	// +optional
@@ -487,6 +548,12 @@ type MLflowStatus struct {
 	// +optional
 	// +kubebuilder:validation:MaxLength=2048
 	URL string `json:"url,omitempty"`
+
+	// artifactsUrl is the externally reachable API root for the dedicated artifacts server.
+	// It is set only when dedicated artifact serving is enabled.
+	// +optional
+	// +kubebuilder:validation:MaxLength=2048
+	ArtifactsURL string `json:"artifactsUrl,omitempty"`
 
 	// address holds the internal addressable endpoint for the managed MLflow Service.
 	// +optional

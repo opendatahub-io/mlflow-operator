@@ -148,10 +148,11 @@ The operator will automatically:
 You can inspect the published MLflow endpoints directly from the custom resource status:
 
 ```sh
-kubectl get mlflow mlflow -o jsonpath='{.status.url}{"\n"}{.status.address.url}{"\n"}'
+kubectl get mlflow mlflow -o jsonpath='{.status.url}{"\n"}{.status.artifactsUrl}{"\n"}{.status.address.url}{"\n"}'
 ```
 
 - `status.url` is the external MLflow URL exposed through the data science gateway when Gateway API support is available
+- `status.artifactsUrl` is the external artifact API root and is published only when the dedicated artifact server is enabled
 - `status.address.url` is the in-cluster HTTPS URL for the managed MLflow `Service`
 
 ### Standalone Helm Deployment
@@ -219,6 +220,10 @@ spec:
   serveArtifacts: true
 ```
 
+Once `spec.storage` is configured, it and its access modes cannot be changed or removed in place because the existing PVC is retained and its access modes are immutable. Preserve any required data and recreate the MLflow resource and PVC to use a different access mode. Older resources that omitted access modes may normalize them once to `ReadWriteOnce`, matching the operator's legacy default.
+
+Multiple tracking replicas require `ReadWriteMany` when they use the PVC for SQLite, a secret-backed metadata store whose scheme cannot be inspected, or locally served artifacts. A configured but otherwise unused RWO PVC does not prevent scaling tracking pods that use remote stores.
+
 #### Remote Storage (Production)
 ```yaml
 spec:
@@ -266,8 +271,8 @@ kubectl create secret generic mlflow-db-credentials \
   -n <namespace>
 ```
 
-When `serveArtifacts` is enabled against remote storage such as S3, MLflow can spool
-artifact bytes through `/tmp` during proxied upload/download flows. Use
+When serving artifacts through the tracking or dedicated artifact server against remote storage
+such as S3, MLflow can spool artifact bytes through `/tmp` during proxied upload/download flows. Use
 `spec.temporaryStorage.sizeLimit` to raise that writable `emptyDir` above the 1Gi default
 for deployments that expect larger or more concurrent artifact transfers.
 
@@ -310,6 +315,11 @@ For each `spec.resourceClaims[]` entry, set exactly one non-empty value:
 - `resourceClaimTemplateName` to create a claim from a template
 
 Setting both, neither, or an empty string value is rejected by CRD validation.
+
+Dedicated artifact pods use `spec.artifactsServer.resourceClaims` with matching
+`spec.artifactsServer.resources.claims` references. They do not inherit tracking pod claims because
+a claim cannot generally be consumed by both workloads. When artifact resources are omitted,
+tracking requests and limits are inherited without claim references.
 
 ### Database Migration
 
@@ -362,9 +372,95 @@ When `traceArchival.enabled` is true, the operator:
 - The MLflow server's built-in scheduler stays disabled (`MLFLOW_SERVER_ENABLE_JOB_EXECUTION=false`); the CronJob handles archival externally, which avoids multi-replica coordination entirely
 - The CronJob uses the `mlflow-trace-archival-sa` ServiceAccount
 
+A `file://` archival location shares persistent storage with the MLflow workload and therefore requires `storage.accessModes[0]` to be `ReadWriteMany`. Trace archival also requires `ReadWriteMany` when its CronJob shares PVC-backed metadata such as SQLite with the tracking pod. If an existing deployment uses `ReadWriteOnce`, preserve its data and recreate the MLflow resource and PVC with `ReadWriteMany` before enabling trace archival; Kubernetes cannot change an existing PVC's access modes in place.
+
 When trace archival is disabled or the CR is deleted, the operator cleans up the CronJob, ConfigMap, and ServiceAccount.
 
 See `config/samples/mlflow_v1_mlflow_trace_archival.yaml` for a complete example.
+
+### Dedicated Artifact Server
+
+Artifact traffic can be isolated from tracking traffic by enabling a dedicated MLflow
+artifacts-only server:
+
+```yaml
+spec:
+  backendStoreUriFrom:
+    name: mlflow-db-credentials
+    key: backend-store-uri
+  artifactsDestination: s3://mlflow-artifacts
+  serveArtifacts: false
+  temporaryStorage:
+    sizeLimit: 2Gi
+  artifactsServer:
+    enabled: true
+    replicas: 2
+    workers: 2
+    resources:
+      requests:
+        cpu: 500m
+        memory: 1Gi
+```
+
+The split topology requires the operator's external `MLFLOW_URL` to be configured and the
+Gateway API `HTTPRoute` resource to be available. `artifactsDestination` must be set explicitly.
+If the `HTTPRoute` API is unavailable, reconciliation rejects split serving before changing the
+existing tracking workload or creating dedicated artifact resources.
+It requires a remote SQL metadata store; inline SQLite backend, registry, and read-replica URIs
+are rejected. CEL cannot inspect Secret values, so `backendStoreUriFrom` and related Secret
+references must resolve to remote SQL URIs. For a `file://` artifact destination, one artifact
+replica may use `ReadWriteOnce`; multiple artifact replicas require `ReadWriteMany` as the first
+storage access mode. The operator creates:
+
+- The normal `mlflow` tracking Deployment, Service, and `/mlflow` HTTPRoute
+- An `mlflow-artifacts` Deployment running with `--artifacts-only`
+- An `mlflow-artifacts` Service and `/mlflow-artifacts` HTTPRoute
+- A separate `mlflow-artifacts-tls` serving-certificate request on OpenShift; on other
+  Kubernetes distributions, provide that Secret before enabling the feature
+
+The tracking server runs with `--no-serve-artifacts` and advertises
+`<MLFLOW_URL>/mlflow-artifacts/api/2.0/mlflow-artifacts/artifacts` as its default artifact
+root, so `spec.defaultArtifactRoot` must be omitted in this mode. MLflow clients therefore continue to use the tracking server for metadata while sending
+artifact uploads and downloads to the dedicated route. The tracking Deployment does not mount
+`spec.storage` in this mode; a file-backed destination is mounted only by the artifact Deployment.
+Experiments created before split serving may retain `mlflow-artifacts:/` artifact locations. The
+artifact HTTPRoute also matches their tracking-relative `/mlflow/api/2.0/mlflow-artifacts/artifacts`
+requests and rewrites them to the dedicated route, so enabling split serving does not require
+rewriting existing experiment or run metadata. Per-resource suffixes are preserved on both paths.
+
+`spec.temporaryStorage.sizeLimit` configures the writable `/tmp` `emptyDir` for both the
+tracking and artifacts-only pods; increase it for larger or more concurrent proxied transfers.
+
+Both deployments use `kubernetes://` as the workspace provider and Kubernetes authorization.
+They share the image, ServiceAccount, workspace label selector, artifact credentials, CA bundles,
+security contexts, and scheduling configuration. Metadata-store environment variables are cleared
+from the artifacts-only container, including when they are present in a shared `envFrom` source.
+The image must include the workspace-aware artifacts-only support from
+[`mlflow/mlflow#24452`](https://github.com/mlflow/mlflow/pull/24452); the ODH runtime includes this
+support, while stock upstream MLflow `v3.14.0` does not.
+The shared CA configuration includes PostgreSQL and MySQL client settings as well as HTTP and S3,
+keeping standalone chart deployments with SQL-backed artifact workspace stores TLS-compatible.
+`artifactsServer.replicas`,
+`artifactsServer.workers`, and `artifactsServer.resources` can scale artifact processing
+independently; artifact resources inherit the main server resources when omitted. `serveArtifacts` and
+`artifactsServer.enabled` cannot both be enabled.
+
+The artifacts-only server validates `X-MLFLOW-WORKSPACE` and scopes proxied paths under the
+request workspace. A namespace-specific `MLflowConfig.spec.artifactRootSecret` remains a direct
+storage override: experiments in that workspace receive the configured object-storage URI and
+bypass the shared artifact proxy. The artifacts-only server has one global
+`artifactsDestination` and does not dynamically select per-namespace storage credentials.
+
+Disabling `artifactsServer` removes its Deployment, Service, and HTTPRoute. See
+`config/samples/mlflow_v1_mlflow_artifacts_server.yaml` for a complete remote-storage example.
+
+The garbage-collection CronJob resolves proxy-backed artifact locations through the internal
+tracking Service normally and through the internal artifacts-only Service in split mode. This
+keeps historical `mlflow-artifacts:/` locations deletable after enabling the dedicated server
+without depending on the external Gateway. The CronJob mounts persistent storage only when its
+backend metadata URI may be local, so PostgreSQL with proxied remote artifacts does not attach an
+unused PVC. Trace archival mounts storage for a `file://` archive location or local/secret-backed
+metadata.
 
 ### CORS Configuration
 
@@ -462,6 +558,7 @@ When CA bundles are present (platform or custom), PostgreSQL connections use `PG
 See the [config/samples](./config/samples/) directory for complete examples:
 - `mlflow_v1_mlflow.yaml` - OpenShift deployment with local storage, service-ca TLS, and a commented DRA example
 - `mlflow_v1_mlflow_remote_storage.yaml` - PostgreSQL primary/read-replica routing + S3 storage with horizontal scaling and a temporary storage override for proxied artifact serving
+- `mlflow_v1_mlflow_artifacts_server.yaml` - Split tracking and workspace-aware artifacts-only servers using PostgreSQL and S3
 - `mlflow_v1_mlflowconfig.yaml` - Namespace-scoped artifact storage override using the upstream `MLflowConfig` CRD
 
 ## Development

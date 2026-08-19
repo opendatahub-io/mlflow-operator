@@ -708,8 +708,8 @@ spec:
 			cmd := exec.Command("kubectl", "apply", "-f", invalidArchivalFile)
 			output, err := utils.Run(cmd)
 			Expect(err).To(HaveOccurred(), "Should fail to create MLflow with file-based archival location without storage")
-			Expect(output).To(ContainSubstring("storage must be configured when traceArchival.location uses file-based storage"),
-				"Error message should indicate trace archival location requires storage")
+			Expect(output).To(ContainSubstring("enabled file-based traceArchival.location requires storage with ReadWriteMany"),
+				"Error message should indicate trace archival location requires ReadWriteMany storage")
 		})
 
 		It("should accept trace archival with S3 location and create CronJob", func() {

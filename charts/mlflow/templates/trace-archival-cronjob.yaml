@@ -1,6 +1,10 @@
 {{- if .Values.traceArchival.enabled }}
-{{- if and .Values.traceArchival.location (hasPrefix "file://" .Values.traceArchival.location) (not .Values.storage.enabled) }}
-{{- fail "storage must be enabled when traceArchival.location uses file-based storage (file:// prefix)" }}
+{{- $traceArchivalMountsStorage := eq (include "mlflow.traceArchivalMountsStorage" .) "true" -}}
+{{- if and .Values.traceArchival.location (hasPrefix "file://" .Values.traceArchival.location) (or (not .Values.storage.enabled) (ne .Values.storage.accessMode "ReadWriteMany")) }}
+{{- fail "enabled file-based traceArchival.location requires storage.enabled=true and storage.accessMode=ReadWriteMany" }}
+{{- end }}
+{{- if and (or (eq (include "mlflow.backendUsesStorage" .) "true") (eq (include "mlflow.registryUsesStorage" .) "true")) (or (not .Values.storage.enabled) (ne .Values.storage.accessMode "ReadWriteMany")) }}
+{{- fail "trace archival with persistent metadata storage requires storage.enabled=true and storage.accessMode=ReadWriteMany" }}
 {{- end }}
 apiVersion: batch/v1
 kind: CronJob
@@ -55,7 +59,7 @@ spec:
             - name: trace-archival-config
               configMap:
                 name: mlflow-trace-archival-config{{ .Values.resourceSuffix }}
-            {{- if .Values.storage.enabled }}
+            {{- if $traceArchivalMountsStorage }}
             - name: mlflow-storage
               persistentVolumeClaim:
                 claimName: mlflow-pvc{{ .Values.resourceSuffix }}
@@ -92,24 +96,7 @@ spec:
                   {{- else }}
                   value: {{ .Values.mlflow.backendStoreUri | quote }}
                   {{- end }}
-                {{- if .Values.caBundle.configMaps }}
-                - name: SSL_CERT_FILE
-                  value: {{ .Values.caBundle.outputPath | quote }}
-                - name: REQUESTS_CA_BUNDLE
-                  value: {{ .Values.caBundle.outputPath | quote }}
-                - name: CURL_CA_BUNDLE
-                  value: {{ .Values.caBundle.outputPath | quote }}
-                - name: AWS_CA_BUNDLE
-                  value: {{ .Values.caBundle.outputPath | quote }}
-                - name: PGSSLROOTCERT
-                  value: {{ .Values.caBundle.outputPath | quote }}
-                - name: PGSSLMODE
-                  value: "verify-full"
-                - name: MLFLOW_MYSQL_CA
-                  value: {{ .Values.caBundle.outputPath | quote }}
-                - name: MLFLOW_S3_IGNORE_TLS
-                  value: "false"
-                {{- end }}
+                {{- include "mlflow.caBundleEnv" . | nindent 16 }}
                 {{- range .Values.env }}
                 - name: {{ .name }}
                   {{- if .valueFrom }}
@@ -129,7 +116,7 @@ spec:
                 - name: trace-archival-config
                   mountPath: /etc/mlflow
                   readOnly: true
-                {{- if .Values.storage.enabled }}
+                {{- if $traceArchivalMountsStorage }}
                 - name: mlflow-storage
                   mountPath: /mlflow
                 {{- end }}

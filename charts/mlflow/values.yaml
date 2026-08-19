@@ -59,15 +59,16 @@ resources:
 # Persistent storage
 # Only required if using file-based or SQLite backend/registry stores or file-based artifacts.
 # Set false when using remote storage (S3, PostgreSQL, etc.)
+# Workloads mount this claim only when their configured URIs require local storage.
 storage:
   enabled: true  # Enable by default - disable for remote file-based storage
   size: 2Gi
   storageClassName: ""  # Use default storage class
   accessMode: ReadWriteOnce
 
-# Writable temporary storage shared by the MLflow pod containers and related Jobs.
-# This matters most when serveArtifacts is enabled against remote artifact storage,
-# because proxied upload/download flows can spool artifact data through /tmp.
+# Writable temporary storage used by the tracking and artifact-server pods and related Jobs.
+# This matters most when artifacts are proxied from remote storage because upload/download
+# flows can spool artifact data through /tmp.
 temporaryStorage:
   sizeLimit: 1Gi
 
@@ -169,8 +170,52 @@ mlflow:
   # Leave empty for direct access without a prefix
   staticPrefix: ""
 
-# Environment variables for MLflow container
-# Supports both direct values and references to secrets/configmaps
+# Optional dedicated artifacts-only MLflow server. The operator supplies artifactRoot from
+# its external gateway URL and creates the matching HTTPRoute. Standalone chart users must
+# expose the Service themselves and set artifactRoot to that externally reachable artifact API.
+# Operator deployments keep port, staticPrefix, TLS, and Service settings fixed so they stay
+# aligned with the managed HTTPRoute and serving-certificate contract.
+# Dedicated serving requires remote SQL metadata stores and does not mount storage in the
+# tracking pod. Inline SQLite metadata URIs are rejected; Secret-backed metadata URIs cannot
+# be inspected by Helm and must resolve to remote SQL.
+# The image must support combining --artifacts-only with --enable-workspaces and an explicit
+# --workspace-store-uri (upstream mlflow/mlflow#24452). Stock upstream v3.14.0 does not.
+artifactsServer:
+  enabled: false
+  replicaCount: 1
+  # Storage destination used by the artifacts-only server. A file:// destination requires
+  # storage.enabled=true. One replica may use ReadWriteOnce; multiple replicas require
+  # storage.accessMode=ReadWriteMany.
+  artifactsDestination: "file:///mlflow/artifacts"
+  # Externally reachable artifact API root advertised by the tracking server, for example:
+  # https://mlflow.example.com/mlflow-artifacts/api/2.0/mlflow-artifacts/artifacts
+  artifactRoot: ""
+  # Standalone installs may use a SQL workspace store. When caBundle.configMaps is
+  # configured, the artifact container receives the same PostgreSQL/MySQL CA settings as tracking.
+  workspaceStoreUri: "kubernetes://"
+  # Optional label selector applied to the Kubernetes workspace provider.
+  workspaceLabelSelector: ""
+  # Number of uvicorn workers in each MLflow artifacts-server pod.
+  workers: 1
+  port: 8443
+  allowedHosts: []
+  staticPrefix: "/mlflow-artifacts"
+  # Pod-level Dynamic Resource Allocation claims for artifact pods. Pair each entry
+  # with a same-named resources.claims reference below.
+  resourceClaims: []
+  # Empty resources inherit main-server requests and limits, but not claims.
+  resources: {}
+  tls:
+    secretName: mlflow-artifacts-tls
+    defaultMode: 420
+  service:
+    type: ClusterIP
+    port: 8443
+    annotations: {}
+
+# Environment variables shared by the MLflow containers.
+# Supports both direct values and references to secrets/configmaps. The artifacts-only
+# container clears metadata-store URI variables that are incompatible with that mode.
 env:
   - name: MLFLOW_LOGGING_LEVEL
     value: INFO
@@ -270,6 +315,8 @@ resourceClaims: []
 # Permanently removes soft-deleted runs, experiments, and logged models
 # along with their artifacts. Resources must be soft-deleted first
 # (e.g. via the UI or API) before garbage collection will remove them.
+# Proxied artifact locations are resolved through the tracking Service normally
+# and through the dedicated artifact Service when artifactsServer is enabled.
 garbageCollection:
   # Set to true to create the CronJob. Default: false (no garbage collection).
   enabled: false
@@ -305,6 +352,7 @@ traceArchival:
   # Cron schedule expression (e.g. "0 */6 * * *" for every 6 hours).
   # Required when enabled.
   schedule: "0 */6 * * *"
+  # A file:// location requires storage.enabled=true and ReadWriteMany access.
   # location: "s3://mlflow-trace-archive"
   # retention: "30d"
   maxTracesPerPass: 1000

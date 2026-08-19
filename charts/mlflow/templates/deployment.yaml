@@ -22,6 +22,28 @@
 {{- fail "mlflow.registryStoreUriFrom.secretKeyRef must include non-empty 'name' and 'key'" }}
 {{- end }}
 {{- end }}
+{{- if and .Values.artifactsServer.enabled .Values.mlflow.serveArtifacts }}
+{{- fail "mlflow.serveArtifacts and artifactsServer.enabled are mutually exclusive" }}
+{{- end }}
+{{- if and .Values.artifactsServer.enabled (not .Values.artifactsServer.artifactRoot) }}
+{{- fail "artifactsServer.artifactRoot must be set when artifactsServer.enabled is true" }}
+{{- end }}
+{{- if and .Values.artifactsServer.enabled (empty .Values.artifactsServer.artifactsDestination) }}
+{{- fail "artifactsServer.artifactsDestination must be set when artifactsServer.enabled is true" }}
+{{- end }}
+{{- if and .Values.artifactsServer.enabled (hasPrefix "file://" .Values.artifactsServer.artifactsDestination) (not .Values.storage.enabled) }}
+{{- fail "file-based artifactsServer.artifactsDestination requires storage.enabled=true" }}
+{{- end }}
+{{- if and .Values.artifactsServer.enabled (hasPrefix "file://" .Values.artifactsServer.artifactsDestination) (gt (int .Values.artifactsServer.replicaCount) 1) (ne .Values.storage.accessMode "ReadWriteMany") }}
+{{- fail "multiple file-backed artifact server replicas require storage.accessMode=ReadWriteMany" }}
+{{- end }}
+{{- if and .Values.artifactsServer.enabled (or (hasPrefix "sqlite://" .Values.mlflow.backendStoreUri) (hasPrefix "sqlite+" .Values.mlflow.backendStoreUri) (hasPrefix "sqlite://" (.Values.mlflow.registryStoreUri | default "")) (hasPrefix "sqlite+" (.Values.mlflow.registryStoreUri | default "")) (hasPrefix "sqlite://" (.Values.mlflow.readReplicaBackendStoreUri | default "")) (hasPrefix "sqlite+" (.Values.mlflow.readReplicaBackendStoreUri | default ""))) }}
+{{- fail "artifactsServer cannot be enabled with inline SQLite metadata stores" }}
+{{- end }}
+{{- $trackingMountsStorage := eq (include "mlflow.trackingMountsStorage" .) "true" -}}
+{{- if and (gt (int .Values.replicaCount) 1) $trackingMountsStorage (ne .Values.storage.accessMode "ReadWriteMany") }}
+{{- fail "multiple tracking replicas that mount storage require storage.accessMode=ReadWriteMany" }}
+{{- end }}
 {{- $healthPrefix := .Values.mlflow.staticPrefix | trimSuffix "/" -}}
 apiVersion: apps/v1
 kind: Deployment
@@ -36,7 +58,7 @@ metadata:
 spec:
   replicas: {{ .Values.replicaCount }}
   strategy:
-    {{- if .Values.storage.enabled }}
+    {{- if $trackingMountsStorage }}
     # Use Recreate strategy when PVC is attached to prevent conflicts
     # (ReadWriteOnce volumes cannot be shared between pods during rolling updates)
     type: Recreate
@@ -92,7 +114,7 @@ spec:
         - name: tmp
           emptyDir:
             sizeLimit: {{ .Values.temporaryStorage.sizeLimit }}
-        {{- if .Values.storage.enabled }}
+        {{- if $trackingMountsStorage }}
         - name: mlflow-storage
           persistentVolumeClaim:
             claimName: mlflow-pvc{{ .Values.resourceSuffix }}
@@ -124,13 +146,16 @@ spec:
             - mlflow
           args:
             - server
-            {{- if .Values.mlflow.serveArtifacts }}
+            {{- if .Values.artifactsServer.enabled }}
+            - --no-serve-artifacts
+            - --default-artifact-root={{ .Values.artifactsServer.artifactRoot }}
+            {{- else if .Values.mlflow.serveArtifacts }}
             - --serve-artifacts
             - --artifacts-destination={{ .Values.mlflow.artifactsDestination }}
             {{- else }}
             - --no-serve-artifacts
             {{- end }}
-            {{- if .Values.mlflow.defaultArtifactRoot }}
+            {{- if and (not .Values.artifactsServer.enabled) .Values.mlflow.defaultArtifactRoot }}
             - --default-artifact-root={{ .Values.mlflow.defaultArtifactRoot }}
             {{- end }}
             - --app-name=kubernetes-auth
@@ -205,31 +230,7 @@ spec:
             {{- end }}
             - name: MLFLOW_SERVER_DISABLE_SECURITY_MIDDLEWARE
               value: "false"
-            {{- if .Values.caBundle.configMaps }}
-            # CA bundle environment variables - point various libraries to the combined CA bundle
-            - name: SSL_CERT_FILE
-              value: {{ .Values.caBundle.outputPath | quote }}
-            # REQUESTS_CA_BUNDLE: requests library used by MLflow
-            - name: REQUESTS_CA_BUNDLE
-              value: {{ .Values.caBundle.outputPath | quote }}
-            # CURL_CA_BUNDLE: fallback for requests/pycurl
-            - name: CURL_CA_BUNDLE
-              value: {{ .Values.caBundle.outputPath | quote }}
-            # AWS_CA_BUNDLE: boto3/botocore for S3 storage
-            - name: AWS_CA_BUNDLE
-              value: {{ .Values.caBundle.outputPath | quote }}
-            # PGSSLROOTCERT/PGSSLMODE: psycopg2 PostgreSQL SSL configuration
-            - name: PGSSLROOTCERT
-              value: {{ .Values.caBundle.outputPath | quote }}
-            - name: PGSSLMODE
-              value: "verify-full"
-            # MLFLOW_MYSQL_CA: MySQL CA bundle for MySQL backend
-            - name: MLFLOW_MYSQL_CA
-              value: {{ .Values.caBundle.outputPath | quote }}
-            # MLFLOW_S3_IGNORE_TLS: Require TLS verification for S3 storage
-            - name: MLFLOW_S3_IGNORE_TLS
-              value: "false"
-            {{- end }}
+            {{- include "mlflow.caBundleEnv" . | nindent 12 }}
           {{- if .Values.envFrom }}
           envFrom:
             {{- toYaml .Values.envFrom | nindent 12 }}
@@ -240,7 +241,7 @@ spec:
           volumeMounts:
             - name: tmp
               mountPath: /tmp
-            {{- if .Values.storage.enabled }}
+            {{- if $trackingMountsStorage }}
             - name: mlflow-storage
               mountPath: /mlflow
             {{- end }}

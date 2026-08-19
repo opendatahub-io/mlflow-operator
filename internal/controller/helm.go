@@ -168,6 +168,10 @@ func isTraceArchivalEnabled(mlflow *mlflowv1.MLflow) bool {
 	return mlflow.Spec.TraceArchival != nil && mlflow.Spec.TraceArchival.Enabled
 }
 
+func isArtifactsServerEnabled(mlflow *mlflowv1.MLflow) bool {
+	return mlflow.Spec.ArtifactsServer != nil && mlflow.Spec.ArtifactsServer.Enabled
+}
+
 // mlflowToHelmValues converts MLflow CR spec to Helm values
 func (h *HelmRenderer) mlflowToHelmValues(
 	mlflow *mlflowv1.MLflow,
@@ -214,10 +218,15 @@ func (h *HelmRenderer) mlflowToHelmValues(
 	tlsValues := map[string]interface{}{
 		"secretName": tlsSecretName,
 	}
+	artifactsTLSValues := map[string]interface{}{
+		"secretName": ArtifactsTLSSecretName,
+	}
 	if opts.IsOpenShift {
 		tlsValues["defaultMode"] = 416 // 0640 — group-readable; OpenShift SCC assigns fsGroup
+		artifactsTLSValues["defaultMode"] = 416
 	} else {
 		tlsValues["defaultMode"] = 420 // 0644 — world-readable; no fsGroup on vanilla K8s
+		artifactsTLSValues["defaultMode"] = 420
 	}
 
 	values["tls"] = tlsValues
@@ -288,6 +297,32 @@ func (h *HelmRenderer) mlflowToHelmValues(
 			return nil, fmt.Errorf("failed to convert resources: %w", err)
 		}
 		values["resources"] = resourcesMap
+	}
+
+	artifactsServerEnabled := isArtifactsServerEnabled(mlflow)
+	artifactsReplicas := int32(1)
+	if artifactsServerEnabled && mlflow.Spec.ArtifactsServer.Replicas != nil {
+		artifactsReplicas = *mlflow.Spec.ArtifactsServer.Replicas
+	}
+	artifactsWorkers := int32(1)
+	if artifactsServerEnabled && mlflow.Spec.ArtifactsServer.Workers != nil {
+		artifactsWorkers = *mlflow.Spec.ArtifactsServer.Workers
+	}
+	var artifactsResources map[string]interface{}
+	if artifactsServerEnabled && mlflow.Spec.ArtifactsServer.Resources != nil {
+		resourcesMap, err := runtime.DefaultUnstructuredConverter.ToUnstructured(mlflow.Spec.ArtifactsServer.Resources)
+		if err != nil {
+			return nil, fmt.Errorf("failed to convert artifacts server resources: %w", err)
+		}
+		artifactsResources = resourcesMap
+	} else if artifactsServerEnabled && mlflow.Spec.Resources != nil {
+		inheritedResources := mlflow.Spec.Resources.DeepCopy()
+		inheritedResources.Claims = nil
+		resourcesMap, err := runtime.DefaultUnstructuredConverter.ToUnstructured(inheritedResources)
+		if err != nil {
+			return nil, fmt.Errorf("failed to convert inherited artifacts server resources: %w", err)
+		}
+		artifactsResources = resourcesMap
 	}
 
 	// Storage - only enabled if explicitly configured
@@ -418,6 +453,17 @@ func (h *HelmRenderer) mlflowToHelmValues(
 	if mlflow.Spec.ServeArtifacts != nil {
 		serveArtifacts = *mlflow.Spec.ServeArtifacts
 	}
+	if artifactsServerEnabled {
+		serveArtifacts = false
+		defaultArtifactRoot = buildArtifactsURL(
+			mlflow.Name,
+			effectiveCfg.MLflowURL,
+			effectiveCfg.MLflowURLConfigured,
+		)
+		if defaultArtifactRoot == "" {
+			return nil, fmt.Errorf("artifactsServer requires an explicitly configured external MLflow URL")
+		}
+	}
 
 	workers := int32(1)
 	if mlflow.Spec.Workers != nil {
@@ -466,6 +512,31 @@ func (h *HelmRenderer) mlflowToHelmValues(
 	mlflowConfig["corsAllowedOrigins"] = buildCORSAllowedOrigins(mlflow, namespace, effectiveCfg)
 
 	values["mlflow"] = mlflowConfig
+
+	artifactsStaticPrefix := "/" + ArtifactsResourceName + getResourceSuffix(mlflow.Name)
+	artifactsServerValues := map[string]interface{}{
+		"enabled":              artifactsServerEnabled,
+		"replicaCount":         artifactsReplicas,
+		"artifactsDestination": artifactsDest,
+		"artifactRoot":         defaultArtifactRoot,
+		"workspaceStoreUri":    "kubernetes://",
+		"workers":              artifactsWorkers,
+		"port":                 8443,
+		"allowedHosts":         allowedHosts,
+		"staticPrefix":         artifactsStaticPrefix,
+		"tls":                  artifactsTLSValues,
+		"resourceClaims":       []corev1.PodResourceClaim{},
+	}
+	if artifactsServerEnabled && len(mlflow.Spec.ArtifactsServer.ResourceClaims) > 0 {
+		artifactsServerValues["resourceClaims"] = mlflow.Spec.ArtifactsServer.ResourceClaims
+	}
+	if artifactsResources != nil {
+		artifactsServerValues["resources"] = artifactsResources
+	}
+	if workspaceLabelSelector != "" {
+		artifactsServerValues["workspaceLabelSelector"] = workspaceLabelSelector
+	}
+	values["artifactsServer"] = artifactsServerValues
 
 	envCapacity := len(mlflow.Spec.Env)
 	if opts.IsOpenShift {
@@ -525,11 +596,19 @@ func (h *HelmRenderer) mlflowToHelmValues(
 	serviceAnnotations := map[string]interface{}{
 		"service.beta.openshift.io/serving-cert-secret-name": tlsSecretName,
 	}
+	artifactsServiceAnnotations := map[string]interface{}{
+		"service.beta.openshift.io/serving-cert-secret-name": ArtifactsTLSSecretName,
+	}
 
 	values["service"] = map[string]interface{}{
 		"type":        "ClusterIP",
 		"port":        8443,
 		"annotations": serviceAnnotations,
+	}
+	artifactsServerValues["service"] = map[string]interface{}{
+		"type":        "ClusterIP",
+		"port":        8443,
+		"annotations": artifactsServiceAnnotations,
 	}
 
 	// Metrics configuration - only enabled when the ServiceMonitor CRD is present in the cluster.

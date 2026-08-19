@@ -1,0 +1,25 @@
+{{- if .Values.artifactsServer.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: mlflow-artifacts{{ .Values.resourceSuffix }}
+  namespace: {{ .Values.namespace }}
+  labels:
+    app: mlflow{{ .Values.resourceSuffix }}
+    {{- with .Values.commonLabels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  {{- with .Values.artifactsServer.service.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  selector:
+    app: mlflow-artifacts{{ .Values.resourceSuffix }}
+  ports:
+    - name: https
+      protocol: TCP
+      port: {{ .Values.artifactsServer.service.port }}
+      targetPort: https
+  type: {{ .Values.artifactsServer.service.type }}
+{{- end }}

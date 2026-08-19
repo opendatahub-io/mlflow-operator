@@ -25,7 +25,11 @@ const mlflowOperatorReadyConditionType = "MLflowOperatorReady"
 // cache and RBAC scope continue to match the reconciler's live target namespace.
 // Readiness checks for the singleton MLflowOperator CR happen separately.
 func (r *MLflowReconciler) resolveOperatorConfig(ctx context.Context) (*config.OperatorConfig, error) {
-	return r.resolveOperatorConfigFromBase(ctx, config.GetConfig())
+	base := r.baseConfig
+	if base == nil {
+		base = config.GetConfig()
+	}
+	return r.resolveOperatorConfigFromBase(ctx, base)
 }
 
 func (r *MLflowReconciler) resolveOperatorConfigFromBase(

@@ -35,14 +35,17 @@ flowchart LR
   operator --> mlflowCr["Cluster-scoped MLflow custom resource"]
   mlflowCr --> chart["Internal Helm chart"]
 
-  chart --> deploy["Deployment and Service"]
+  chart --> deploy["Tracking Deployment and Service"]
+  chart -. "when artifactsServer is enabled" .-> artifactDeploy["Artifacts-only Deployment and Service"]
   chart --> access["ServiceAccount and RBAC"]
   chart --> storage["PVC or remote storage"]
   chart --> policy["NetworkPolicy/ServiceMonitor"]
   chart --> tls["In-pod TLS configuration"]
 
-  operator --> route["HTTPRoute (namespaced) and ConsoleLink"]
+  operator --> route["Tracking HTTPRoute and ConsoleLink"]
+  operator -. "when artifactsServer is enabled" .-> artifactRoute["Artifacts HTTPRoute"]
   route --> deploy
+  artifactRoute --> artifactDeploy
 ```
 
 This diagram stops at the resources the operator reconciles. The MLflow runtime topology and plugin behavior are described in the companion MLflow [ARCHITECTURE.md](https://github.com/opendatahub-io/mlflow/blob/master/ARCHITECTURE.md).
@@ -95,9 +98,40 @@ The route model is designed around a public `/mlflow` prefix:
 
 This lets the service keep its normal internal API paths while still fitting behind a stable product-facing prefix.
 
+When the dedicated artifact server is enabled, the gateway additionally exposes
+`/mlflow-artifacts`. The tracking server advertises the full artifact API root at
+`/mlflow-artifacts/api/2.0/mlflow-artifacts/artifacts`, so clients direct artifact traffic to
+the second Service without changing the tracking URI. A more-specific compatibility match routes
+the legacy `/mlflow/api/2.0/mlflow-artifacts/artifacts` path to the same Service and rewrites it to
+the dedicated prefix. Existing `mlflow-artifacts:/` experiment and run locations therefore remain
+usable after split serving is enabled without giving the tracking Deployment artifact storage.
+The garbage-collection CronJob bypasses the external Gateway but follows the same compatibility
+model by resolving those locations against the internal artifacts-only Service and static prefix.
+The controller verifies that the `HTTPRoute` API is available before cleanup, migration, chart
+rendering, or operand application, preventing a missing routing capability from causing a partial
+split-server rollout.
+
+```mermaid
+flowchart LR
+  client[MLflow client] -->|metadata /mlflow| trackingRoute[Tracking HTTPRoute]
+  client -->|artifacts /mlflow-artifacts| artifactRoute[Artifact HTTPRoute]
+  trackingRoute --> trackingService[mlflow Service]
+  trackingService --> trackingDeployment[Tracking Deployment]
+  artifactRoute --> artifactService[mlflow-artifacts Service]
+  artifactService --> artifactDeployment[Artifacts-only Deployment]
+  artifactDeployment --> storage[Artifact storage]
+```
+
+Both Deployments use the Kubernetes workspace provider and authorization plugin. The artifact
+server validates the request workspace before MLflow scopes proxied storage paths. Namespace
+`MLflowConfig` artifact-root overrides continue to produce direct storage URIs and therefore do
+not traverse the shared artifact route.
+
 ### TLS Model
 
-TLS terminates inside the MLflow pod. The chart passes uvicorn SSL options and mounts a secret named `mlflow-tls`.
+TLS terminates inside the MLflow pods. The chart passes uvicorn SSL options and mounts
+`mlflow-tls` for the tracking server. The optional artifact server mounts its own
+`mlflow-artifacts-tls` Secret so its certificate matches the artifact Service DNS name.
 
 On OpenShift, that secret can be provisioned automatically through the service-ca integration. In non-OpenShift environments, the deployment can supply the secret directly.
 
