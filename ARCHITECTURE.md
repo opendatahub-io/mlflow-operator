@@ -107,6 +107,9 @@ the dedicated prefix. Existing `mlflow-artifacts:/` experiment and run locations
 usable after split serving is enabled without giving the tracking Deployment artifact storage.
 The garbage-collection CronJob bypasses the external Gateway but follows the same compatibility
 model by resolving those locations against the internal artifacts-only Service and static prefix.
+The controller verifies that the `HTTPRoute` API is available before cleanup, migration, chart
+rendering, or operand application, preventing a missing routing capability from causing a partial
+split-server rollout.
 
 ```mermaid
 flowchart LR

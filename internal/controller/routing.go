@@ -376,7 +376,7 @@ func (r *MLflowReconciler) reconcileArtifactsHTTPRoute(
 		return nil
 	}
 	if !r.HTTPRouteAvailable {
-		return fmt.Errorf("artifactsServer requires the HTTPRoute API")
+		return fmt.Errorf("%s", artifactsServerHTTPRouteRequiredMessage)
 	}
 
 	suffix := getResourceSuffix(mlflow.Name)

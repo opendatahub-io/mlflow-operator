@@ -131,6 +131,20 @@ func (r *MLflowReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 
 	targetNamespace := cfg.ApplicationsNamespace
 	mlflow.Status.Address = buildStatusAddress(mlflow.Name, targetNamespace)
+	if isArtifactsServerEnabled(mlflow) && !r.HTTPRouteAvailable {
+		err := fmt.Errorf("%s", artifactsServerHTTPRouteRequiredMessage)
+		setObservedURLs(mlflow, targetNamespace, false, cfg)
+		meta.SetStatusCondition(&mlflow.Status.Conditions, metav1.Condition{
+			Type:    "Available",
+			Status:  metav1.ConditionFalse,
+			Reason:  "HttpRouteFailed",
+			Message: fmt.Sprintf("Failed to reconcile artifacts HTTPRoute: %v", err),
+		})
+		if statusErr := r.updateStatus(ctx, mlflow); statusErr != nil {
+			log.Error(statusErr, "Failed to update MLflow status after HTTPRoute prerequisite check")
+		}
+		return ctrl.Result{}, err
+	}
 
 	// Clean up GC resources when garbage collection is disabled.
 	if mlflow.Spec.GarbageCollection == nil {

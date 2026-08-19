@@ -16,6 +16,8 @@ limitations under the License.
 
 package controller
 
+const artifactsServerHTTPRouteRequiredMessage = "artifactsServer requires the HTTPRoute API"
+
 const (
 	// ResourceName is the base name used for MLflow resources (deployments, services, etc.)
 	ResourceName = "mlflow"

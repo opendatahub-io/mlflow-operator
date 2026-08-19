@@ -398,6 +398,8 @@ spec:
 
 The split topology requires the operator's external `MLFLOW_URL` to be configured and the
 Gateway API `HTTPRoute` resource to be available. `artifactsDestination` must be set explicitly.
+If the `HTTPRoute` API is unavailable, reconciliation rejects split serving before changing the
+existing tracking workload or creating dedicated artifact resources.
 It requires a remote SQL metadata store; inline SQLite backend, registry, and read-replica URIs
 are rejected. CEL cannot inspect Secret values, so `backendStoreUriFrom` and related Secret
 references must resolve to remote SQL URIs. For a `file://` artifact destination, one artifact

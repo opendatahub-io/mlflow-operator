@@ -130,6 +130,72 @@ var _ = Describe("MLflow Controller", func() {
 			Expect(mlflow.Status.Address.URL).To(Equal("https://mlflow.opendatahub.svc:8443/mlflow"))
 		})
 
+		It("should reject split serving before mutating workloads when HTTPRoute is unavailable", func() {
+			Expect(k8sClient.Get(ctx, typeNamespacedName, mlflow)).To(Succeed())
+			mlflow.Spec.ServeArtifacts = ptr(true)
+			mlflow.Spec.ArtifactsDestination = ptr("s3://bucket/artifacts")
+			Expect(k8sClient.Update(ctx, mlflow)).To(Succeed())
+
+			controllerReconciler := &MLflowReconciler{
+				Client:             k8sClient,
+				Scheme:             k8sClient.Scheme(),
+				Namespace:          "opendatahub",
+				ChartPath:          "../../charts/mlflow",
+				HTTPRouteAvailable: false,
+				GCRBACWatchCache:   mustNewGCRBACWatchCache(),
+				baseConfig: &config.OperatorConfig{
+					MLflowImage:         controllerTestMLflowImage,
+					MLflowURL:           "https://gateway.example.com",
+					MLflowURLConfigured: true,
+				},
+			}
+			_, reconcileErr := controllerReconciler.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
+			Expect(reconcileErr).NotTo(HaveOccurred())
+
+			trackingKey := types.NamespacedName{Name: ResourceName, Namespace: "opendatahub"}
+			trackingDeploymentBefore := &appsv1.Deployment{}
+			Expect(k8sClient.Get(ctx, trackingKey, trackingDeploymentBefore)).To(Succeed())
+			Expect(trackingDeploymentBefore.Spec.Template.Spec.Containers[0].Args).To(ContainElement("--serve-artifacts"))
+			trackingServiceBefore := &corev1.Service{}
+			Expect(k8sClient.Get(ctx, trackingKey, trackingServiceBefore)).To(Succeed())
+
+			Expect(k8sClient.Get(ctx, typeNamespacedName, mlflow)).To(Succeed())
+			mlflow.Spec.BackendStoreURI = &pgStoreURI
+			mlflow.Spec.ServeArtifacts = ptr(false)
+			mlflow.Spec.ArtifactsServer = &mlflowv1.ArtifactsServerSpec{Enabled: true}
+			Expect(k8sClient.Update(ctx, mlflow)).To(Succeed())
+
+			_, reconcileErr = controllerReconciler.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
+			Expect(reconcileErr).To(MatchError(artifactsServerHTTPRouteRequiredMessage))
+
+			trackingDeploymentAfter := &appsv1.Deployment{}
+			Expect(k8sClient.Get(ctx, trackingKey, trackingDeploymentAfter)).To(Succeed())
+			Expect(trackingDeploymentAfter.UID).To(Equal(trackingDeploymentBefore.UID))
+			Expect(trackingDeploymentAfter.ResourceVersion).To(Equal(trackingDeploymentBefore.ResourceVersion))
+			Expect(trackingDeploymentAfter.Spec).To(Equal(trackingDeploymentBefore.Spec))
+			trackingServiceAfter := &corev1.Service{}
+			Expect(k8sClient.Get(ctx, trackingKey, trackingServiceAfter)).To(Succeed())
+			Expect(trackingServiceAfter.UID).To(Equal(trackingServiceBefore.UID))
+			Expect(trackingServiceAfter.ResourceVersion).To(Equal(trackingServiceBefore.ResourceVersion))
+			Expect(trackingServiceAfter.Spec).To(Equal(trackingServiceBefore.Spec))
+
+			artifactKey := types.NamespacedName{Name: ArtifactsResourceName, Namespace: "opendatahub"}
+			Expect(errors.IsNotFound(k8sClient.Get(ctx, artifactKey, &appsv1.Deployment{}))).To(BeTrue())
+			Expect(errors.IsNotFound(k8sClient.Get(ctx, artifactKey, &corev1.Service{}))).To(BeTrue())
+			Expect(errors.IsNotFound(k8sClient.Get(ctx, artifactKey, &gatewayv1.HTTPRoute{}))).To(BeTrue())
+			Expect(errors.IsNotFound(k8sClient.Get(ctx, types.NamespacedName{
+				Name: migrationJobName(mlflow), Namespace: "opendatahub",
+			}, &batchv1.Job{}))).To(BeTrue())
+
+			Expect(k8sClient.Get(ctx, typeNamespacedName, mlflow)).To(Succeed())
+			available := meta.FindStatusCondition(mlflow.Status.Conditions, "Available")
+			Expect(available).NotTo(BeNil())
+			Expect(available.Status).To(Equal(metav1.ConditionFalse))
+			Expect(available.Reason).To(Equal("HttpRouteFailed"))
+			Expect(available.Message).To(ContainSubstring(artifactsServerHTTPRouteRequiredMessage))
+			Expect(mlflow.Status.URL).To(BeEmpty())
+		})
+
 		It("should delete GC CronJob when garbageCollection is removed from spec", func() {
 			By("Enabling garbage collection")
 			Expect(k8sClient.Get(ctx, typeNamespacedName, mlflow)).To(Succeed())
