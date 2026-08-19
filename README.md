@@ -434,6 +434,8 @@ Both deployments use `kubernetes://` as the workspace provider and Kubernetes au
 They share the image, ServiceAccount, workspace label selector, artifact credentials, CA bundles,
 security contexts, and scheduling configuration. Metadata-store environment variables are cleared
 from the artifacts-only container, including when they are present in a shared `envFrom` source.
+The shared CA configuration includes PostgreSQL and MySQL client settings as well as HTTP and S3,
+keeping standalone chart deployments with SQL-backed artifact workspace stores TLS-compatible.
 `artifactsServer.replicas`,
 `artifactsServer.workers`, and `artifactsServer.resources` can scale artifact processing
 independently; artifact resources inherit the main server resources when omitted. `serveArtifacts` and

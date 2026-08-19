@@ -135,18 +135,7 @@ spec:
             {{- end }}
             - name: MLFLOW_SERVER_DISABLE_SECURITY_MIDDLEWARE
               value: "false"
-            {{- if .Values.caBundle.configMaps }}
-            - name: SSL_CERT_FILE
-              value: {{ .Values.caBundle.outputPath | quote }}
-            - name: REQUESTS_CA_BUNDLE
-              value: {{ .Values.caBundle.outputPath | quote }}
-            - name: CURL_CA_BUNDLE
-              value: {{ .Values.caBundle.outputPath | quote }}
-            - name: AWS_CA_BUNDLE
-              value: {{ .Values.caBundle.outputPath | quote }}
-            - name: MLFLOW_S3_IGNORE_TLS
-              value: "false"
-            {{- end }}
+            {{- include "mlflow.caBundleEnv" . | nindent 12 }}
           {{- if .Values.envFrom }}
           envFrom:
             {{- toYaml .Values.envFrom | nindent 12 }}

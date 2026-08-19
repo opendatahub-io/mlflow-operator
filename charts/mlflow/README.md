@@ -67,5 +67,8 @@ security contexts. The artifacts-only container explicitly clears backend, regis
 read-replica store URI variables, including values imported by shared `envFrom` sources. Provide
 the TLS Secret configured by `artifactsServer.tls.secretName` when
 it is not provisioned by an OpenShift service-ca annotation.
+When `artifactsServer.workspaceStoreUri` points to SQL in a standalone deployment, configured CA
+bundles provide the artifact container with the same PostgreSQL and MySQL TLS environment as the
+tracking container.
 
 See `values.yaml` for the full list of configurable settings.

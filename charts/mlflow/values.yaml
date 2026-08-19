@@ -185,6 +185,8 @@ artifactsServer:
   # Externally reachable artifact API root advertised by the tracking server, for example:
   # https://mlflow.example.com/mlflow-artifacts/api/2.0/mlflow-artifacts/artifacts
   artifactRoot: ""
+  # Standalone installs may use a SQL workspace store. When caBundle.configMaps is
+  # configured, the artifact container receives the same PostgreSQL/MySQL CA settings as tracking.
   workspaceStoreUri: "kubernetes://"
   # Optional label selector applied to the Kubernetes workspace provider.
   workspaceLabelSelector: ""

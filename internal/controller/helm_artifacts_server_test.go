@@ -27,6 +27,7 @@ func TestRenderChartArtifactsServer(t *testing.T) {
 		Spec: mlflowv1.MLflowSpec{
 			BackendStoreURI:      ptr("postgresql://db.example.com/mlflow"),
 			ArtifactsDestination: ptr("s3://bucket/artifacts"),
+			CABundleConfigMap:    &mlflowv1.CABundleConfigMapSpec{Name: "custom-ca"},
 			TemporaryStorage: &mlflowv1.TemporaryStorageSpec{
 				SizeLimit: quantityPtr("3Gi"),
 			},
@@ -122,6 +123,26 @@ func TestRenderChartArtifactsServer(t *testing.T) {
 	}
 	if !hasEnvValue(container.Env, "AWS_DEFAULT_REGION", "us-east-1") {
 		t.Errorf("artifact storage credential env missing: %#v", container.Env)
+	}
+	expectedCAEnv := map[string]string{
+		"SSL_CERT_FILE":        caCombinedBundle,
+		"REQUESTS_CA_BUNDLE":   caCombinedBundle,
+		"CURL_CA_BUNDLE":       caCombinedBundle,
+		"AWS_CA_BUNDLE":        caCombinedBundle,
+		"PGSSLROOTCERT":        caCombinedBundle,
+		"PGSSLMODE":            "verify-full",
+		"MLFLOW_MYSQL_CA":      caCombinedBundle,
+		"MLFLOW_S3_IGNORE_TLS": "false",
+	}
+	for workload, env := range map[string][]corev1.EnvVar{
+		"tracking":  tracking.Spec.Template.Spec.Containers[0].Env,
+		"artifacts": container.Env,
+	} {
+		for name, value := range expectedCAEnv {
+			if !hasEnvValue(env, name, value) {
+				t.Errorf("%s CA env missing %s=%q: %#v", workload, name, value, env)
+			}
+		}
 	}
 	for _, name := range []string{
 		"MLFLOW_BACKEND_STORE_URI",
