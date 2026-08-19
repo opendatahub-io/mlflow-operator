@@ -45,6 +45,11 @@ artifactsServer:
   artifactRoot: https://mlflow.example.com/mlflow-artifacts/api/2.0/mlflow-artifacts/artifacts
 ```
 
+The image must include the workspace-aware artifacts-only support from
+[`mlflow/mlflow#24452`](https://github.com/mlflow/mlflow/pull/24452), which permits
+`--artifacts-only` with `--enable-workspaces` and an explicit `--workspace-store-uri`. The ODH
+runtime includes this support; stock upstream MLflow `v3.14.0` does not.
+
 Dedicated artifact serving requires remote SQL metadata stores; inline SQLite metadata URIs are
 rejected, while Secret-backed metadata URIs cannot be inspected by Helm and must resolve to remote
 SQL. The tracking Deployment does not mount the PVC in this mode. When

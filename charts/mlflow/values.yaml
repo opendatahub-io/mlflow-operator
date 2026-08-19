@@ -178,6 +178,8 @@ mlflow:
 # Dedicated serving requires remote SQL metadata stores and does not mount storage in the
 # tracking pod. Inline SQLite metadata URIs are rejected; Secret-backed metadata URIs cannot
 # be inspected by Helm and must resolve to remote SQL.
+# The image must support combining --artifacts-only with --enable-workspaces and an explicit
+# --workspace-store-uri (upstream mlflow/mlflow#24452). Stock upstream v3.14.0 does not.
 artifactsServer:
   enabled: false
   replicaCount: 1

@@ -435,6 +435,9 @@ Both deployments use `kubernetes://` as the workspace provider and Kubernetes au
 They share the image, ServiceAccount, workspace label selector, artifact credentials, CA bundles,
 security contexts, and scheduling configuration. Metadata-store environment variables are cleared
 from the artifacts-only container, including when they are present in a shared `envFrom` source.
+The image must include the workspace-aware artifacts-only support from
+[`mlflow/mlflow#24452`](https://github.com/mlflow/mlflow/pull/24452); the ODH runtime includes this
+support, while stock upstream MLflow `v3.14.0` does not.
 The shared CA configuration includes PostgreSQL and MySQL client settings as well as HTTP and S3,
 keeping standalone chart deployments with SQL-backed artifact workspace stores TLS-compatible.
 `artifactsServer.replicas`,
