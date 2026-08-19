@@ -295,6 +295,56 @@ var _ = Describe("MLflow Controller", func() {
 			Expect(k8sClient.Create(ctx, mlflow)).To(Succeed())
 		})
 
+		It("rejects enabled file-based trace archival without ReadWriteMany storage", func() {
+			serveArtifactsTrue := true
+			location := "file:///mlflow/traces"
+			schedule := "0 */6 * * *"
+			retention := "30d"
+			mlflow := &mlflowv1.MLflow{
+				ObjectMeta: metav1.ObjectMeta{Name: resourceName},
+				Spec: mlflowv1.MLflowSpec{
+					ServeArtifacts:  &serveArtifactsTrue,
+					BackendStoreURI: &pgStoreURI,
+					Storage: &corev1.PersistentVolumeClaimSpec{
+						AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
+					},
+					TraceArchival: &mlflowv1.TraceArchivalSpec{
+						Enabled:   true,
+						Schedule:  &schedule,
+						Location:  &location,
+						Retention: &retention,
+					},
+				},
+			}
+			err := k8sClient.Create(ctx, mlflow)
+			Expect(errors.IsInvalid(err)).To(BeTrue())
+			Expect(err.Error()).To(ContainSubstring("enabled file-based traceArchival.location requires storage with ReadWriteMany"))
+		})
+
+		It("allows enabled file-based trace archival with ReadWriteMany storage", func() {
+			serveArtifactsTrue := true
+			location := "file:///mlflow/traces"
+			schedule := "0 */6 * * *"
+			retention := "30d"
+			mlflow := &mlflowv1.MLflow{
+				ObjectMeta: metav1.ObjectMeta{Name: resourceName},
+				Spec: mlflowv1.MLflowSpec{
+					ServeArtifacts:  &serveArtifactsTrue,
+					BackendStoreURI: &pgStoreURI,
+					Storage: &corev1.PersistentVolumeClaimSpec{
+						AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteMany},
+					},
+					TraceArchival: &mlflowv1.TraceArchivalSpec{
+						Enabled:   true,
+						Schedule:  &schedule,
+						Location:  &location,
+						Retention: &retention,
+					},
+				},
+			}
+			Expect(k8sClient.Create(ctx, mlflow)).To(Succeed())
+		})
+
 		It("rejects when backend store is missing", func() {
 			serveArtifactsTrue := true
 			mlflow := &mlflowv1.MLflow{

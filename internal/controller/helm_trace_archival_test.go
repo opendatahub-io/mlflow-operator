@@ -417,7 +417,9 @@ func TestRenderChart_TraceArchival(t *testing.T) {
 				Spec: mlflowv1.MLflowSpec{
 					BackendStoreURI:      ptr("sqlite:////mlflow/mlflow.db"),
 					ArtifactsDestination: ptr("file:///mlflow/artifacts"),
-					Storage:              &corev1.PersistentVolumeClaimSpec{},
+					Storage: &corev1.PersistentVolumeClaimSpec{
+						AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteMany},
+					},
 					TraceArchival: &mlflowv1.TraceArchivalSpec{
 						Enabled:  true,
 						Schedule: ptr("*/5 * * * *"),
@@ -479,6 +481,25 @@ func TestRenderChart_TraceArchival(t *testing.T) {
 				ObjectMeta: metav1.ObjectMeta{Name: "mlflow"},
 				Spec: mlflowv1.MLflowSpec{
 					BackendStoreURI: ptr(testBackendStoreURI),
+					TraceArchival: &mlflowv1.TraceArchivalSpec{
+						Enabled:  true,
+						Schedule: ptr("*/5 * * * *"),
+						Location: ptr("file:///mlflow/traces"),
+					},
+				},
+			},
+			namespace: "test-ns",
+			wantErr:   true,
+		},
+		{
+			name: "archival with file location and ReadWriteOnce storage - render fails",
+			mlflow: &mlflowv1.MLflow{
+				ObjectMeta: metav1.ObjectMeta{Name: "mlflow"},
+				Spec: mlflowv1.MLflowSpec{
+					BackendStoreURI: ptr(testBackendStoreURI),
+					Storage: &corev1.PersistentVolumeClaimSpec{
+						AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
+					},
 					TraceArchival: &mlflowv1.TraceArchivalSpec{
 						Enabled:  true,
 						Schedule: ptr("*/5 * * * *"),

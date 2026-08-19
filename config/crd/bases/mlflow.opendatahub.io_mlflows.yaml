@@ -2735,7 +2735,8 @@ spec:
                   location:
                     description: |-
                       Location is the artifact repository URI where archived span payloads
-                      are stored. Supports s3:// and file:// (file:// requires Storage).
+                      are stored. Supports s3:// and file://. File-based storage requires
+                      Storage, with ReadWriteMany as its first access mode when enabled.
                       Required when enabled is true.
                     maxLength: 2048
                     type: string
@@ -2977,10 +2978,12 @@ spec:
               rule: '!has(self.resourceClaims) || self.resourceClaims.all(c, ((has(c.resourceClaimName)
                 && size(c.resourceClaimName) > 0) != (has(c.resourceClaimTemplateName)
                 && size(c.resourceClaimTemplateName) > 0)))'
-            - message: storage must be configured when traceArchival.location uses
-                file-based storage (file:// prefix)
-              rule: '!has(self.traceArchival) || !has(self.traceArchival.location)
-                || !self.traceArchival.location.startsWith(''file://'') || has(self.storage)'
+            - message: enabled file-based traceArchival.location requires storage
+                with ReadWriteMany as its first access mode
+              rule: '!has(self.traceArchival) || !self.traceArchival.enabled || !has(self.traceArchival.location)
+                || !self.traceArchival.location.startsWith(''file://'') || (has(self.storage)
+                && size(self.storage.accessModes) > 0 && self.storage.accessModes[0]
+                == ''ReadWriteMany'')'
             - message: traceArchival.schedule is required when traceArchival.enabled
                 is true
               rule: '!has(self.traceArchival) || !has(self.traceArchival.enabled)

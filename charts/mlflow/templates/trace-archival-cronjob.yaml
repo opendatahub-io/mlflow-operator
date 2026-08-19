@@ -1,6 +1,6 @@
 {{- if .Values.traceArchival.enabled }}
-{{- if and .Values.traceArchival.location (hasPrefix "file://" .Values.traceArchival.location) (not .Values.storage.enabled) }}
-{{- fail "storage must be enabled when traceArchival.location uses file-based storage (file:// prefix)" }}
+{{- if and .Values.traceArchival.location (hasPrefix "file://" .Values.traceArchival.location) (or (not .Values.storage.enabled) (ne .Values.storage.accessMode "ReadWriteMany")) }}
+{{- fail "enabled file-based traceArchival.location requires storage.enabled=true and storage.accessMode=ReadWriteMany" }}
 {{- end }}
 apiVersion: batch/v1
 kind: CronJob

@@ -46,7 +46,7 @@ import (
 // +kubebuilder:validation:XValidation:rule="!has(self.networkPolicyEgressRules) || self.networkPolicyEgressRules.all(r, (has(r.ports) && size(r.ports) > 0) || (has(r.to) && size(r.to) > 0))",message="each networkPolicyEgressRules entry must specify at least one port or one destination"
 // +kubebuilder:validation:XValidation:rule="!has(self.networkPolicyAdditionalEgressRules) || self.networkPolicyAdditionalEgressRules.all(r, (has(r.ports) && size(r.ports) > 0) || (has(r.to) && size(r.to) > 0))",message="each networkPolicyAdditionalEgressRules entry must specify at least one port or one destination"
 // +kubebuilder:validation:XValidation:rule="!has(self.resourceClaims) || self.resourceClaims.all(c, ((has(c.resourceClaimName) && size(c.resourceClaimName) > 0) != (has(c.resourceClaimTemplateName) && size(c.resourceClaimTemplateName) > 0)))",message="each resourceClaims entry must set exactly one non-empty value: resourceClaimName or resourceClaimTemplateName"
-// +kubebuilder:validation:XValidation:rule="!has(self.traceArchival) || !has(self.traceArchival.location) || !self.traceArchival.location.startsWith('file://') || has(self.storage)",message="storage must be configured when traceArchival.location uses file-based storage (file:// prefix)"
+// +kubebuilder:validation:XValidation:rule="!has(self.traceArchival) || !self.traceArchival.enabled || !has(self.traceArchival.location) || !self.traceArchival.location.startsWith('file://') || (has(self.storage) && size(self.storage.accessModes) > 0 && self.storage.accessModes[0] == 'ReadWriteMany')",message="enabled file-based traceArchival.location requires storage with ReadWriteMany as its first access mode"
 // +kubebuilder:validation:XValidation:rule="!has(self.traceArchival) || !has(self.traceArchival.enabled) || self.traceArchival.enabled == false || (has(self.traceArchival.schedule) && size(self.traceArchival.schedule) > 0)",message="traceArchival.schedule is required when traceArchival.enabled is true"
 // +kubebuilder:validation:XValidation:rule="!has(self.traceArchival) || !has(self.traceArchival.enabled) || self.traceArchival.enabled == false || (has(self.traceArchival.location) && size(self.traceArchival.location) > 0)",message="traceArchival.location is required when traceArchival.enabled is true"
 // +kubebuilder:validation:XValidation:rule="!has(self.traceArchival) || !has(self.traceArchival.enabled) || self.traceArchival.enabled == false || (has(self.traceArchival.retention) && size(self.traceArchival.retention) > 0)",message="traceArchival.retention is required when traceArchival.enabled is true"
@@ -377,7 +377,8 @@ type TraceArchivalSpec struct {
 	Schedule *string `json:"schedule,omitempty"`
 
 	// Location is the artifact repository URI where archived span payloads
-	// are stored. Supports s3:// and file:// (file:// requires Storage).
+	// are stored. Supports s3:// and file://. File-based storage requires
+	// Storage, with ReadWriteMany as its first access mode when enabled.
 	// Required when enabled is true.
 	// +kubebuilder:validation:MaxLength=2048
 	// +optional

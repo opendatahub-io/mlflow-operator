@@ -305,6 +305,7 @@ traceArchival:
   # Cron schedule expression (e.g. "0 */6 * * *" for every 6 hours).
   # Required when enabled.
   schedule: "0 */6 * * *"
+  # A file:// location requires storage.enabled=true and ReadWriteMany access.
   # location: "s3://mlflow-trace-archive"
   # retention: "30d"
   maxTracesPerPass: 1000

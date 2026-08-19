@@ -376,6 +376,7 @@ The `config/samples/` directory contains example MLflow custom resource configur
    - CronJob runs the standalone trace archival module on a schedule
    - Archival config mounted into the MLflow server for UI awareness
    - Configures archival location, retention, schedule, and max traces per pass
+   - Local `file://` archival requires storage whose first access mode is `ReadWriteMany`
 
 7. **mlflow_v1_mlflowconfig.yaml** - Namespace artifact storage override
    - Override artifact storage with custom bucket and path

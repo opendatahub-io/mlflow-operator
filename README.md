@@ -362,6 +362,8 @@ When `traceArchival.enabled` is true, the operator:
 - The MLflow server's built-in scheduler stays disabled (`MLFLOW_SERVER_ENABLE_JOB_EXECUTION=false`); the CronJob handles archival externally, which avoids multi-replica coordination entirely
 - The CronJob uses the `mlflow-trace-archival-sa` ServiceAccount
 
+A `file://` archival location shares persistent storage with the MLflow workload and therefore requires `storage.accessModes[0]` to be `ReadWriteMany`.
+
 When trace archival is disabled or the CR is deleted, the operator cleans up the CronJob, ConfigMap, and ServiceAccount.
 
 See `config/samples/mlflow_v1_mlflow_trace_archival.yaml` for a complete example.
