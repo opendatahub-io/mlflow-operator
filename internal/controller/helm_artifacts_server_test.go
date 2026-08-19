@@ -34,9 +34,20 @@ func TestRenderChartArtifactsServer(t *testing.T) {
 			WorkspaceLabelSelector: &metav1.LabelSelector{
 				MatchLabels: map[string]string{"mlflow-workspace": "true"},
 			},
-			Env: []corev1.EnvVar{{Name: "AWS_DEFAULT_REGION", Value: "us-east-1"}},
+			Env: []corev1.EnvVar{
+				{Name: "AWS_DEFAULT_REGION", Value: "us-east-1"},
+				{Name: "MLFLOW_BACKEND_STORE_URI", Value: "postgresql://override.example.com/mlflow"},
+				{Name: "MLFLOW_REGISTRY_STORE_URI", Value: "postgresql://registry.example.com/mlflow"},
+				{
+					Name: "MLFLOW_READ_REPLICA_BACKEND_STORE_URI",
+					ValueFrom: &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{
+						LocalObjectReference: corev1.LocalObjectReference{Name: "metadata-credentials"},
+						Key:                  "read-replica-uri",
+					}},
+				},
+			},
 			EnvFrom: []corev1.EnvFromSource{{
-				SecretRef: &corev1.SecretEnvSource{LocalObjectReference: corev1.LocalObjectReference{Name: "s3-credentials"}},
+				SecretRef: &corev1.SecretEnvSource{LocalObjectReference: corev1.LocalObjectReference{Name: "s3-and-metadata-credentials"}},
 			}},
 			ArtifactsServer: &mlflowv1.ArtifactsServerSpec{
 				Enabled:  true,
@@ -103,11 +114,29 @@ func TestRenderChartArtifactsServer(t *testing.T) {
 	if container.Resources.Requests.Cpu().String() != "500m" {
 		t.Errorf("artifact CPU request = %s, want 500m", container.Resources.Requests.Cpu().String())
 	}
-	if len(container.EnvFrom) != 1 || container.EnvFrom[0].SecretRef == nil || container.EnvFrom[0].SecretRef.Name != "s3-credentials" {
-		t.Errorf("artifact envFrom = %#v, want s3-credentials", container.EnvFrom)
+	if len(container.EnvFrom) != 1 || container.EnvFrom[0].SecretRef == nil || container.EnvFrom[0].SecretRef.Name != "s3-and-metadata-credentials" {
+		t.Errorf("artifact envFrom = %#v, want s3-and-metadata-credentials", container.EnvFrom)
 	}
 	if !hasEnvValue(container.Env, "MLFLOW_K8S_WORKSPACE_LABEL_SELECTOR", "mlflow-workspace=true") {
 		t.Errorf("artifact workspace selector env missing: %#v", container.Env)
+	}
+	if !hasEnvValue(container.Env, "AWS_DEFAULT_REGION", "us-east-1") {
+		t.Errorf("artifact storage credential env missing: %#v", container.Env)
+	}
+	for _, name := range []string{
+		"MLFLOW_BACKEND_STORE_URI",
+		"MLFLOW_REGISTRY_STORE_URI",
+		"MLFLOW_READ_REPLICA_BACKEND_STORE_URI",
+	} {
+		matches := make([]corev1.EnvVar, 0, 1)
+		for _, variable := range container.Env {
+			if variable.Name == name {
+				matches = append(matches, variable)
+			}
+		}
+		if len(matches) != 1 || matches[0].Value != "" || matches[0].ValueFrom != nil {
+			t.Errorf("artifact %s env = %#v, want one explicit empty value", name, matches)
+		}
 	}
 
 	artifactService := findObject(objects, "Service", ArtifactsResourceName)

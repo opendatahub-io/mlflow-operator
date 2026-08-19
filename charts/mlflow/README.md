@@ -58,8 +58,10 @@ tracking Service and tracking static prefix instead.
 
 The standalone chart creates only the artifacts Deployment and Service. It does not create an
 Ingress or `HTTPRoute`; expose the Service at the configured `artifactRoot` yourself. Both servers
-use the same image, Kubernetes workspace provider, environment, credentials, scheduling settings,
-and security contexts. Provide the TLS Secret configured by `artifactsServer.tls.secretName` when
+use the same image, Kubernetes workspace provider, artifact credentials, scheduling settings, and
+security contexts. The artifacts-only container explicitly clears backend, registry, and
+read-replica store URI variables, including values imported by shared `envFrom` sources. Provide
+the TLS Secret configured by `artifactsServer.tls.secretName` when
 it is not provisioned by an OpenShift service-ca annotation.
 
 See `values.yaml` for the full list of configurable settings.

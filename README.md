@@ -426,8 +426,10 @@ rewriting existing experiment or run metadata. Per-resource suffixes are preserv
 tracking and artifacts-only pods; increase it for larger or more concurrent proxied transfers.
 
 Both deployments use `kubernetes://` as the workspace provider and Kubernetes authorization.
-They share the image, ServiceAccount, workspace label selector, environment, credentials, CA
-bundles, security contexts, and scheduling configuration. `artifactsServer.replicas`,
+They share the image, ServiceAccount, workspace label selector, artifact credentials, CA bundles,
+security contexts, and scheduling configuration. Metadata-store environment variables are cleared
+from the artifacts-only container, including when they are present in a shared `envFrom` source.
+`artifactsServer.replicas`,
 `artifactsServer.workers`, and `artifactsServer.resources` can scale artifact processing
 independently; artifact resources inherit the main server resources when omitted. `serveArtifacts` and
 `artifactsServer.enabled` cannot both be enabled.

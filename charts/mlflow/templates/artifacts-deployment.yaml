@@ -1,6 +1,7 @@
 {{- if .Values.artifactsServer.enabled }}
 {{- $healthPrefix := .Values.artifactsServer.staticPrefix | trimSuffix "/" -}}
 {{- $artifactsMountStorage := eq (include "mlflow.artifactsMountsStorage" .) "true" -}}
+{{- $metadataStoreEnvNames := list "MLFLOW_BACKEND_STORE_URI" "MLFLOW_REGISTRY_STORE_URI" "MLFLOW_READ_REPLICA_BACKEND_STORE_URI" -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -117,6 +118,7 @@ spec:
               value: {{ .Values.artifactsServer.workspaceLabelSelector | quote }}
             {{- end }}
             {{- range .Values.env }}
+            {{- if not (has .name $metadataStoreEnvNames) }}
             - name: {{ .name }}
               {{- if .valueFrom }}
               valueFrom:
@@ -124,6 +126,12 @@ spec:
               {{- else }}
               value: {{ .value | quote }}
               {{- end }}
+            {{- end }}
+            {{- end }}
+            # Explicit env entries override incompatible metadata-store keys imported by envFrom.
+            {{- range $metadataStoreEnvNames }}
+            - name: {{ . }}
+              value: ""
             {{- end }}
             - name: MLFLOW_SERVER_DISABLE_SECURITY_MIDDLEWARE
               value: "false"

@@ -203,8 +203,9 @@ artifactsServer:
     port: 8443
     annotations: {}
 
-# Environment variables for MLflow container
-# Supports both direct values and references to secrets/configmaps
+# Environment variables shared by the MLflow containers.
+# Supports both direct values and references to secrets/configmaps. The artifacts-only
+# container clears metadata-store URI variables that are incompatible with that mode.
 env:
   - name: MLFLOW_LOGGING_LEVEL
     value: INFO
