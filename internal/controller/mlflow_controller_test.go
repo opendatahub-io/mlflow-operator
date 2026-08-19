@@ -162,6 +162,7 @@ var _ = Describe("MLflow Controller", func() {
 			Expect(k8sClient.Get(ctx, typeNamespacedName, mlflow)).To(Succeed())
 			mlflow.Spec.BackendStoreURI = &pgStoreURI
 			mlflow.Spec.ServeArtifacts = ptr(false)
+			mlflow.Spec.DefaultArtifactRoot = nil
 			mlflow.Spec.ArtifactsServer = &mlflowv1.ArtifactsServerSpec{Enabled: true}
 			Expect(k8sClient.Update(ctx, mlflow)).To(Succeed())
 
@@ -321,6 +322,7 @@ var _ = Describe("MLflow Controller", func() {
 		It("should reconcile an enabled dedicated artifact server and evaluate its readiness", func() {
 			Expect(k8sClient.Get(ctx, typeNamespacedName, mlflow)).To(Succeed())
 			mlflow.Spec.BackendStoreURI = &pgStoreURI
+			mlflow.Spec.DefaultArtifactRoot = nil
 			mlflow.Spec.ArtifactsServer = &mlflowv1.ArtifactsServerSpec{Enabled: true}
 			mlflow.Spec.ArtifactsDestination = ptr("s3://bucket/artifacts")
 			Expect(k8sClient.Update(ctx, mlflow)).To(Succeed())
@@ -375,6 +377,7 @@ var _ = Describe("MLflow Controller", func() {
 		It("should create and clean up dedicated artifact resources", func() {
 			Expect(k8sClient.Get(ctx, typeNamespacedName, mlflow)).To(Succeed())
 			mlflow.Spec.BackendStoreURI = &pgStoreURI
+			mlflow.Spec.DefaultArtifactRoot = nil
 			mlflow.Spec.ArtifactsServer = &mlflowv1.ArtifactsServerSpec{Enabled: true}
 			mlflow.Spec.ArtifactsDestination = ptr("s3://bucket/artifacts")
 			Expect(k8sClient.Update(ctx, mlflow)).To(Succeed())
@@ -468,6 +471,7 @@ var _ = Describe("MLflow Controller", func() {
 
 			Expect(k8sClient.Get(ctx, typeNamespacedName, mlflow)).To(Succeed())
 			mlflow.Spec.ArtifactsServer = nil
+			mlflow.Spec.DefaultArtifactRoot = ptr("s3://default/artifacts")
 			Expect(k8sClient.Update(ctx, mlflow)).To(Succeed())
 			_, reconcileErr := controllerReconciler.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
 			Expect(reconcileErr).NotTo(HaveOccurred())
@@ -749,6 +753,23 @@ var _ = Describe("MLflow Controller", func() {
 				},
 			}
 			Expect(k8sClient.Create(ctx, mlflow)).To(Succeed())
+		})
+
+		It("rejects defaultArtifactRoot when artifactsServer is enabled", func() {
+			artifactsDestination := "s3://bucket/artifacts"
+			defaultArtifactRoot := "s3://bucket/custom-root"
+			mlflow := &mlflowv1.MLflow{
+				ObjectMeta: metav1.ObjectMeta{Name: resourceName},
+				Spec: mlflowv1.MLflowSpec{
+					BackendStoreURI:      &pgStoreURI,
+					ArtifactsDestination: &artifactsDestination,
+					DefaultArtifactRoot:  &defaultArtifactRoot,
+					ArtifactsServer:      &mlflowv1.ArtifactsServerSpec{Enabled: true},
+				},
+			}
+			err := k8sClient.Create(ctx, mlflow)
+			Expect(errors.IsInvalid(err)).To(BeTrue())
+			Expect(err.Error()).To(ContainSubstring("defaultArtifactRoot and artifactsServer.enabled are mutually exclusive"))
 		})
 
 		It("rejects enabling artifact serving on both deployments", func() {

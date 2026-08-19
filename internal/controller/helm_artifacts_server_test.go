@@ -27,7 +27,9 @@ func TestRenderChartArtifactsServer(t *testing.T) {
 		Spec: mlflowv1.MLflowSpec{
 			BackendStoreURI:      ptr("postgresql://db.example.com/mlflow"),
 			ArtifactsDestination: ptr("s3://bucket/artifacts"),
-			CABundleConfigMap:    &mlflowv1.CABundleConfigMapSpec{Name: "custom-ca"},
+			// Legacy objects may predate the CEL rule; the generated route must still win.
+			DefaultArtifactRoot: ptr("s3://bucket/legacy-root"),
+			CABundleConfigMap:   &mlflowv1.CABundleConfigMapSpec{Name: "custom-ca"},
 			TemporaryStorage: &mlflowv1.TemporaryStorageSpec{
 				SizeLimit: quantityPtr("3Gi"),
 			},

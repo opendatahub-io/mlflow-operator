@@ -26,6 +26,7 @@ spec:
 
   # Required for the dedicated server; both artifact pods use this remote destination.
   artifactsDestination: s3://my-mlflow-bucket/artifacts
+  # Omit defaultArtifactRoot; the operator generates it from MLFLOW_URL.
   serveArtifacts: false
   # Writable /tmp capacity shared by the tracking and artifact-server pods.
   temporaryStorage:

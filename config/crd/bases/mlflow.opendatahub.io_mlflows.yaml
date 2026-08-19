@@ -1190,7 +1190,8 @@ spec:
                 description: |-
                   DefaultArtifactRoot is the default artifact root path for MLflow runs on the server.
                   This is required when both ServeArtifacts and ArtifactsServer are disabled. When the
-                  dedicated artifact server is enabled, the operator generates this URL from MLFLOW_URL.
+                  dedicated artifact server is enabled, this field must be omitted because the operator
+                  generates the URL from MLFLOW_URL.
                   Supported schemes: file://, s3://, gs://, wasbs://, hdfs://, etc.
                   Examples:
                     - "s3://my-bucket/mlflow/artifacts"
@@ -3055,6 +3056,10 @@ spec:
             - message: serveArtifacts and artifactsServer.enabled are mutually exclusive
               rule: '!(has(self.serveArtifacts) && self.serveArtifacts && has(self.artifactsServer)
                 && self.artifactsServer.enabled)'
+            - message: defaultArtifactRoot and artifactsServer.enabled are mutually
+                exclusive
+              rule: '!has(self.artifactsServer) || !self.artifactsServer.enabled ||
+                !has(self.defaultArtifactRoot)'
             - message: artifactsDestination must be set when artifactsServer is enabled
               rule: '!has(self.artifactsServer) || !self.artifactsServer.enabled ||
                 (has(self.artifactsDestination) && size(self.artifactsDestination)

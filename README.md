@@ -420,7 +420,7 @@ storage access mode. The operator creates:
 
 The tracking server runs with `--no-serve-artifacts` and advertises
 `<MLFLOW_URL>/mlflow-artifacts/api/2.0/mlflow-artifacts/artifacts` as its default artifact
-root. MLflow clients therefore continue to use the tracking server for metadata while sending
+root, so `spec.defaultArtifactRoot` must be omitted in this mode. MLflow clients therefore continue to use the tracking server for metadata while sending
 artifact uploads and downloads to the dedicated route. The tracking Deployment does not mount
 `spec.storage` in this mode; a file-backed destination is mounted only by the artifact Deployment.
 Experiments created before split serving may retain `mlflow-artifacts:/` artifact locations. The

@@ -28,6 +28,7 @@ import (
 // +kubebuilder:validation:XValidation:rule="has(self.defaultArtifactRoot) || (has(self.serveArtifacts) && self.serveArtifacts) || (has(self.artifactsServer) && self.artifactsServer.enabled)",message="defaultArtifactRoot must be set when neither serveArtifacts nor artifactsServer is enabled"
 // +kubebuilder:validation:XValidation:rule="!has(self.defaultArtifactRoot) || !self.defaultArtifactRoot.startsWith('file://') || (has(self.serveArtifacts) && self.serveArtifacts) || (has(self.artifactsServer) && self.artifactsServer.enabled)",message="serveArtifacts or artifactsServer must be enabled when defaultArtifactRoot uses file-based storage (file:// prefix)"
 // +kubebuilder:validation:XValidation:rule="!(has(self.serveArtifacts) && self.serveArtifacts && has(self.artifactsServer) && self.artifactsServer.enabled)",message="serveArtifacts and artifactsServer.enabled are mutually exclusive"
+// +kubebuilder:validation:XValidation:rule="!has(self.artifactsServer) || !self.artifactsServer.enabled || !has(self.defaultArtifactRoot)",message="defaultArtifactRoot and artifactsServer.enabled are mutually exclusive"
 // +kubebuilder:validation:XValidation:rule="!has(self.artifactsServer) || !self.artifactsServer.enabled || (has(self.artifactsDestination) && size(self.artifactsDestination) > 0)",message="artifactsDestination must be set when artifactsServer is enabled"
 // +kubebuilder:validation:XValidation:rule="!has(self.artifactsServer) || !self.artifactsServer.enabled || !has(self.artifactsDestination) || !self.artifactsDestination.startsWith('file://') || !has(self.artifactsServer.replicas) || self.artifactsServer.replicas <= 1 || (has(self.storage) && size(self.storage.accessModes) > 0 && self.storage.accessModes[0] == 'ReadWriteMany')",message="multiple artifact server replicas with a file-based artifactsDestination require storage with ReadWriteMany as its first access mode"
 // +kubebuilder:validation:XValidation:rule="!has(self.artifactsServer) || !self.artifactsServer.enabled || !has(self.backendStoreUri) || (!self.backendStoreUri.startsWith('sqlite://') && !self.backendStoreUri.startsWith('sqlite+'))",message="artifactsServer cannot be enabled with an inline SQLite backendStoreUri"
@@ -189,7 +190,8 @@ type MLflowSpec struct {
 
 	// DefaultArtifactRoot is the default artifact root path for MLflow runs on the server.
 	// This is required when both ServeArtifacts and ArtifactsServer are disabled. When the
-	// dedicated artifact server is enabled, the operator generates this URL from MLFLOW_URL.
+	// dedicated artifact server is enabled, this field must be omitted because the operator
+	// generates the URL from MLFLOW_URL.
 	// Supported schemes: file://, s3://, gs://, wasbs://, hdfs://, etc.
 	// Examples:
 	//   - "s3://my-bucket/mlflow/artifacts"
