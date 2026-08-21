@@ -837,12 +837,13 @@ run_suite() {
         echo "  MLflow CR status.version matches ${SUPPORTED_MLFLOW_VERSION_RAW}"
     fi
 
-    if [ "$SERVE_ARTIFACTS" = "false" ] && [ "$STORAGE_TYPE" = "s3" ] && \
-       [ "$SKIP_INFRASTRUCTURE" != "true" ]; then
+    if [ "$STORAGE_TYPE" = "s3" ] && [ "$SKIP_INFRASTRUCTURE" != "true" ]; then
         echo "  Port-forwarding SeaweedFS S3 endpoint to localhost:9000..."
         kubectl port-forward service/minio-service 9000:9000 -n "$NAMESPACE" &
         S3_PF_PID=$!
         sleep 2
+        # Some smoke paths, such as trace archival verification, talk to the
+        # S3-compatible backend directly even when MLflow proxies artifacts.
         export MLFLOW_S3_ENDPOINT_URL="${MLFLOW_S3_ENDPOINT_URL:-http://localhost:9000}"
     fi
 
