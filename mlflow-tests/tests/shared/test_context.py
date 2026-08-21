@@ -56,6 +56,11 @@ class TestContext:
     runs_to_delete: dict[str, str] = field(default_factory=dict)
     active_model_name: Optional[str] = None
     models_to_delete: dict[str, str] = field(default_factory=dict)
+    active_mcp_server_name: Optional[str] = None
+    mcp_servers_to_delete: dict[str, str] = field(default_factory=dict)
+    active_mcp_server_version: Optional[str] = None
+    active_mcp_access_endpoint_id: Optional[str] = None
+    mcp_server_search_results: Optional[list] = None
     active_user: Optional[UserInfo] = None
     user_client: Optional[MlflowClient] = None
     users_to_delete: list[UserInfo] = field(default_factory=list)
@@ -145,6 +150,26 @@ class TestContext:
 
         self.models_to_delete[model_name.strip()] = workspace.strip()
         logger.info(f"Added model {model_name} in workspace '{workspace}' to cleanup list (total: {len(self.models_to_delete)})")
+
+    def add_mcp_server_for_cleanup(self, server_name: str, workspace: str) -> None:
+        """Add an MCP server to the cleanup list with workspace context.
+
+        Args:
+            server_name: Name of the MCP server to clean up
+            workspace: Workspace where the MCP server exists
+
+        Raises:
+            ValueError: If server_name or workspace is empty
+        """
+        if not server_name or not server_name.strip():
+            logger.error("Attempted to add MCP server for cleanup with empty server_name")
+            raise ValueError("server_name cannot be empty")
+        if not workspace or not workspace.strip():
+            logger.error(f"Attempted to add MCP server {server_name} for cleanup with empty workspace")
+            raise ValueError("workspace cannot be empty")
+
+        self.mcp_servers_to_delete[server_name.strip()] = workspace.strip()
+        logger.info(f"Added MCP server {server_name} in workspace '{workspace}' to cleanup list (total: {len(self.mcp_servers_to_delete)})")
 
     def add_user_for_cleanup(self, user_info: UserInfo) -> None:
         """Add a user to the cleanup list.

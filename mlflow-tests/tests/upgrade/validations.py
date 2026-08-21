@@ -165,3 +165,26 @@ def validate_upgrade_prompts(test_context: TestContext) -> None:
             assert version.template == version_payload["template"], (
                 f"Prompt '{prompt_payload['name']}' version '{index}' template mismatch"
             )
+
+
+def validate_upgrade_mcp_servers(test_context: TestContext) -> None:
+    """Validate the upgrade MCP server/tag/access-endpoint scenario."""
+    case = _require_case_payload(test_context, "case")
+    server = mlflow.genai.get_mcp_server(case["name"])
+    assert server is not None, f"MCP server '{case['name']}' not found"
+    assert server.description == case["description"], (
+        f"MCP server '{case['name']}' description mismatch: "
+        f"expected '{case['description']}', got '{server.description}'"
+    )
+    for key, value in case["tags"].items():
+        assert server.tags.get(key) == value, (
+            f"MCP server '{case['name']}' tag '{key}' mismatch: "
+            f"expected '{value}', got '{server.tags.get(key)}'"
+        )
+
+    endpoint_payload = case["access_endpoint"]
+    endpoints = mlflow.genai.search_mcp_access_endpoints(server_name=case["name"])
+    matching = [endpoint for endpoint in endpoints if endpoint.url == endpoint_payload["url"]]
+    assert matching, (
+        f"Access endpoint with URL '{endpoint_payload['url']}' not found for MCP server '{case['name']}'"
+    )

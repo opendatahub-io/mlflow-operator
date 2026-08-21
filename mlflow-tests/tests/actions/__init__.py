@@ -14,6 +14,13 @@ from .model_actions import (
     action_create_registered_model,
     action_delete_registered_model,
 )
+from .mcp_actions import (
+    action_create_mcp_server,
+    action_get_mcp_server,
+    action_search_mcp_servers,
+    action_delete_mcp_server,
+    action_create_mcp_server_version_and_endpoint,
+)
 from .artifact_actions import (
     action_start_run,
     action_end_run,
@@ -42,6 +49,11 @@ __all__ = [
     "action_get_registered_model",
     "action_create_registered_model",
     "action_delete_registered_model",
+    "action_create_mcp_server",
+    "action_get_mcp_server",
+    "action_search_mcp_servers",
+    "action_delete_mcp_server",
+    "action_create_mcp_server_version_and_endpoint",
     "action_start_run",
     "action_end_run",
     "action_create_temp_artifact",
