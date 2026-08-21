@@ -14,6 +14,9 @@ env:
   AWS_ACCESS_KEY_ID: minio
   AWS_SECRET_ACCESS_KEY: minio123
   AWS_S3_BUCKET: mlpipeline
+  # TEMPORARY CI BYPASS: use a prebuilt MLflow runtime image to avoid slow
+  # source builds while debugging this PR. Drop before merge.
+  TEMP_CI_MLFLOW_RUNTIME_SOURCE: quay.io/hukhan/mlflow:b6c86c6ccfb3
   MLFLOW_RUNTIME_ARTIFACT: mlflow-runtime-image
   MLFLOW_RUNTIME_IMAGE: localhost/mlflow-runtime:ci
   MLFLOW_TESTS_RUNTIME_ARTIFACT: mlflow-tests-image
@@ -119,12 +122,11 @@ jobs:
             echo "path=mlflow-upstream/Dockerfile" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Build MLflow image archive
-        env:
-          DOCKERFILE: ${{ steps.dockerfile.outputs.path }}
+      - name: TEMPORARY: use prebuilt MLflow image archive
         run: |
           mkdir -p runtime-image
-          docker build -f "$DOCKERFILE" -t "$MLFLOW_RUNTIME_IMAGE" mlflow-upstream
+          docker pull "$TEMP_CI_MLFLOW_RUNTIME_SOURCE"
+          docker tag "$TEMP_CI_MLFLOW_RUNTIME_SOURCE" "$MLFLOW_RUNTIME_IMAGE"
           docker save -o "runtime-image/${MLFLOW_RUNTIME_ARTIFACT}.tar" "$MLFLOW_RUNTIME_IMAGE"
 
       - name: Upload MLflow image artifact
