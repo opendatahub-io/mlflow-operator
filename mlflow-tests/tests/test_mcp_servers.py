@@ -60,7 +60,7 @@ class TestMCPServers(TestBase):
                     validate_func=validate_mcp_server_created,
                     user_info=UserInfo(
                         workspace=Config.WORKSPACES[0],
-                        verbs=[KubeVerb.CREATE],
+                        verbs=[KubeVerb.UPDATE],
                         resource_types=[ResourceType.MCP_SERVERS],
                     ),
                 ),
@@ -93,7 +93,7 @@ class TestMCPServers(TestBase):
                     workspace_to_use=Config.WORKSPACES[1],
                     user_info=UserInfo(
                         workspace=Config.WORKSPACES[1],
-                        verbs=[KubeVerb.CREATE],
+                        verbs=[KubeVerb.UPDATE],
                         resource_types=[ResourceType.MCP_SERVERS],
                     ),
                 ),
@@ -119,7 +119,7 @@ class TestMCPServers(TestBase):
                     validate_func=validate_mcp_server_created,
                     user_info=UserInfo(
                         workspace=Config.WORKSPACES[0],
-                        verbs=[KubeVerb.CREATE],
+                        verbs=[KubeVerb.UPDATE],
                         resource_types=[ResourceType.MCP_SERVERS],
                     ),
                 ),
@@ -145,7 +145,7 @@ class TestMCPServers(TestBase):
                     validate_func=validate_mcp_server_created,
                     user_info=UserInfo(
                         workspace=Config.WORKSPACES[0],
-                        verbs=[KubeVerb.CREATE],
+                        verbs=[KubeVerb.UPDATE],
                         resource_types=[ResourceType.MCP_SERVERS],
                     ),
                 ),
@@ -162,19 +162,20 @@ class TestMCPServers(TestBase):
             ],
         ),
         TestData(
-            test_name="Validate that user with CREATE permission can create MCP server",
+            # register_mcp_server() is gated on UPDATE regardless of prior existence; CREATE only guards the unused low-level create_mcp_server() call.
+            test_name="Validate that user with CREATE permission cannot create MCP server without UPDATE permission",
             user_info=UserInfo(workspace=Config.WORKSPACES[0], verbs=[KubeVerb.CREATE], resource_types=[ResourceType.MCP_SERVERS]),
             workspace_to_use=Config.WORKSPACES[0],
             test_steps=TestStep(
                 action_func=action_create_mcp_server,
-                validate_func=validate_mcp_server_created,
+                validate_func=validate_authentication_denied,
             ),
         ),
         TestData(
-            test_name="Validate that user with GET, CREATE and DELETE permissions can delete MCP server",
+            test_name="Validate that user with GET, UPDATE and DELETE permissions can delete MCP server",
             user_info=UserInfo(
                 workspace=Config.WORKSPACES[0],
-                verbs=[KubeVerb.GET, KubeVerb.CREATE, KubeVerb.DELETE],
+                verbs=[KubeVerb.GET, KubeVerb.UPDATE, KubeVerb.DELETE],
                 resource_types=[ResourceType.MCP_SERVERS],
             ),
             workspace_to_use=Config.WORKSPACES[0],
@@ -184,8 +185,8 @@ class TestMCPServers(TestBase):
             ],
         ),
         TestData(
-            test_name="Validate that user with CREATE permission on workspace 1 cannot create MCP server in workspace 2",
-            user_info=UserInfo(workspace=Config.WORKSPACES[0], verbs=[KubeVerb.CREATE], resource_types=[ResourceType.MCP_SERVERS]),
+            test_name="Validate that user with UPDATE permission on workspace 1 cannot create MCP server in workspace 2",
+            user_info=UserInfo(workspace=Config.WORKSPACES[0], verbs=[KubeVerb.UPDATE], resource_types=[ResourceType.MCP_SERVERS]),
             workspace_to_use=Config.WORKSPACES[1],
             test_steps=TestStep(
                 action_func=action_create_mcp_server,
@@ -202,7 +203,7 @@ class TestMCPServers(TestBase):
                     validate_func=validate_mcp_server_created,
                     user_info=UserInfo(
                         workspace=Config.WORKSPACES[0],
-                        verbs=[KubeVerb.CREATE],
+                        verbs=[KubeVerb.UPDATE],
                         resource_types=[ResourceType.MCP_SERVERS],
                     ),
                 ),
@@ -218,8 +219,8 @@ class TestMCPServers(TestBase):
             ],
         ),
         TestData(
-            test_name="User with CREATE permission cannot delete MCP server without DELETE permission",
-            user_info=UserInfo(workspace=Config.WORKSPACES[0], verbs=[KubeVerb.CREATE], resource_types=[ResourceType.MCP_SERVERS]),
+            test_name="User with UPDATE permission cannot delete MCP server without DELETE permission",
+            user_info=UserInfo(workspace=Config.WORKSPACES[0], verbs=[KubeVerb.UPDATE], resource_types=[ResourceType.MCP_SERVERS]),
             workspace_to_use=Config.WORKSPACES[0],
             test_steps=[
                 TestStep(action_func=action_create_mcp_server, validate_func=validate_mcp_server_created),
@@ -227,7 +228,7 @@ class TestMCPServers(TestBase):
             ],
         ),
         TestData(
-            test_name="User with DELETE permission cannot create MCP server without CREATE permission",
+            test_name="User with DELETE permission cannot create MCP server without UPDATE permission",
             user_info=UserInfo(workspace=Config.WORKSPACES[0], verbs=[KubeVerb.DELETE], resource_types=[ResourceType.MCP_SERVERS]),
             workspace_to_use=Config.WORKSPACES[0],
             test_steps=TestStep(
@@ -244,7 +245,7 @@ class TestMCPServers(TestBase):
                     validate_func=validate_mcp_server_created,
                     user_info=UserInfo(
                         workspace=Config.WORKSPACES[0],
-                        verbs=[KubeVerb.CREATE],
+                        verbs=[KubeVerb.UPDATE],
                         resource_types=[ResourceType.MCP_SERVERS],
                     ),
                 ),
@@ -260,12 +261,12 @@ class TestMCPServers(TestBase):
             ],
         ),
         TestData(
-            test_name="User with UPDATE permission cannot create MCP server without CREATE permission",
+            test_name="User with UPDATE permission can create MCP server",
             user_info=UserInfo(workspace=Config.WORKSPACES[0], verbs=[KubeVerb.UPDATE], resource_types=[ResourceType.MCP_SERVERS]),
             workspace_to_use=Config.WORKSPACES[0],
             test_steps=TestStep(
                 action_func=action_create_mcp_server,
-                validate_func=validate_authentication_denied,
+                validate_func=validate_mcp_server_created,
             ),
         ),
         TestData(
@@ -277,7 +278,7 @@ class TestMCPServers(TestBase):
                     validate_func=validate_mcp_server_created,
                     user_info=UserInfo(
                         workspace=Config.WORKSPACES[0],
-                        verbs=[KubeVerb.CREATE],
+                        verbs=[KubeVerb.UPDATE],
                         resource_types=[ResourceType.MCP_SERVERS],
                     ),
                 ),
@@ -296,7 +297,7 @@ class TestMCPServers(TestBase):
             test_name="Full MCP server lifecycle: create, add version and access endpoint, then delete",
             user_info=UserInfo(
                 workspace=Config.WORKSPACES[0],
-                verbs=[KubeVerb.GET, KubeVerb.CREATE, KubeVerb.UPDATE, KubeVerb.LIST, KubeVerb.DELETE],
+                verbs=[KubeVerb.GET, KubeVerb.UPDATE, KubeVerb.LIST, KubeVerb.DELETE],
                 resource_types=[ResourceType.MCP_SERVERS],
             ),
             workspace_to_use=Config.WORKSPACES[0],
