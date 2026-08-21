@@ -338,6 +338,31 @@ def _assert_trace_payloads(observed_traces, expected_payloads: list[dict[str, st
         )
 
 
+def _log_trace_diagnostics(label: str, observed_traces, expected_payloads: list[dict[str, str]]) -> None:
+    now_millis = int(time.time() * 1000)
+    for payload in expected_payloads:
+        trace = observed_traces.get(payload["trace_id"])
+        if trace is None:
+            logger.info("%s trace %s is not visible yet", label, payload["trace_id"])
+            continue
+
+        span_names = [span.name for span in trace.data.spans]
+        logger.info(
+            "%s trace %s state=%s experiment_id=%s request_time=%s age_ms=%s "
+            "span_count=%d span_names=%s tags=%s trace_metadata=%s",
+            label,
+            trace.info.trace_id,
+            trace.info.state,
+            trace.info.experiment_id,
+            trace.info.request_time,
+            now_millis - trace.info.request_time,
+            len(trace.data.spans),
+            span_names,
+            trace.info.tags,
+            trace.info.trace_metadata,
+        )
+
+
 @pytest.mark.smoke
 @pytest.mark.skipif(
     Config.ARTIFACT_STORAGE != "s3",
@@ -386,6 +411,7 @@ def test_trace_archival_job_archives_multiple_traces(setup_clients) -> None:
             admin_client, experiment_id, session_id, ARCHIVAL_TRACE_COUNT
         )
         _assert_trace_payloads(observed_before, expected_payloads)
+        _log_trace_diagnostics("Pre-archival", observed_before, expected_payloads)
 
         wait_seconds = retention_seconds + RETENTION_WAIT_BUFFER_SECONDS
         logger.info(
@@ -404,6 +430,7 @@ def test_trace_archival_job_archives_multiple_traces(setup_clients) -> None:
             admin_client, experiment_id, session_id, ARCHIVAL_TRACE_COUNT
         )
         _assert_trace_payloads(observed_after, expected_payloads)
+        _log_trace_diagnostics("Post-archival", observed_after, expected_payloads)
     finally:
         _delete_job(batch_api, job_name, namespace)
         if experiment_id is not None:
