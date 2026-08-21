@@ -122,7 +122,7 @@ jobs:
             echo "path=mlflow-upstream/Dockerfile" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: TEMPORARY: use prebuilt MLflow image archive
+      - name: "TEMPORARY: use prebuilt MLflow image archive"
         run: |
           mkdir -p runtime-image
           docker pull "$TEMP_CI_MLFLOW_RUNTIME_SOURCE"
