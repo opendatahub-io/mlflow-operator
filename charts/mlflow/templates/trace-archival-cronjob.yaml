@@ -85,6 +85,15 @@ spec:
                 - name: MLFLOW_K8S_WORKSPACE_LABEL_SELECTOR
                   value: {{ .Values.mlflow.workspaceLabelSelector | quote }}
                 {{- end }}
+                # The standalone archival job bypasses mlflow server CLI init, so provide
+                # the internal worker env name that _get_tracking_store() reads directly.
+                - name: _MLFLOW_SERVER_FILE_STORE
+                  {{- if .Values.mlflow.backendStoreUriFrom }}
+                  valueFrom:
+                    {{- toYaml .Values.mlflow.backendStoreUriFrom | nindent 20 }}
+                  {{- else }}
+                  value: {{ .Values.mlflow.backendStoreUri | quote }}
+                  {{- end }}
                 - name: MLFLOW_BACKEND_STORE_URI
                   {{- if .Values.mlflow.backendStoreUriFrom }}
                   valueFrom:

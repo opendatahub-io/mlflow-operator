@@ -265,6 +265,8 @@ func TestRenderChart_TraceArchival(t *testing.T) {
 				if command[0] != "python3.12" {
 					t.Errorf("CronJob command[0] = %s, want python3.12", command[0])
 				}
+				assertCronJobEnvValue(t, cronJob, "_MLFLOW_SERVER_FILE_STORE", testBackendStoreURI)
+				assertCronJobEnvValue(t, cronJob, "MLFLOW_BACKEND_STORE_URI", testBackendStoreURI)
 
 				cm := findObject(objs, "ConfigMap", "mlflow-trace-archival-config")
 				if cm == nil {
@@ -279,6 +281,43 @@ func TestRenderChart_TraceArchival(t *testing.T) {
 				if !ok || yamlContent == "" {
 					t.Fatal("trace-archival.yaml not found in ConfigMap data")
 				}
+			},
+		},
+		{
+			name: "archival enabled with backend secret - CronJob mirrors backend store URI",
+			mlflow: &mlflowv1.MLflow{
+				ObjectMeta: metav1.ObjectMeta{Name: "mlflow"},
+				Spec: mlflowv1.MLflowSpec{
+					BackendStoreURIFrom: &corev1.SecretKeySelector{
+						LocalObjectReference: corev1.LocalObjectReference{Name: "mlflow-db-credentials"},
+						Key:                  "backend-store-uri",
+					},
+					TraceArchival: &mlflowv1.TraceArchivalSpec{
+						Enabled:  true,
+						Schedule: ptr("*/5 * * * *"),
+					},
+				},
+			},
+			namespace: "test-ns",
+			validateObjs: func(t *testing.T, objs []*unstructured.Unstructured) {
+				cronJob := findObject(objs, "CronJob", "mlflow-trace-archival")
+				if cronJob == nil {
+					t.Fatal("trace archival CronJob not found")
+				}
+				assertCronJobEnvSecretRef(
+					t,
+					cronJob,
+					"_MLFLOW_SERVER_FILE_STORE",
+					"mlflow-db-credentials",
+					"backend-store-uri",
+				)
+				assertCronJobEnvSecretRef(
+					t,
+					cronJob,
+					"MLFLOW_BACKEND_STORE_URI",
+					"mlflow-db-credentials",
+					"backend-store-uri",
+				)
 			},
 		},
 		{
@@ -648,4 +687,69 @@ func assertArchivalVolumeMount(t *testing.T, dep *unstructured.Unstructured) {
 		}
 	}
 	t.Error("trace-archival-config volume mount not found at /etc/mlflow")
+}
+
+func cronJobContainerEnv(t *testing.T, cronJob *unstructured.Unstructured) []interface{} {
+	t.Helper()
+	containers, found, err := unstructured.NestedSlice(
+		cronJob.Object,
+		"spec", "jobTemplate", "spec", "template", "spec", "containers",
+	)
+	if err != nil || !found || len(containers) == 0 {
+		t.Fatalf("Failed to get CronJob containers: found=%v, err=%v", found, err)
+	}
+	envList, found, err := unstructured.NestedSlice(containers[0].(map[string]interface{}), "env")
+	if err != nil || !found {
+		t.Fatalf("Failed to get CronJob env: found=%v, err=%v", found, err)
+	}
+	return envList
+}
+
+func assertCronJobEnvValue(t *testing.T, cronJob *unstructured.Unstructured, envName, want string) {
+	t.Helper()
+	for _, e := range cronJobContainerEnv(t, cronJob) {
+		envVar := e.(map[string]interface{})
+		if envVar["name"] == envName {
+			if envVar["value"] != want {
+				t.Errorf("%s = %v, want %s", envName, envVar["value"], want)
+			}
+			return
+		}
+	}
+	t.Errorf("%s not found in CronJob env", envName)
+}
+
+func assertCronJobEnvSecretRef(
+	t *testing.T,
+	cronJob *unstructured.Unstructured,
+	envName, wantSecretName, wantSecretKey string,
+) {
+	t.Helper()
+	for _, e := range cronJobContainerEnv(t, cronJob) {
+		envVar := e.(map[string]interface{})
+		if envVar["name"] != envName {
+			continue
+		}
+
+		valueFrom, ok := envVar["valueFrom"].(map[string]interface{})
+		if !ok {
+			t.Fatalf("%s should use valueFrom", envName)
+		}
+		secretKeyRef, ok := valueFrom["secretKeyRef"].(map[string]interface{})
+		if !ok {
+			t.Fatalf("%s should use secretKeyRef", envName)
+		}
+		if secretKeyRef["name"] != wantSecretName || secretKeyRef["key"] != wantSecretKey {
+			t.Errorf(
+				"%s secretKeyRef = %v/%v, want %s/%s",
+				envName,
+				secretKeyRef["name"],
+				secretKeyRef["key"],
+				wantSecretName,
+				wantSecretKey,
+			)
+		}
+		return
+	}
+	t.Errorf("%s not found in CronJob env", envName)
 }
