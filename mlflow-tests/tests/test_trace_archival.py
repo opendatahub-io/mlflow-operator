@@ -337,6 +337,12 @@ def _assert_trace_payloads(observed_traces, expected_payloads: list[dict[str, st
 )
 def test_trace_archival_job_archives_multiple_traces(setup_clients) -> None:
     admin_client, _k8_manager, _user_manager, workspaces = setup_clients
+    # Other tests mutate process-global MLflow auth env, so re-pin fluent calls
+    # to the admin token before creating archival smoke resources.
+    admin_client = ClientManager.create_mlflow_client(
+        token=Config.K8_API_TOKEN,
+        tracking_uri=Config.MLFLOW_URI,
+    )
     namespace = _operator_namespace()
     job_name = f"archival-e2e-{uuid.uuid4().hex[:8]}"
     session_id = f"trace-archival-session-{uuid.uuid4().hex[:8]}"
