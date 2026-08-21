@@ -253,6 +253,19 @@ func TestRenderChart_TraceArchival(t *testing.T) {
 					t.Errorf("concurrencyPolicy = %s, want Forbid", policy)
 				}
 
+				containers, found, err := unstructured.NestedSlice(cronJob.Object,
+					"spec", "jobTemplate", "spec", "template", "spec", "containers")
+				if err != nil || !found || len(containers) == 0 {
+					t.Fatalf("Failed to get CronJob containers: found=%v, err=%v", found, err)
+				}
+				command, found, err := unstructured.NestedStringSlice(containers[0].(map[string]interface{}), "command")
+				if err != nil || !found || len(command) == 0 {
+					t.Fatalf("Failed to get CronJob command: found=%v, err=%v", found, err)
+				}
+				if command[0] != "python3.12" {
+					t.Errorf("CronJob command[0] = %s, want python3.12", command[0])
+				}
+
 				cm := findObject(objs, "ConfigMap", "mlflow-trace-archival-config")
 				if cm == nil {
 					t.Fatal("trace archival ConfigMap not found")

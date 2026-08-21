@@ -848,6 +848,7 @@ data:
 					"-o", "jsonpath={.spec.jobTemplate.spec.template.spec.containers[0].command}",
 				)
 				g.Expect(commandErr).NotTo(HaveOccurred())
+				g.Expect(command).To(ContainSubstring("python3.12"))
 				g.Expect(command).To(ContainSubstring("run_trace_archival_scheduler"))
 
 				configEnv, envErr := kubectlOutput(
