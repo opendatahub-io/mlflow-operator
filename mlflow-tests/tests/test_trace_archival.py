@@ -236,6 +236,10 @@ def _wait_for_job_complete(
 
         if _condition_status(last_job, "Complete") == "True":
             logger.info("Job %s completed successfully", job_name)
+            logger.info(
+                "Completed archival job diagnostics:\n%s",
+                _pod_diagnostics(core_api, namespace, job_name),
+            )
             return
         if _condition_status(last_job, "Failed") == "True":
             pytest.fail(
