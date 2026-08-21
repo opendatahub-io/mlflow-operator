@@ -11,7 +11,7 @@ from ..actions import (
     action_create_upgrade_mcp_access_endpoint,
 )
 from ...shared import TestData, TestStep
-from ..shared.upgrade_state_mcp_servers import MCP_SERVER_STATE
+from ..shared.upgrade_state_3_15 import MCP_SERVER_STATE
 from ..phase_base import UpgradePhaseBase
 from ..utils import get_upgrade_test_workspace
 from ..validations import validate_upgrade_mcp_servers
@@ -21,7 +21,7 @@ UPGRADE_TEST_WORKSPACE = get_upgrade_test_workspace()
 
 
 @pytest.mark.pre_upgrade
-class TestMCPServersPreUpgrade(UpgradePhaseBase):
+class TestMLflow315PreUpgrade(UpgradePhaseBase):
     test_scenarios: ClassVar[list[TestData]] = [
         TestData(
             test_name="Seed static MCP server",

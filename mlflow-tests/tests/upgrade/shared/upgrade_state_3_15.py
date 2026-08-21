@@ -1,4 +1,4 @@
-"""Shared MLflow upgrade scenario state for the MCP Server Registry suite."""
+"""Shared MLflow upgrade scenario state for 3.15-only additions."""
 
 from __future__ import annotations
 

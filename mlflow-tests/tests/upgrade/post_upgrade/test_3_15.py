@@ -6,7 +6,7 @@ import pytest
 
 from ..actions import make_upgrade_state_action
 from ...shared import TestData, TestStep
-from ..shared.upgrade_state_mcp_servers import MCP_SERVER_STATE
+from ..shared.upgrade_state_3_15 import MCP_SERVER_STATE
 from ..phase_base import UpgradePhaseBase
 from ..utils import get_upgrade_test_workspace
 from ..validations import validate_upgrade_mcp_servers
@@ -16,7 +16,7 @@ UPGRADE_TEST_WORKSPACE = get_upgrade_test_workspace()
 
 
 @pytest.mark.post_upgrade
-class TestMCPServersPostUpgrade(UpgradePhaseBase):
+class TestMLflow315PostUpgrade(UpgradePhaseBase):
     test_scenarios: ClassVar[list[TestData]] = [
         TestData(
             test_name="Validate static MCP server",
