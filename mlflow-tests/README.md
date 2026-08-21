@@ -92,6 +92,7 @@ uv run pytest tests/test_experiments.py
 uv run pytest tests/test_models.py
 uv run pytest tests/test_traces.py
 uv run pytest tests/test_artifacts.py
+uv run pytest tests/test_trace_archival.py
 
 # Run with specific markers
 uv run pytest -m Experiments    # Experiment RBAC tests
@@ -170,7 +171,7 @@ The framework defines the following custom pytest markers:
 - **`@pytest.mark.Models`**: Test registered model RBAC and management operations
 - **`@pytest.mark.Traces`**: Test direct trace-ingestion RBAC and experiment-scoped trace authorization
 - **`@pytest.mark.Artifacts`**: Test artifact operations, model logging, and S3 storage verification
-- **`@pytest.mark.smoke`**: Fast sanity-check tests suitable for pre-merge smoke runs
+- **`@pytest.mark.smoke`**: Fast sanity-check tests suitable for pre-merge smoke runs, including the object-storage trace archival Job created from the operator CronJob
 - **`@pytest.mark.pre_upgrade`**: Seed static MLflow state for upgrade validation
 - **`@pytest.mark.post_upgrade`**: Validate static MLflow state after an upgrade
 
@@ -233,6 +234,7 @@ Tests use specific Kubernetes verbs for granular permission control:
 - **Experiment Operations**: Create, read, delete experiments with RBAC validation
 - **Model Management**: Registered model lifecycle with permission enforcement
 - **Trace Logging**: Agent-style trace emission with experiment-scoped `get`/`update` and `resourceNames` validation
+- **Trace Archival**: Smoke coverage creates a Job from `mlflow-trace-archival` on object storage (`artifact_storage=s3`); skipped for file storage
 - **Artifact Storage**: S3 integration testing for model artifacts and logging operations
 - **Cross-Workspace Security**: Validates users cannot access resources in other workspaces
 - **Permission Matrix**: Tests all role levels against all operations (success and failure scenarios)

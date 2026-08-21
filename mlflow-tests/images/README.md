@@ -176,6 +176,8 @@ AWS_ACCESS_KEY_ID=... AWS_SECRET_ACCESS_KEY=... BUCKET=my-bucket S3_ENDPOINT_URL
   STORAGE_TYPE=s3 bash images/test-run.sh
 ```
 
+`deploy.py` enables `spec.traceArchival` automatically for `s3` and `externals3` (same bucket, `/trace-archive` prefix, schedule `0 0 1 1 *` so the CronJob does not fire during CI). The smoke suite creates a Job from that CronJob template; it is skipped for `file` artifact storage.
+
 ### PostgreSQL metadata store
 
 Set one or both metadata stores to `postgres`, then configure `DB_HOST`, `DB_PORT`, `DB_USER`,

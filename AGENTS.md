@@ -284,6 +284,8 @@ make test-e2e-upgrade \
 make cleanup-kind-cluster
 ```
 
+Trace archival e2e is split across layers. Ginkgo in `test/e2e/` covers CEL rejection plus operator resource lifecycle and disable-path cleanup; it uses a non-firing CronJob schedule (`0 0 1 1 *`) and dummy postgres/S3 URIs, and it does not start a live archival Job. Live Jobs against `file://` are avoided because the default PVC is ReadWriteOnce and cannot be mounted by a CronJob while the server is running. `mlflow-tests` smoke coverage creates a Job from the CronJob `jobTemplate` against object storage (`s3` / `externals3`) after `deploy.py` enables `spec.traceArchival` on those backends.
+
 ### MLflow upgrade pytest phases
 
 The `mlflow-tests/` suite also contains opt-in, version-gated upgrade pytest coverage under:

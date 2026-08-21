@@ -475,6 +475,8 @@ MLflow coverage is split between:
 - Go end-to-end tests in `test/e2e/`, including the operator-managed upgrade flow
 - Python integration tests in `mlflow-tests/`
 
+Ginkgo e2e covers trace archival CEL validation and operator resource lifecycle/cleanup without waiting for a cron tick or starting a Job against dummy storage. `mlflow-tests` smoke coverage creates a live archival Job from the CronJob template when artifact storage is object storage (`s3` / `externals3`). Live `file://` archival Jobs are avoided because the default PVC is ReadWriteOnce.
+
 For a repo-level map of Red Hat OpenShift AI MLflow fork validation, including
 Jenkins shift-left smoke and upgrade coverage, see the
 [RHOAI MLflow Fork Testing Guide](docs/rhoai-mlflow-testing.md).

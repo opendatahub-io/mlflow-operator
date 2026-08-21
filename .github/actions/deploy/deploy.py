@@ -807,6 +807,16 @@ class MLflowDeployer:
                 mlflow_cr["spec"].setdefault("env", []).append(
                     {"name": "MLFLOW_S3_ENDPOINT_URL", "value": self.args.s3_endpoint}
                 )
+
+            # Enable trace archival against the same bucket with a non-firing
+            # schedule. Live Jobs are created from the CronJob template in tests.
+            mlflow_cr["spec"]["traceArchival"] = {
+                "enabled": True,
+                "schedule": "0 0 1 1 *",
+                "location": f"s3://{self.args.s3_bucket}/trace-archive",
+                "retention": "30d",
+                "maxTracesPerPass": 1000,
+            }
         else:
             # File-based artifact storage
             # IMPORTANT: MLflow operator validation requires serveArtifacts=true when using file-based storage
@@ -1260,6 +1270,8 @@ class MLflowDeployer:
         print(f"  Registry Store: {self.args.registry_store}")
         print(f"  Artifact Storage: {self.args.artifact_storage}")
         print(f"  Serve Artifacts: {self.args.serve_artifacts}")
+        if self.args.artifact_storage in ("s3", "externals3"):
+            print(f"  Trace Archival: enabled (s3://{self.args.s3_bucket}/trace-archive)")
         print()
 
         # Write all GitHub Actions outputs immediately so they're available even if
