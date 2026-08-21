@@ -176,7 +176,7 @@ AWS_ACCESS_KEY_ID=... AWS_SECRET_ACCESS_KEY=... BUCKET=my-bucket S3_ENDPOINT_URL
   STORAGE_TYPE=s3 bash images/test-run.sh
 ```
 
-`deploy.py` enables `spec.traceArchival` automatically for `s3` and `externals3` (same bucket, `/trace-archive` prefix, schedule `0 0 1 1 *` so the CronJob does not fire during CI). Harness-driven runs default `TRACE_ARCHIVAL_RETENTION=1m` and pass that through to the MLflow CR so the smoke suite can create several traces, run a Job from the CronJob template, and verify that archive objects appear while the traces remain readable. The smoke test is skipped for `file` artifact storage.
+`deploy.py` enables `spec.traceArchival` automatically for `s3` and `externals3` (same bucket, `/trace-archive` prefix, schedule `0 0 1 1 *` so the CronJob does not fire during CI). Harness-driven runs default `TRACE_ARCHIVAL_RETENTION=1m` and pass that through to the MLflow CR so the smoke suite can create several traces, persist them as DB-backed spans via OTLP `/v1/traces` (prefixed tracking URI first, then the unprefixed Kind port-forward path), run a Job from the CronJob template, and verify that archive objects appear while the traces remain readable. The smoke test is skipped for `file` artifact storage.
 
 ### PostgreSQL metadata store
 

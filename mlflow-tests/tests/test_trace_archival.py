@@ -1,8 +1,10 @@
 """Live trace-archival smoke coverage against object storage.
 
-Creates several real traces, waits them past the harness-configured archival
-retention, runs a Job from the operator-managed CronJob template, then verifies
-that archive objects were written while the traces remain readable via MLflow.
+Creates several real traces, persists them as DB-backed spans via OTLP
+log_spans (prefixed tracking URI, then unprefixed Kind port-forward path),
+waits them past the harness-configured archival retention, runs a Job from
+the operator-managed CronJob template, then verifies that archive objects
+were written while the traces remain readable via MLflow.
 """
 
 from __future__ import annotations
@@ -16,14 +18,26 @@ import uuid
 import boto3
 import mlflow
 import pytest
+import requests
 from botocore.config import Config as BotocoreConfig
 from kubernetes import client
 from kubernetes.client.rest import ApiException
 from mlflow.entities.span import NO_OP_SPAN_TRACE_ID
+from mlflow.tracing.constant import SpansLocation, TraceTagKey
+from mlflow.tracing.utils.otlp import (
+    MLFLOW_EXPERIMENT_ID_HEADER,
+    OTLP_TRACES_PATH,
+    resource_to_otel_proto,
+)
+from mlflow.utils.workspace_utils import WORKSPACE_HEADER_NAME
+from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import (
+    ExportTraceServiceRequest,
+)
 
 from mlflow_tests.utils.client import ClientManager
 
 from .constants.config import Config
+from .http_utils import get_mlflow_base_uri, get_requests_verify_value
 
 logger = logging.getLogger(__name__)
 
@@ -272,7 +286,73 @@ def _delete_job(batch_api: client.BatchV1Api, job_name: str, namespace: str) -> 
             logger.warning("Failed to delete Job %s: %s", job_name, exc)
 
 
-def _create_trace_payload(admin_client, experiment_id: str, index: int) -> dict[str, str]:
+def _otlp_trace_urls() -> list[str]:
+    """Return OTLP ingest URLs for gateway and port-forward entrypoints.
+
+    OpenShift HTTPRoute rewrites ``/mlflow/v1`` to ``/v1``. Kind port-forward
+    talks to the Service, so only the unprefixed pod path exists.
+    """
+    base = get_mlflow_base_uri()
+    urls = [f"{base}{OTLP_TRACES_PATH}"]
+    suffix = "/mlflow"
+    if base.endswith(suffix):
+        unprefixed = f"{base[: -len(suffix)]}{OTLP_TRACES_PATH}"
+        if unprefixed not in urls:
+            urls.append(unprefixed)
+    return urls
+
+
+def _log_spans_via_otlp(experiment_id: str, workspace: str, spans) -> None:
+    """Write spans through OTLP so archival sees tracking-store span bodies.
+
+    SDK ``RestStore.log_spans()`` concatenates ``/v1/traces`` onto
+    ``MLFLOW_TRACKING_URI``. That works on OpenShift because HTTPRoute rewrites
+    ``/mlflow/v1`` to ``/v1``. Kind port-forward skips HTTPRoute, so the same
+    request 404s and traces stay artifact-backed. Posting the OTLP payload to
+    the prefixed tracking URI first, then the unprefixed origin, covers both.
+    """
+    if not spans:
+        raise AssertionError("OTLP log_spans requires at least one span")
+
+    request = ExportTraceServiceRequest()
+    resource_spans = request.resource_spans.add()
+    resource = getattr(spans[0]._span, "resource", None)
+    resource_spans.resource.CopyFrom(resource_to_otel_proto(resource))
+    scope_spans = resource_spans.scope_spans.add()
+    scope_spans.spans.extend(span.to_otel_proto() for span in spans)
+
+    headers = {
+        "Authorization": f"Bearer {Config.K8_API_TOKEN}",
+        "Content-Type": "application/x-protobuf",
+        MLFLOW_EXPERIMENT_ID_HEADER: str(experiment_id),
+        WORKSPACE_HEADER_NAME: workspace,
+    }
+    payload = request.SerializeToString()
+    failures: list[str] = []
+    for url in _otlp_trace_urls():
+        logger.info(
+            "Logging %d span(s) via OTLP %s for experiment %s workspace %s",
+            len(spans),
+            url,
+            experiment_id,
+            workspace,
+        )
+        response = requests.post(
+            url,
+            data=payload,
+            headers=headers,
+            verify=get_requests_verify_value(),
+            timeout=Config.REQUEST_TIMEOUT,
+        )
+        if response.status_code < 400:
+            return
+        failures.append(f"{url} -> {response.status_code} {response.text}")
+        logger.warning("OTLP log_spans POST %s failed: %s", url, failures[-1])
+
+    raise AssertionError("OTLP log_spans failed on all ingest URLs: " + "; ".join(failures))
+
+
+def _create_trace_payload(admin_client, experiment_id: str, index: int) -> dict:
     trace_name = f"trace-archival-smoke-{index}"
     child_span_name = f"{trace_name}-db-backed"
     message = f"trace archival smoke message {index}"
@@ -306,6 +386,7 @@ def _create_trace_payload(admin_client, experiment_id: str, index: int) -> dict[
         "trace_name": trace_name,
         "message": message,
         "result": result,
+        "spans": [root_span, child_span],
     }
 
 
@@ -326,6 +407,35 @@ def _wait_for_expected_traces(admin_client, experiment_id: str, expected_trace_i
     pytest.fail(
         f"Expected {len(expected_trace_ids)} visible traces for {sorted(expected_trace_ids)}, "
         f"found {len(observed)} after {TRACE_VISIBILITY_TIMEOUT_SECONDS}s"
+    )
+
+
+def _wait_for_tracking_store_spans(
+    admin_client, experiment_id: str, expected_trace_ids: set[str]
+):
+    deadline = time.monotonic() + TRACE_VISIBILITY_TIMEOUT_SECONDS
+    last_tags: dict[str, dict] = {}
+    while time.monotonic() < deadline:
+        traces = admin_client.search_traces(experiment_ids=[experiment_id], max_results=100)
+        observed = {}
+        for trace in traces:
+            if trace.info.trace_id not in expected_trace_ids:
+                continue
+            tags = dict(trace.info.tags or {})
+            last_tags[trace.info.trace_id] = tags
+            if tags.get(TraceTagKey.SPANS_LOCATION) != SpansLocation.TRACKING_STORE.value:
+                continue
+            if not trace.data.spans:
+                continue
+            observed[trace.info.trace_id] = trace
+        if len(observed) >= len(expected_trace_ids):
+            return observed
+        time.sleep(POLL_INTERVAL_SECONDS)
+
+    pytest.fail(
+        "OTLP log_spans completed but traces were not DB-backed "
+        f"(wanted {TraceTagKey.SPANS_LOCATION}={SpansLocation.TRACKING_STORE.value}) "
+        f"within {TRACE_VISIBILITY_TIMEOUT_SECONDS}s: {last_tags}"
     )
 
 
@@ -415,6 +525,12 @@ def test_trace_archival_job_archives_multiple_traces(setup_clients) -> None:
         expected_trace_ids = {payload["trace_id"] for payload in expected_payloads}
 
         observed_before = _wait_for_expected_traces(
+            admin_client, experiment_id, expected_trace_ids
+        )
+        _assert_trace_payloads(observed_before, expected_payloads)
+        for payload in expected_payloads:
+            _log_spans_via_otlp(experiment_id, workspace, payload["spans"])
+        observed_before = _wait_for_tracking_store_spans(
             admin_client, experiment_id, expected_trace_ids
         )
         _assert_trace_payloads(observed_before, expected_payloads)
