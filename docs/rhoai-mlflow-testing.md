@@ -114,6 +114,14 @@ It then reuses those artifacts in a Kind matrix driven by
 operator-plus-runtime gate and already includes a Jenkins-like multi-backend row
 that runs multiple artifact backends in one `test-run.sh` invocation.
 
+Trace archival is covered in two places. Ginkgo e2e in `test/e2e/` validates CEL
+and operator resource lifecycle/cleanup without waiting for a cron tick.
+`mlflow-tests` smoke (`-m smoke`) creates several traces, waits past a short
+harness retention, runs a live Job from the CronJob template, and verifies that
+archive objects appear while the traces remain readable when artifact storage is
+object storage; Jenkins smoke/early-gate uses that same marker. Live `file://`
+archival Jobs are not used because the default PVC is ReadWriteOnce.
+
 ### Upgrade validation
 
 [`.github/workflows/upgrade-validation.yml`](../.github/workflows/upgrade-validation.yml)

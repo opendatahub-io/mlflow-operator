@@ -44,6 +44,16 @@ const metricsServiceName = "mlflow-operator-controller-manager-metrics-service"
 // metricsRoleBindingName is the name of the RBAC that will be created to allow get the metrics data
 const metricsRoleBindingName = "mlflow-operator-metrics-binding"
 
+const dummyRemoteStoreSpec = `apiVersion: mlflow.opendatahub.io/v1
+kind: MLflow
+metadata:
+  name: mlflow
+spec:
+  serveArtifacts: true
+  artifactsDestination: s3://mlflow-artifacts/test
+  backendStoreUri: postgresql://user:pass@db:5432/mlflow
+`
+
 var _ = Describe("Manager", Ordered, func() {
 	var controllerPodName string
 
@@ -682,37 +692,85 @@ spec:
 			controllerPodName = waitForControllerPodName()
 
 			By("attempting to create MLflow with file-based trace archival location without storage")
-			invalidArchivalYAML := `apiVersion: mlflow.opendatahub.io/v1
-kind: MLflow
-metadata:
-  name: mlflow
-spec:
-  serveArtifacts: true
-  artifactsDestination: s3://mlflow-artifacts/test
-  backendStoreUri: postgresql://user:pass@db:5432/mlflow
+			expectKubectlApplyRejected(
+				dummyRemoteStoreSpec+`
   traceArchival:
     enabled: true
-    schedule: "*/5 * * * *"
+    schedule: "0 0 1 1 *"
     location: "file:///mlflow/traces"
-    retention: "30d"`
+    retention: "30d"`,
+				"storage must be configured when traceArchival.location uses file-based storage",
+				"Should fail to create MLflow with file-based archival location without storage",
+			)
+		})
 
-			invalidArchivalFile := filepath.Join("/tmp", "mlflow-archival-invalid.yaml")
-			err := os.WriteFile(invalidArchivalFile, []byte(invalidArchivalYAML), os.FileMode(0o644))
-			Expect(err).NotTo(HaveOccurred(), "Failed to write invalid trace archival manifest")
-			defer func() {
-				if removeErr := os.Remove(invalidArchivalFile); removeErr != nil {
-					_, _ = fmt.Fprintf(GinkgoWriter, "failed to remove %s: %v\n", invalidArchivalFile, removeErr)
-				}
-			}()
+		It("should reject trace archival when required fields are missing or retention is invalid", func() {
+			By("waiting for the controller-manager pod to be running")
+			controllerPodName = waitForControllerPodName()
 
-			cmd := exec.Command("kubectl", "apply", "-f", invalidArchivalFile)
-			output, err := utils.Run(cmd)
-			Expect(err).To(HaveOccurred(), "Should fail to create MLflow with file-based archival location without storage")
-			Expect(output).To(ContainSubstring("storage must be configured when traceArchival.location uses file-based storage"),
-				"Error message should indicate trace archival location requires storage")
+			cases := []struct {
+				name          string
+				archivalSpec  string
+				wantSubstring string
+				failMsg       string
+			}{
+				{
+					name: "enabled without location",
+					archivalSpec: `
+  traceArchival:
+    enabled: true
+    schedule: "0 0 1 1 *"
+    retention: "30d"`,
+					wantSubstring: "traceArchival.location is required when traceArchival.enabled is true",
+					failMsg:       "Should fail to create MLflow with trace archival enabled and no location",
+				},
+				{
+					name: "enabled without retention",
+					archivalSpec: `
+  traceArchival:
+    enabled: true
+    schedule: "0 0 1 1 *"
+    location: "s3://mlflow-trace-archive"`,
+					wantSubstring: "traceArchival.retention is required when traceArchival.enabled is true",
+					failMsg:       "Should fail to create MLflow with trace archival enabled and no retention",
+				},
+				{
+					name: "invalid retention 30days",
+					archivalSpec: `
+  traceArchival:
+    enabled: true
+    schedule: "0 0 1 1 *"
+    location: "s3://mlflow-trace-archive"
+    retention: "30days"`,
+					wantSubstring: "spec.traceArchival.retention",
+					failMsg:       "Should fail to create MLflow with retention 30days",
+				},
+				{
+					name: "invalid retention 1s",
+					archivalSpec: `
+  traceArchival:
+    enabled: true
+    schedule: "0 0 1 1 *"
+    location: "s3://mlflow-trace-archive"
+    retention: "1s"`,
+					wantSubstring: "spec.traceArchival.retention",
+					failMsg:       "Should fail to create MLflow with retention 1s",
+				},
+			}
+
+			for _, tc := range cases {
+				By(tc.name)
+				expectKubectlApplyRejected(dummyRemoteStoreSpec+tc.archivalSpec, tc.wantSubstring, tc.failMsg)
+			}
 		})
 
 		It("should accept trace archival with S3 location and create CronJob", func() {
+			const (
+				archivalCronJobName = "mlflow-trace-archival"
+				archivalConfigMap   = "mlflow-trace-archival-config"
+				archivalSAName      = "mlflow-trace-archival-sa"
+			)
+
 			By("waiting for the controller-manager pod to be running")
 			controllerPodName = waitForControllerPodName()
 
@@ -727,94 +785,171 @@ data:
   tls.crt: ZHVtbXk=
   tls.key: ZHVtbXk=`
 
-			tlsSecretFile := filepath.Join("/tmp", "mlflow-trace-archival-tls-secret.yaml")
-			err := os.WriteFile(tlsSecretFile, []byte(tlsSecretYAML), os.FileMode(0o644))
+			tlsSecretFile, err := writeTempManifest("mlflow-trace-archival-tls-", tlsSecretYAML)
 			Expect(err).NotTo(HaveOccurred(), "Failed to write TLS secret manifest")
-			defer func() {
-				if removeErr := os.Remove(tlsSecretFile); removeErr != nil {
-					_, _ = fmt.Fprintf(GinkgoWriter, "failed to remove %s: %v\n", tlsSecretFile, removeErr)
-				}
-			}()
+			defer cleanupTempManifest(tlsSecretFile)
 
 			cmd := exec.Command("kubectl", "apply", "-f", tlsSecretFile)
 			_, err = utils.Run(cmd)
 			Expect(err).NotTo(HaveOccurred(), "Failed to create mlflow-tls secret")
 
 			By("creating MLflow with S3-based trace archival location")
-			validArchivalYAML := `apiVersion: mlflow.opendatahub.io/v1
-kind: MLflow
-metadata:
-  name: mlflow
-spec:
-  serveArtifacts: true
-  artifactsDestination: s3://mlflow-artifacts/test
-  backendStoreUri: postgresql://user:pass@db:5432/mlflow
+			validArchivalYAML := dummyRemoteStoreSpec + `
   traceArchival:
     enabled: true
-    schedule: "*/5 * * * *"
+    schedule: "0 0 1 1 *"
     location: "s3://mlflow-trace-archive"
     retention: "30d"
     maxTracesPerPass: 500`
 
-			validArchivalFile := filepath.Join("/tmp", "mlflow-archival-valid.yaml")
-			err = os.WriteFile(validArchivalFile, []byte(validArchivalYAML), os.FileMode(0o644))
+			validArchivalFile, err := writeTempManifest("mlflow-archival-valid-", validArchivalYAML)
 			Expect(err).NotTo(HaveOccurred(), "Failed to write valid trace archival manifest")
-			defer func() {
-				if removeErr := os.Remove(validArchivalFile); removeErr != nil {
-					_, _ = fmt.Fprintf(GinkgoWriter, "failed to remove %s: %v\n", validArchivalFile, removeErr)
-				}
-			}()
+			defer cleanupTempManifest(validArchivalFile)
 
 			cmd = exec.Command("kubectl", "apply", "-f", validArchivalFile)
 			_, err = utils.Run(cmd)
 			Expect(err).NotTo(HaveOccurred(), "Failed to create MLflow with S3-based trace archival")
+			DeferCleanup(func() {
+				deleteCmd := exec.Command("kubectl", "delete", "mlflow", "mlflow", "--ignore-not-found=true")
+				_, _ = utils.Run(deleteCmd)
+			})
 
 			By("verifying the ConfigMap was created")
-			verifyConfigMap := func(g Gomega) {
-				cmd := exec.Command("kubectl", "get", "configmap",
-					"mlflow-trace-archival-config", "-n", namespace,
-					"-o", "jsonpath={.data.trace-archival\\.yaml}")
-				output, err := utils.Run(cmd)
-				g.Expect(err).NotTo(HaveOccurred())
+			Eventually(func(g Gomega) {
+				output, getErr := kubectlOutput(
+					"get", "configmap", archivalConfigMap, "-n", namespace,
+					"-o", "jsonpath={.data.trace-archival\\.yaml}",
+				)
+				g.Expect(getErr).NotTo(HaveOccurred())
 				g.Expect(output).To(ContainSubstring("enabled: true"))
 				g.Expect(output).To(ContainSubstring(`location: "s3://mlflow-trace-archive"`))
 				g.Expect(output).To(ContainSubstring(`retention: "30d"`))
-			}
-			Eventually(verifyConfigMap, 2*time.Minute).Should(Succeed())
+				g.Expect(output).To(ContainSubstring("max_traces_per_pass: 500"))
+			}, 2*time.Minute, time.Second).Should(Succeed())
 
-			By("verifying the CronJob was created")
-			verifyCronJob := func(g Gomega) {
-				cmd := exec.Command("kubectl", "get", "cronjob",
-					"mlflow-trace-archival", "-n", namespace,
-					"-o", "jsonpath={.spec.schedule}")
-				output, err := utils.Run(cmd)
-				g.Expect(err).NotTo(HaveOccurred())
-				g.Expect(output).To(Equal("*/5 * * * *"))
-			}
-			Eventually(verifyCronJob, 2*time.Minute).Should(Succeed())
+			By("verifying the CronJob was created with the operator archival contract")
+			Eventually(func(g Gomega) {
+				schedule, getErr := kubectlOutput(
+					"get", "cronjob", archivalCronJobName, "-n", namespace,
+					"-o", "jsonpath={.spec.schedule}",
+				)
+				g.Expect(getErr).NotTo(HaveOccurred())
+				g.Expect(schedule).To(Equal("0 0 1 1 *"))
 
-			By("verifying the Deployment keeps JOB_EXECUTION=false")
-			verifyDeploymentEnv := func(g Gomega) {
-				cmd := exec.Command("kubectl", "get", "deployment", "mlflow",
-					"-n", namespace,
-					"-o", "jsonpath={.spec.template.spec.containers[0].env[?(@.name=='MLFLOW_SERVER_ENABLE_JOB_EXECUTION')].value}")
-				output, err := utils.Run(cmd)
-				g.Expect(err).NotTo(HaveOccurred())
-				g.Expect(output).To(Equal("false"))
-			}
-			Eventually(verifyDeploymentEnv, 2*time.Minute).Should(Succeed())
+				policy, policyErr := kubectlOutput(
+					"get", "cronjob", archivalCronJobName, "-n", namespace,
+					"-o", "jsonpath={.spec.concurrencyPolicy}",
+				)
+				g.Expect(policyErr).NotTo(HaveOccurred())
+				g.Expect(policy).To(Equal("Forbid"))
+
+				command, commandErr := kubectlOutput(
+					"get", "cronjob", archivalCronJobName, "-n", namespace,
+					"-o", "jsonpath={.spec.jobTemplate.spec.template.spec.containers[0].command}",
+				)
+				g.Expect(commandErr).NotTo(HaveOccurred())
+				g.Expect(command).To(ContainSubstring("python3.12"))
+				g.Expect(command).To(ContainSubstring("run_trace_archival_scheduler"))
+
+				configEnv, envErr := kubectlOutput(
+					"get", "cronjob", archivalCronJobName, "-n", namespace,
+					"-o", "jsonpath={.spec.jobTemplate.spec.template.spec.containers[0]"+
+						".env[?(@.name=='MLFLOW_TRACE_ARCHIVAL_CONFIG')].value}",
+				)
+				g.Expect(envErr).NotTo(HaveOccurred())
+				g.Expect(configEnv).To(Equal("/etc/mlflow/trace-archival.yaml"))
+
+				sa, saErr := kubectlOutput(
+					"get", "cronjob", archivalCronJobName, "-n", namespace,
+					"-o", "jsonpath={.spec.jobTemplate.spec.template.spec.serviceAccountName}",
+				)
+				g.Expect(saErr).NotTo(HaveOccurred())
+				g.Expect(sa).To(Equal(archivalSAName))
+			}, 2*time.Minute, time.Second).Should(Succeed())
+
+			By("verifying the archival ServiceAccount and ClusterRoleBinding subject")
+			Eventually(func(g Gomega) {
+				saName, saErr := kubectlOutput(
+					"get", "sa", archivalSAName, "-n", namespace,
+					"-o", "jsonpath={.metadata.name}",
+				)
+				g.Expect(saErr).NotTo(HaveOccurred())
+				g.Expect(saName).To(Equal(archivalSAName))
+
+				subjects, crbErr := kubectlOutput(
+					"get", "clusterrolebinding", "mlflow",
+					"-o", "jsonpath={.subjects[*].name}",
+				)
+				g.Expect(crbErr).NotTo(HaveOccurred())
+				g.Expect(subjects).To(ContainSubstring(archivalSAName))
+			}, 2*time.Minute, time.Second).Should(Succeed())
+
+			By("verifying the Deployment keeps JOB_EXECUTION=false and mounts archival config")
+			Eventually(func(g Gomega) {
+				jobExec, jobExecErr := kubectlOutput(
+					"get", "deployment", "mlflow", "-n", namespace,
+					"-o", "jsonpath={.spec.template.spec.containers[0]"+
+						".env[?(@.name=='MLFLOW_SERVER_ENABLE_JOB_EXECUTION')].value}",
+				)
+				g.Expect(jobExecErr).NotTo(HaveOccurred())
+				g.Expect(jobExec).To(Equal("false"))
+
+				configEnv, configErr := kubectlOutput(
+					"get", "deployment", "mlflow", "-n", namespace,
+					"-o", "jsonpath={.spec.template.spec.containers[0]"+
+						".env[?(@.name=='MLFLOW_TRACE_ARCHIVAL_CONFIG')].value}",
+				)
+				g.Expect(configErr).NotTo(HaveOccurred())
+				g.Expect(configEnv).To(Equal("/etc/mlflow/trace-archival.yaml"))
+
+				mount, mountErr := kubectlOutput(
+					"get", "deployment", "mlflow", "-n", namespace,
+					"-o", "jsonpath={.spec.template.spec.containers[0]"+
+						".volumeMounts[?(@.name=='trace-archival-config')].name}",
+				)
+				g.Expect(mountErr).NotTo(HaveOccurred())
+				g.Expect(mount).To(Equal("trace-archival-config"))
+			}, 2*time.Minute, time.Second).Should(Succeed())
+
+			By("disabling trace archival and waiting for operator cleanup")
+			cmd = exec.Command(
+				"kubectl", "patch", "mlflow", "mlflow", "--type=merge",
+				"-p", `{"spec":{"traceArchival":{"enabled":false}}}`,
+			)
+			_, err = utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred(), "Failed to disable trace archival")
+
+			Eventually(func(g Gomega) {
+				for _, resource := range [][]string{
+					{"cronjob", archivalCronJobName},
+					{"configmap", archivalConfigMap},
+					{"sa", archivalSAName},
+				} {
+					output, getErr := kubectlOutput(
+						"get", resource[0], resource[1],
+						"-n", namespace,
+						"--ignore-not-found",
+						"-o", "jsonpath={.metadata.name}",
+					)
+					g.Expect(getErr).NotTo(HaveOccurred())
+					g.Expect(output).To(BeEmpty(), "%s %s should be deleted after archival is disabled", resource[0], resource[1])
+				}
+			}, 2*time.Minute, time.Second).Should(Succeed())
 
 			By("cleaning up")
 			cmd = exec.Command("kubectl", "delete", "mlflow", "mlflow")
 			_, err = utils.Run(cmd)
 			Expect(err).NotTo(HaveOccurred())
 
-			verifyDeleted := func(g Gomega) {
-				cmd := exec.Command("kubectl", "get", "mlflow", "mlflow")
-				_, err := utils.Run(cmd)
-				g.Expect(err).To(HaveOccurred())
-			}
-			Eventually(verifyDeleted, 30*time.Second).Should(Succeed())
+			Eventually(func(g Gomega) {
+				output, getErr := kubectlOutput(
+					"get", "mlflow", "mlflow",
+					"--ignore-not-found",
+					"-o", "jsonpath={.metadata.name}",
+				)
+				g.Expect(getErr).NotTo(HaveOccurred())
+				g.Expect(output).To(BeEmpty())
+			}, 30*time.Second, time.Second).Should(Succeed())
 		})
 
 		It("should reconcile namespace RBAC when Auth CRD is present", func() {
@@ -1111,6 +1246,23 @@ func writeTempManifest(prefix, contents string) (string, error) {
 		return "", err
 	}
 	return file.Name(), nil
+}
+
+func cleanupTempManifest(path string) {
+	if removeErr := os.Remove(path); removeErr != nil {
+		_, _ = fmt.Fprintf(GinkgoWriter, "failed to remove %s: %v\n", path, removeErr)
+	}
+}
+
+func expectKubectlApplyRejected(contents, wantSubstring, failMsg string) {
+	manifestFile, err := writeTempManifest("mlflow-rejected-", contents)
+	Expect(err).NotTo(HaveOccurred(), "Failed to write rejected manifest")
+	defer cleanupTempManifest(manifestFile)
+
+	cmd := exec.Command("kubectl", "apply", "-f", manifestFile)
+	output, err := utils.Run(cmd)
+	Expect(err).To(HaveOccurred(), failMsg)
+	Expect(output).To(ContainSubstring(wantSubstring))
 }
 
 func kubectlOutput(args ...string) (string, error) {
