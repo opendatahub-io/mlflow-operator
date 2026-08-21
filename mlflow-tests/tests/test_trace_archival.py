@@ -272,17 +272,14 @@ def _delete_job(batch_api: client.BatchV1Api, job_name: str, namespace: str) -> 
             logger.warning("Failed to delete Job %s: %s", job_name, exc)
 
 
-def _create_trace_payload(experiment_id: str, session_id: str, index: int) -> dict[str, str]:
+def _create_trace_payload(admin_client, experiment_id: str, index: int) -> dict[str, str]:
     trace_name = f"trace-archival-smoke-{index}"
     message = f"trace archival smoke message {index}"
     result = f"trace archival smoke result {index}"
-    span = mlflow.start_span_no_context(
+    span = admin_client.start_trace(
         name=trace_name,
         inputs={"message": message},
-        metadata={
-            "mlflow.trace.session": session_id,
-            "mlflow.trace.user": "trace-archival-smoke",
-        },
+        tags={"mlflow.trace.user": "trace-archival-smoke"},
         experiment_id=experiment_id,
     )
     span.set_outputs({"result": result})
@@ -291,7 +288,7 @@ def _create_trace_payload(experiment_id: str, session_id: str, index: int) -> di
         raise AssertionError(f"Trace '{trace_name}' did not return a trace/request id")
     if trace_id == NO_OP_SPAN_TRACE_ID:
         raise AssertionError(f"Trace '{trace_name}' returned a no-op span trace id")
-    span.end()
+    admin_client.end_trace(trace_id=trace_id, outputs={"result": result}, status="OK")
     return {
         "trace_id": trace_id,
         "trace_name": trace_name,
@@ -300,23 +297,22 @@ def _create_trace_payload(experiment_id: str, session_id: str, index: int) -> di
     }
 
 
-def _wait_for_session_traces(admin_client, experiment_id: str, session_id: str, expected_count: int):
+def _wait_for_expected_traces(admin_client, experiment_id: str, expected_trace_ids: set[str]):
     deadline = time.monotonic() + TRACE_VISIBILITY_TIMEOUT_SECONDS
     observed = {}
     while time.monotonic() < deadline:
         traces = admin_client.search_traces(experiment_ids=[experiment_id], max_results=100)
         observed = {}
         for trace in traces:
-            metadata = trace.info.trace_metadata or {}
-            if metadata.get("mlflow.trace.session") != session_id or not trace.data.spans:
+            if trace.info.trace_id not in expected_trace_ids or not trace.data.spans:
                 continue
             observed[trace.info.trace_id] = trace
-        if len(observed) >= expected_count:
+        if len(observed) >= len(expected_trace_ids):
             return observed
         time.sleep(POLL_INTERVAL_SECONDS)
 
     pytest.fail(
-        f"Expected {expected_count} visible traces for session {session_id}, "
+        f"Expected {len(expected_trace_ids)} visible traces for {sorted(expected_trace_ids)}, "
         f"found {len(observed)} after {TRACE_VISIBILITY_TIMEOUT_SECONDS}s"
     )
 
@@ -378,7 +374,6 @@ def test_trace_archival_job_archives_multiple_traces(setup_clients) -> None:
     )
     namespace = _operator_namespace()
     job_name = f"archival-e2e-{uuid.uuid4().hex[:8]}"
-    session_id = f"trace-archival-session-{uuid.uuid4().hex[:8]}"
     workspace = workspaces[0]
     retention_seconds = _retention_seconds()
     s3_client, bucket = _archive_s3_client()
@@ -402,13 +397,13 @@ def test_trace_archival_job_archives_multiple_traces(setup_clients) -> None:
         experiment_id = mlflow.create_experiment(experiment_name)
 
         expected_payloads = [
-            _create_trace_payload(experiment_id, session_id, index)
+            _create_trace_payload(admin_client, experiment_id, index)
             for index in range(ARCHIVAL_TRACE_COUNT)
         ]
-        mlflow.flush_trace_async_logging()
+        expected_trace_ids = {payload["trace_id"] for payload in expected_payloads}
 
-        observed_before = _wait_for_session_traces(
-            admin_client, experiment_id, session_id, ARCHIVAL_TRACE_COUNT
+        observed_before = _wait_for_expected_traces(
+            admin_client, experiment_id, expected_trace_ids
         )
         _assert_trace_payloads(observed_before, expected_payloads)
         _log_trace_diagnostics("Pre-archival", observed_before, expected_payloads)
@@ -426,8 +421,8 @@ def test_trace_archival_job_archives_multiple_traces(setup_clients) -> None:
         _wait_for_job_complete(batch_api, core_api, job_name, namespace)
         _wait_for_archive_objects(s3_client, bucket, before_archive_count)
 
-        observed_after = _wait_for_session_traces(
-            admin_client, experiment_id, session_id, ARCHIVAL_TRACE_COUNT
+        observed_after = _wait_for_expected_traces(
+            admin_client, experiment_id, expected_trace_ids
         )
         _assert_trace_payloads(observed_after, expected_payloads)
         _log_trace_diagnostics("Post-archival", observed_after, expected_payloads)
