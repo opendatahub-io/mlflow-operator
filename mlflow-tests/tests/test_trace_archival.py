@@ -274,20 +274,32 @@ def _delete_job(batch_api: client.BatchV1Api, job_name: str, namespace: str) -> 
 
 def _create_trace_payload(admin_client, experiment_id: str, index: int) -> dict[str, str]:
     trace_name = f"trace-archival-smoke-{index}"
+    child_span_name = f"{trace_name}-db-backed"
     message = f"trace archival smoke message {index}"
     result = f"trace archival smoke result {index}"
-    span = admin_client.start_trace(
+    root_span = admin_client.start_trace(
         name=trace_name,
         inputs={"message": message},
         tags={"mlflow.trace.user": "trace-archival-smoke"},
         experiment_id=experiment_id,
     )
-    span.set_outputs({"result": result})
-    trace_id = getattr(span, "request_id", None) or getattr(span, "trace_id", None)
+    trace_id = getattr(root_span, "request_id", None) or getattr(root_span, "trace_id", None)
     if trace_id is None:
         raise AssertionError(f"Trace '{trace_name}' did not return a trace/request id")
     if trace_id == NO_OP_SPAN_TRACE_ID:
         raise AssertionError(f"Trace '{trace_name}' returned a no-op span trace id")
+    child_span = admin_client.start_span(
+        name=child_span_name,
+        trace_id=trace_id,
+        parent_id=root_span.span_id,
+        inputs={"message": message},
+    )
+    admin_client.end_span(
+        trace_id=trace_id,
+        span_id=child_span.span_id,
+        outputs={"result": result},
+        status="OK",
+    )
     admin_client.end_trace(trace_id=trace_id, outputs={"result": result}, status="OK")
     return {
         "trace_id": trace_id,
