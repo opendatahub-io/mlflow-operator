@@ -83,6 +83,10 @@ def _archive_s3_client():
     if endpoint_url is not None:
         boto_kwargs["endpoint_url"] = endpoint_url
         boto_kwargs["config"] = BotocoreConfig(s3={"addressing_style": "path"})
+        # The SeaweedFS TLS test endpoint is port-forwarded to localhost, but the
+        # generated cert SANs only cover the in-cluster service DNS names.
+        if endpoint_url.startswith("https://localhost:") and Config.DISABLE_TLS == "true":
+            boto_kwargs["verify"] = False
 
     return boto3.client(**boto_kwargs), bucket
 

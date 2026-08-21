@@ -844,7 +844,11 @@ run_suite() {
         sleep 2
         # Some smoke paths, such as trace archival verification, talk to the
         # S3-compatible backend directly even when MLflow proxies artifacts.
-        export MLFLOW_S3_ENDPOINT_URL="${MLFLOW_S3_ENDPOINT_URL:-http://localhost:9000}"
+        local s3_endpoint_scheme="http"
+        if [ "${SEAWEEDFS_TLS:-false}" = "true" ]; then
+            s3_endpoint_scheme="https"
+        fi
+        export MLFLOW_S3_ENDPOINT_URL="${MLFLOW_S3_ENDPOINT_URL:-${s3_endpoint_scheme}://localhost:9000}"
     fi
 
     # ── Kube token ──────────────────────────────────────────────────────────────
