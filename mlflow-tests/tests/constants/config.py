@@ -17,6 +17,7 @@ class Config:
     AWS_SECRET_KEY = os.getenv("AWS_SECRET_ACCESS_KEY", "")
     S3_URL = os.getenv("MLFLOW_S3_ENDPOINT_URL", "")
     S3_BUCKET = os.getenv("AWS_S3_BUCKET", "")
+    TRACE_ARCHIVAL_RETENTION = os.getenv("TRACE_ARCHIVAL_RETENTION", "30d")
     WORKSPACE_LABEL_SELECTOR: str = os.getenv("WORKSPACE_LABEL_SELECTOR", "")
 
     WORKSPACES: list[str] = [

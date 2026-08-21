@@ -814,7 +814,7 @@ class MLflowDeployer:
                 "enabled": True,
                 "schedule": "0 0 1 1 *",
                 "location": f"s3://{self.args.s3_bucket}/trace-archive",
-                "retention": "30d",
+                "retention": self.args.trace_archival_retention,
                 "maxTracesPerPass": 1000,
             }
         else:
@@ -1271,7 +1271,10 @@ class MLflowDeployer:
         print(f"  Artifact Storage: {self.args.artifact_storage}")
         print(f"  Serve Artifacts: {self.args.serve_artifacts}")
         if self.args.artifact_storage in ("s3", "externals3"):
-            print(f"  Trace Archival: enabled (s3://{self.args.s3_bucket}/trace-archive)")
+            print(
+                "  Trace Archival: enabled "
+                f"(s3://{self.args.s3_bucket}/trace-archive, retention={self.args.trace_archival_retention})"
+            )
         print()
 
         # Write all GitHub Actions outputs immediately so they're available even if
@@ -1429,6 +1432,9 @@ def main():
                             "Omit for real AWS when using --artifact-storage externals3.")
     parser.add_argument("--s3-region", default="",
                        help="AWS region (optional; used when --artifact-storage externals3)")
+    parser.add_argument("--trace-archival-retention", default="30d",
+                       help="Retention passed to spec.traceArchival when artifact storage is s3 or externals3 "
+                            "(default: 30d).")
     parser.add_argument("--workspace-label-selector", default="")
 
     args = parser.parse_args()

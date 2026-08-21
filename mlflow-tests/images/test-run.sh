@@ -119,6 +119,10 @@ Skip / control flags:
 Other:
   NAMESPACE             Target namespace (default: opendatahub)
   MLFLOW_SA_NAME        Service account name created by the operator (default: mlflow-sa)
+  TRACE_ARCHIVAL_RETENTION
+                        Retention configured on spec.traceArchival for s3/externals3
+                        deploys (default: 1m for harness-driven runs so semantic
+                        archival smoke coverage can archive fresh test traces)
   workspaces            Comma-separated workspace namespace list (default: two random names)
   upgrade_test_workspace Static workspace namespace for upgrade pytest phases. During
                         upgrade-phase runs, the harness derives workspaces and RBAC
@@ -199,6 +203,7 @@ export NAMESPACE
 MLFLOW_NAME="mlflow"
 # SA name is set by the operator's Helm chart; see internal/controller/constants.go
 MLFLOW_SA_NAME="${MLFLOW_SA_NAME:-mlflow-sa}"
+TRACE_ARCHIVAL_RETENTION="${TRACE_ARCHIVAL_RETENTION:-1m}"
 
 MLFLOW_TAG="${MLFLOW_TAG:-master}"
 MLFLOW_IMAGE_REPO="${MLFLOW_IMAGE_REPO:-}"
@@ -655,6 +660,7 @@ run_suite() {
         [ -n "${POSTGRES_IMAGE:-}"  ] && deploy_args+=(--postgres-image  "$POSTGRES_IMAGE")
         [ -n "${SEAWEEDFS_IMAGE:-}" ] && deploy_args+=(--seaweedfs-image "$SEAWEEDFS_IMAGE")
         [ -n "${DB_SSLMODE:-}"      ] && deploy_args+=(--postgres-sslmode "$DB_SSLMODE")
+        [ -n "${TRACE_ARCHIVAL_RETENTION:-}" ] && deploy_args+=(--trace-archival-retention "$TRACE_ARCHIVAL_RETENTION")
         [ "${POSTGRES_TLS:-false}"  = "true" ] && deploy_args+=(--postgres-tls)
         [ "${SEAWEEDFS_TLS:-false}" = "true" ] && deploy_args+=(--seaweedfs-tls)
         [ -n "${CA_BUNDLE_PATH:-}"      ] && deploy_args+=(--ca-bundle-path       "$CA_BUNDLE_PATH")
@@ -859,6 +865,7 @@ run_suite() {
     # deploy.py defaults --serve-artifacts to "true"; export the same default so
     # Config.SERVE_ARTIFACTS stays in sync if the default ever changes.
     export serve_artifacts="${SERVE_ARTIFACTS}"
+    export TRACE_ARCHIVAL_RETENTION
     export AWS_S3_BUCKET="${AWS_S3_BUCKET:-${BUCKET:-}}"
 
     local results_file="${TEST_RESULTS_DIR}/xunit_report_${STORAGE_TYPE}.xml"

@@ -1,17 +1,25 @@
 """Live trace-archival smoke coverage against object storage.
 
-Creates a Job from the operator-managed CronJob template instead of waiting
-for a cron tick. Skipped unless artifact storage is S3-compatible.
+Creates several real traces, waits them past the harness-configured archival
+retention, runs a Job from the operator-managed CronJob template, then verifies
+that archive objects were written while the traces remain readable via MLflow.
 """
+
+from __future__ import annotations
 
 import logging
 import os
+import re
 import time
 import uuid
 
+import boto3
+import mlflow
 import pytest
+from botocore.config import Config as BotocoreConfig
 from kubernetes import client
 from kubernetes.client.rest import ApiException
+from mlflow.entities.span import NO_OP_SPAN_TRACE_ID
 
 from mlflow_tests.utils.client import ClientManager
 
@@ -21,13 +29,92 @@ logger = logging.getLogger(__name__)
 
 ARCHIVAL_CRONJOB_NAME = "mlflow-trace-archival"
 ARCHIVAL_CONTAINER_NAME = "mlflow-trace-archival"
+ARCHIVAL_PREFIX = "trace-archive"
+ARCHIVAL_TRACE_COUNT = 3
 CRONJOB_WAIT_TIMEOUT_SECONDS = 120
 JOB_COMPLETE_TIMEOUT_SECONDS = 180
+ARCHIVE_OBJECT_WAIT_TIMEOUT_SECONDS = 30
+RETENTION_WAIT_BUFFER_SECONDS = 10
+TRACE_VISIBILITY_TIMEOUT_SECONDS = 30
 POLL_INTERVAL_SECONDS = 2
 
 
 def _operator_namespace() -> str:
     return os.getenv("NAMESPACE", "opendatahub")
+
+
+def _retention_seconds() -> int:
+    raw = (Config.TRACE_ARCHIVAL_RETENTION or "").strip()
+    match = re.fullmatch(r"(\d+)([mhd])", raw)
+    if match is None:
+        pytest.skip(
+            "trace archival semantic smoke requires a harness-provided "
+            f"TRACE_ARCHIVAL_RETENTION using the x[mhd] grammar, got {raw!r}"
+        )
+
+    value = int(match.group(1))
+    unit = match.group(2)
+    multiplier = {"m": 60, "h": 3600, "d": 86400}[unit]
+    seconds = value * multiplier
+    if seconds > 300:
+        pytest.skip(
+            "trace archival semantic smoke only runs with a short retention "
+            f"(<= 5m); got {Config.TRACE_ARCHIVAL_RETENTION!r}"
+        )
+    return seconds
+
+
+def _archive_s3_client():
+    bucket = (Config.S3_BUCKET or "").strip()
+    access_key = (Config.AWS_ACCESS_KEY or "").strip()
+    secret_key = (Config.AWS_SECRET_KEY or "").strip()
+    if not bucket or not access_key or not secret_key:
+        pytest.skip(
+            "trace archival semantic smoke requires AWS_S3_BUCKET, "
+            "AWS_ACCESS_KEY_ID, and AWS_SECRET_ACCESS_KEY"
+        )
+
+    endpoint_url = (Config.S3_URL or "").strip() or None
+    boto_kwargs = {
+        "service_name": "s3",
+        "aws_access_key_id": access_key,
+        "aws_secret_access_key": secret_key,
+    }
+    if endpoint_url is not None:
+        boto_kwargs["endpoint_url"] = endpoint_url
+        boto_kwargs["config"] = BotocoreConfig(s3={"addressing_style": "path"})
+
+    return boto3.client(**boto_kwargs), bucket
+
+
+def _count_archive_objects(s3_client, bucket: str) -> int:
+    paginator = s3_client.get_paginator("list_objects_v2")
+    count = 0
+    for page in paginator.paginate(Bucket=bucket, Prefix=ARCHIVAL_PREFIX):
+        count += len(page.get("Contents", []))
+    return count
+
+
+def _wait_for_archive_objects(s3_client, bucket: str, before_count: int) -> int:
+    deadline = time.monotonic() + ARCHIVE_OBJECT_WAIT_TIMEOUT_SECONDS
+    while time.monotonic() < deadline:
+        after_count = _count_archive_objects(s3_client, bucket)
+        if after_count > before_count:
+            logger.info(
+                "Archive object count increased from %d to %d under prefix %s",
+                before_count,
+                after_count,
+                ARCHIVAL_PREFIX,
+            )
+            return after_count
+        time.sleep(POLL_INTERVAL_SECONDS)
+
+    after_count = _count_archive_objects(s3_client, bucket)
+    pytest.fail(
+        "Trace archival Job completed but no new archive objects appeared under "
+        f"s3://{bucket}/{ARCHIVAL_PREFIX} within {ARCHIVE_OBJECT_WAIT_TIMEOUT_SECONDS}s "
+        f"(before={before_count}, after={after_count})"
+    )
 
 
 def _wait_for_cronjob(batch_api: client.BatchV1Api, namespace: str) -> client.V1CronJob:
@@ -177,28 +264,137 @@ def _delete_job(batch_api: client.BatchV1Api, job_name: str, namespace: str) -> 
             logger.warning("Failed to delete Job %s: %s", job_name, exc)
 
 
+def _create_trace_payload(experiment_id: str, session_id: str, index: int) -> dict[str, str]:
+    trace_name = f"trace-archival-smoke-{index}"
+    message = f"trace archival smoke message {index}"
+    result = f"trace archival smoke result {index}"
+    span = mlflow.start_span_no_context(
+        name=trace_name,
+        inputs={"message": message},
+        metadata={
+            "mlflow.trace.session": session_id,
+            "mlflow.trace.user": "trace-archival-smoke",
+        },
+        experiment_id=experiment_id,
+    )
+    span.set_outputs({"result": result})
+    trace_id = getattr(span, "request_id", None) or getattr(span, "trace_id", None)
+    if trace_id is None:
+        raise AssertionError(f"Trace '{trace_name}' did not return a trace/request id")
+    if trace_id == NO_OP_SPAN_TRACE_ID:
+        raise AssertionError(f"Trace '{trace_name}' returned a no-op span trace id")
+    span.end()
+    return {
+        "trace_id": trace_id,
+        "trace_name": trace_name,
+        "message": message,
+        "result": result,
+    }
+
+
+def _wait_for_session_traces(admin_client, experiment_id: str, session_id: str, expected_count: int):
+    deadline = time.monotonic() + TRACE_VISIBILITY_TIMEOUT_SECONDS
+    observed = {}
+    while time.monotonic() < deadline:
+        traces = admin_client.search_traces(experiment_ids=[experiment_id], max_results=100)
+        observed = {}
+        for trace in traces:
+            metadata = trace.info.trace_metadata or {}
+            if metadata.get("mlflow.trace.session") != session_id or not trace.data.spans:
+                continue
+            observed[trace.info.trace_id] = trace
+        if len(observed) >= expected_count:
+            return observed
+        time.sleep(POLL_INTERVAL_SECONDS)
+
+    pytest.fail(
+        f"Expected {expected_count} visible traces for session {session_id}, "
+        f"found {len(observed)} after {TRACE_VISIBILITY_TIMEOUT_SECONDS}s"
+    )
+
+
+def _assert_trace_payloads(observed_traces, expected_payloads: list[dict[str, str]]) -> None:
+    for payload in expected_payloads:
+        trace = observed_traces.get(payload["trace_id"])
+        assert trace is not None, f"Trace {payload['trace_id']} was not found after archival"
+        assert trace.data.spans, f"Trace {payload['trace_id']} has no persisted spans"
+        root_span = trace.data.spans[0]
+        assert root_span.name == payload["trace_name"], (
+            f"Expected root span '{payload['trace_name']}', got '{root_span.name}'"
+        )
+        assert root_span.inputs.get("message") == payload["message"], (
+            f"Expected input message '{payload['message']}', got '{root_span.inputs.get('message')}'"
+        )
+        assert root_span.outputs.get("result") == payload["result"], (
+            f"Expected output result '{payload['result']}', got '{root_span.outputs.get('result')}'"
+        )
+
+
 @pytest.mark.smoke
 @pytest.mark.skipif(
     Config.ARTIFACT_STORAGE != "s3",
     reason="trace archival live Job requires object storage (artifact_storage=s3)",
 )
-def test_trace_archival_job_from_cronjob_completes() -> None:
+def test_trace_archival_job_archives_multiple_traces(setup_clients) -> None:
+    admin_client, _k8_manager, _user_manager, workspaces = setup_clients
     namespace = _operator_namespace()
     job_name = f"archival-e2e-{uuid.uuid4().hex[:8]}"
+    session_id = f"trace-archival-session-{uuid.uuid4().hex[:8]}"
+    workspace = workspaces[0]
+    retention_seconds = _retention_seconds()
+    s3_client, bucket = _archive_s3_client()
+    before_archive_count = _count_archive_objects(s3_client, bucket)
+    experiment_id: str | None = None
 
     ClientManager.load_k8s_config()
     batch_api = client.BatchV1Api()
     core_api = client.CoreV1Api()
 
     logger.info(
-        "Creating archival Job %s from CronJob %s in namespace %s",
+        "Creating %d traces in workspace %s, then running archival Job %s from CronJob %s",
+        ARCHIVAL_TRACE_COUNT,
+        workspace,
         job_name,
         ARCHIVAL_CRONJOB_NAME,
-        namespace,
     )
     try:
+        mlflow.set_workspace(workspace)
+        experiment_name = f"trace-archival-smoke-{uuid.uuid4().hex[:8]}"
+        experiment_id = mlflow.create_experiment(experiment_name)
+
+        expected_payloads = [
+            _create_trace_payload(experiment_id, session_id, index)
+            for index in range(ARCHIVAL_TRACE_COUNT)
+        ]
+        mlflow.flush_trace_async_logging()
+
+        observed_before = _wait_for_session_traces(
+            admin_client, experiment_id, session_id, ARCHIVAL_TRACE_COUNT
+        )
+        _assert_trace_payloads(observed_before, expected_payloads)
+
+        wait_seconds = retention_seconds + RETENTION_WAIT_BUFFER_SECONDS
+        logger.info(
+            "Waiting %ds for traces to age past archival retention %s",
+            wait_seconds,
+            Config.TRACE_ARCHIVAL_RETENTION,
+        )
+        time.sleep(wait_seconds)
+
         cronjob = _wait_for_cronjob(batch_api, namespace)
         batch_api.create_namespaced_job(namespace, _job_from_cronjob(cronjob, job_name, namespace))
         _wait_for_job_complete(batch_api, core_api, job_name, namespace)
+        _wait_for_archive_objects(s3_client, bucket, before_archive_count)
+
+        observed_after = _wait_for_session_traces(
+            admin_client, experiment_id, session_id, ARCHIVAL_TRACE_COUNT
+        )
+        _assert_trace_payloads(observed_after, expected_payloads)
     finally:
         _delete_job(batch_api, job_name, namespace)
+        if experiment_id is not None:
+            try:
+                mlflow.set_workspace(workspace)
+                admin_client.delete_experiment(experiment_id)
+            except Exception as exc:  # pragma: no cover - cleanup best effort
+                logger.warning("Failed to delete archival smoke experiment %s: %s", experiment_id, exc)
