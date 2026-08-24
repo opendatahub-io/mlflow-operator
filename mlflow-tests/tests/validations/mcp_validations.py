@@ -9,7 +9,7 @@ import logging
 
 import mlflow
 from mlflow.exceptions import MlflowException
-from ..shared import TestContext, ErrorResponse
+from ..shared import TestContext, ErrorResponse, ErrorCode
 from .validation_utils import validate_resource_retrieved_or_created
 
 logger = logging.getLogger(__name__)
@@ -295,3 +295,40 @@ def validate_mcp_access_endpoint_updated(test_context: TestContext) -> None:
         )
 
     logger.info(f"Successfully validated MCP access endpoint update (id: {updated.id}, url: {updated.url})")
+
+
+def validate_mcp_access_endpoint_deleted(test_context: TestContext) -> None:
+    """Validate that an MCP access endpoint was successfully deleted.
+
+    Expects the preceding action to be a GET on the deleted endpoint, and
+    that GET to have failed with a not-found error - confirming the delete
+    actually took effect rather than silently no-opping.
+
+    Args:
+        test_context: Test context containing the GET-after-delete result.
+
+    Raises:
+        AssertionError: If the endpoint is still retrievable, or the GET
+            failed for a reason other than not-found.
+    """
+    user_name = test_context.active_user.uname if test_context.active_user else "unknown"
+    endpoint_id = test_context.active_mcp_access_endpoint_id
+    logger.info(f"Validating MCP access endpoint deletion for user '{user_name}' (endpoint: {endpoint_id})")
+
+    if test_context.last_error is None:
+        logger.error(f"Validation failed: MCP access endpoint {endpoint_id} still retrievable after deletion")
+        raise AssertionError(
+            f"MCP access endpoint deletion verification failed - endpoint {endpoint_id} still exists"
+        )
+
+    error_response: ErrorResponse = test_context.last_error
+    if error_response.error.code != ErrorCode.RESOURCE_NOT_FOUND:
+        logger.error(
+            f"Validation failed: expected RESOURCE_NOT_FOUND, got {error_response.error.code} - {error_response.error.message}"
+        )
+        raise AssertionError(
+            f"MCP access endpoint deletion verification failed for user {user_name} - unexpected error while "
+            f"checking {endpoint_id}: {error_response.error.code} - {error_response.error.message}"
+        )
+
+    logger.info(f"Successfully validated MCP access endpoint deletion (id: {endpoint_id})")

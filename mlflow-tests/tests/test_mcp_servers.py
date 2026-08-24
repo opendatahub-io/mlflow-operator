@@ -31,6 +31,7 @@ from .validations.mcp_validations import (
     validate_mcp_access_endpoint_retrieved,
     validate_mcp_access_endpoint_search_excludes_other_workspace,
     validate_mcp_access_endpoint_updated,
+    validate_mcp_access_endpoint_deleted,
 )
 from .validations import validate_authentication_denied, validate_no_error
 
@@ -615,6 +616,18 @@ class TestMCPServers(TestBase):
                 TestStep(action_func=action_register_mcp_server_version, validate_func=validate_no_error),
                 TestStep(action_func=action_create_mcp_access_endpoint, validate_func=validate_mcp_access_endpoint_created),
                 TestStep(action_func=action_delete_mcp_access_endpoint, validate_func=validate_no_error),
+                # Post-delete state check, run as a GET-only user so this proves the
+                # endpoint is actually gone rather than re-using the UPDATE-only
+                # session above (which would fail with PERMISSION_DENIED on GET).
+                TestStep(
+                    action_func=action_get_mcp_access_endpoint,
+                    validate_func=validate_mcp_access_endpoint_deleted,
+                    user_info=UserInfo(
+                        workspace=Config.WORKSPACES[0],
+                        verbs=[KubeVerb.GET],
+                        resource_types=[ResourceType.MCP_SERVERS],
+                    ),
+                ),
             ],
         ),
         TestData(
