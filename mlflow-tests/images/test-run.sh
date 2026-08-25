@@ -195,6 +195,9 @@ SUPPORTED_MLFLOW_VERSION_RAW="${SUPPORTED_MLFLOW_VERSION_RAW:-$(get_supported_ml
 # ─── Defaults ─────────────────────────────────────────────────────────────────
 
 NAMESPACE="${NAMESPACE:-opendatahub}"
+# RHOAI deployments use `redhat-ods-applications` instead of `opendatahub` —
+# see config/overlays/rhoai/kustomization.yaml. Override explicitly, e.g.
+# NAMESPACE=redhat-ods-applications bash images/test-run.sh
 MLFLOW_NAME="mlflow"
 # SA name is set by the operator's Helm chart; see internal/controller/constants.go
 MLFLOW_SA_NAME="${MLFLOW_SA_NAME:-mlflow-sa}"
