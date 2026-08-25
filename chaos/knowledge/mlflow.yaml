@@ -59,10 +59,6 @@ components:
         kind: Lease
         name: a5eb1b3b.opendatahub.io
         namespace: redhat-ods-applications
-      - apiVersion: monitoring.coreos.com/v1
-        kind: ServiceMonitor
-        name: controller-manager-metrics-monitor
-        namespace: redhat-ods-applications
     steadyState:
       checks:
         - type: conditionTrue
