@@ -22,6 +22,7 @@ import (
 	"strings"
 
 	"github.com/Masterminds/semver/v3"
+	monitoringv1 "github.com/prometheus-operator/prometheus-operator/pkg/apis/monitoring/v1"
 	corev1 "k8s.io/api/core/v1"
 	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -42,32 +43,39 @@ import (
 )
 
 const (
-	mlflowOperatorFinalizer = "mlflow.opendatahub.io/mlflow-operator-protection"
-	readyConditionType      = "Ready"
-	readyReason             = "Ready"
-	configPendingReason     = "ConfigPending"
-	mlflowInstancesReason   = "MLflowInstancesPresent"
-	phaseProgressing        = "Progressing"
-	phaseReady              = "Ready"
-	platformConfigMapName   = "odh-mlflowoperator-config"
-	platformVersionKey      = "platformVersion"
-	platformReleaseName     = "platform"
-	mlflowReleaseName       = "MLflow"
-	mlflowRepoURL           = "https://github.com/mlflow/mlflow"
-	maxReleaseVersionLength = 64
+	mlflowOperatorFinalizer    = "mlflow.opendatahub.io/mlflow-operator-protection"
+	readyConditionType         = "Ready"
+	readyReason                = "Ready"
+	configPendingReason        = "ConfigPending"
+	mlflowInstancesReason      = "MLflowInstancesPresent"
+	phaseProgressing           = "Progressing"
+	phaseReady                 = "Ready"
+	platformConfigMapName      = "odh-mlflowoperator-config"
+	platformVersionKey         = "platformVersion"
+	platformReleaseName        = "platform"
+	mlflowReleaseName          = "MLflow"
+	mlflowRepoURL              = "https://github.com/mlflow/mlflow"
+	maxReleaseVersionLength    = 64
+	operatorMetricsMonitorName = "mlflow-operator-controller-manager-metrics-monitor"
+	operatorMetricsServiceName = "mlflow-operator-controller-manager-metrics-service"
+	metricsPortName            = "https"
+	metricsServiceCAConfigMap  = "openshift-service-ca.crt"
+	metricsServiceCAKey        = "service-ca.crt"
 )
 
 // MLflowOperatorReconciler reconciles the singleton MLflowOperator module CR.
 type MLflowOperatorReconciler struct {
 	client.Client
-	Scheme                *runtime.Scheme
-	ApplicationsNamespace string
+	Scheme                  *runtime.Scheme
+	ApplicationsNamespace   string
+	ServiceMonitorAvailable bool
 }
 
 // +kubebuilder:rbac:groups=components.platform.opendatahub.io,resources=mlflowoperators,verbs=get;list;watch;update;patch
 // +kubebuilder:rbac:groups=components.platform.opendatahub.io,resources=mlflowoperators/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=components.platform.opendatahub.io,resources=mlflowoperators/finalizers,verbs=update
 // +kubebuilder:rbac:groups=mlflow.opendatahub.io,resources=mlflows,verbs=get;list;watch
+// +kubebuilder:rbac:groups=monitoring.coreos.com,resources=servicemonitors,verbs=create;delete;get;list;patch;update;watch
 
 func (r *MLflowOperatorReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
@@ -84,6 +92,12 @@ func (r *MLflowOperatorReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 				return ctrl.Result{}, fmt.Errorf("add MLflowOperator finalizer: %w", err)
 			}
 			return ctrl.Result{}, nil
+		}
+
+		if r.ServiceMonitorAvailable {
+			if err := r.reconcileMetricsServiceMonitor(ctx, module); err != nil {
+				return ctrl.Result{}, err
+			}
 		}
 
 		if missing := missingRequiredModuleConfig(module); len(missing) > 0 {
@@ -130,7 +144,7 @@ func (r *MLflowOperatorReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 }
 
 func (r *MLflowOperatorReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	return ctrl.NewControllerManagedBy(mgr).
+	builder := ctrl.NewControllerManagedBy(mgr).
 		For(&modulev1alpha1.MLflowOperator{}).
 		Watches(
 			&mlflowv1.MLflow{},
@@ -146,8 +160,59 @@ func (r *MLflowOperatorReconciler) SetupWithManager(mgr ctrl.Manager) error {
 			controllerbuilder.WithPredicates(predicate.NewPredicateFuncs(func(obj client.Object) bool {
 				return obj.GetName() == platformConfigMapName
 			})),
-		).
-		Complete(r)
+		)
+	if r.ServiceMonitorAvailable {
+		builder = builder.Owns(&monitoringv1.ServiceMonitor{})
+	}
+	return builder.Complete(r)
+}
+
+func (r *MLflowOperatorReconciler) reconcileMetricsServiceMonitor(ctx context.Context, module *modulev1alpha1.MLflowOperator) error {
+	serverName := fmt.Sprintf("%s.%s.svc", operatorMetricsServiceName, r.ApplicationsNamespace)
+	monitor := &monitoringv1.ServiceMonitor{ObjectMeta: metav1.ObjectMeta{
+		Name:      operatorMetricsMonitorName,
+		Namespace: r.ApplicationsNamespace,
+	}}
+	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, monitor, func() error {
+		monitor.Labels = map[string]string{
+			"app":                    "mlflow",
+			"control-plane":          "controller-manager",
+			"app.kubernetes.io/name": "mlflow-operator",
+		}
+		monitor.Spec = monitoringv1.ServiceMonitorSpec{
+			Endpoints: []monitoringv1.Endpoint{{
+				Path:            "/metrics",
+				Port:            metricsPortName,
+				Scheme:          schemeHTTPS(),
+				BearerTokenFile: "/var/run/secrets/kubernetes.io/serviceaccount/token",
+				HTTPConfigWithProxyAndTLSFiles: monitoringv1.HTTPConfigWithProxyAndTLSFiles{
+					HTTPConfigWithTLSFiles: monitoringv1.HTTPConfigWithTLSFiles{
+						TLSConfig: &monitoringv1.TLSConfig{SafeTLSConfig: monitoringv1.SafeTLSConfig{
+							CA: monitoringv1.SecretOrConfigMap{ConfigMap: &corev1.ConfigMapKeySelector{
+								LocalObjectReference: corev1.LocalObjectReference{Name: metricsServiceCAConfigMap},
+								Key:                  metricsServiceCAKey,
+							}},
+							ServerName: &serverName,
+						}},
+					},
+				},
+			}},
+			Selector: metav1.LabelSelector{MatchLabels: map[string]string{
+				"control-plane":          "controller-manager",
+				"app.kubernetes.io/name": "mlflow-operator",
+			}},
+		}
+		return controllerutil.SetControllerReference(module, monitor, r.Scheme)
+	})
+	if err != nil {
+		return fmt.Errorf("reconcile metrics ServiceMonitor %s/%s: %w", r.ApplicationsNamespace, operatorMetricsMonitorName, err)
+	}
+	return nil
+}
+
+func schemeHTTPS() *monitoringv1.Scheme {
+	scheme := monitoringv1.SchemeHTTPS
+	return &scheme
 }
 
 func (r *MLflowOperatorReconciler) updateModuleStatus(

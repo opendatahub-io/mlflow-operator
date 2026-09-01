@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	monitoringv1 "github.com/prometheus-operator/prometheus-operator/pkg/apis/monitoring/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -24,6 +25,68 @@ func newMLflowOperatorReconciler(cli client.Client, scheme *runtime.Scheme, appl
 		Client:                cli,
 		Scheme:                scheme,
 		ApplicationsNamespace: applicationsNamespace,
+	}
+}
+
+func TestMLflowOperatorReconcileManagesMetricsServiceMonitor(t *testing.T) {
+	scheme := runtime.NewScheme()
+	for _, addToScheme := range []func(*runtime.Scheme) error{
+		modulev1alpha1.AddToScheme,
+		mlflowv1.AddToScheme,
+		monitoringv1.AddToScheme,
+		corev1.AddToScheme,
+	} {
+		if err := addToScheme(scheme); err != nil {
+			t.Fatalf("add type to scheme: %v", err)
+		}
+	}
+
+	module := &modulev1alpha1.MLflowOperator{ObjectMeta: metav1.ObjectMeta{
+		Name:       modulev1alpha1.MLflowOperatorInstanceName,
+		Generation: 1,
+	}, Spec: modulev1alpha1.MLflowOperatorSpec{MLflowOperatorCommonSpec: modulev1alpha1.MLflowOperatorCommonSpec{
+		GatewayName: "data-science-gateway", SectionTitle: "OpenShift AI",
+	}}}
+	fakeClient := fake.NewClientBuilder().WithScheme(scheme).
+		WithStatusSubresource(&modulev1alpha1.MLflowOperator{}).
+		WithObjects(module).Build()
+	reconciler := newMLflowOperatorReconciler(fakeClient, scheme, "redhat-ods-applications")
+	reconciler.ServiceMonitorAvailable = true
+	req := reconcile.Request{NamespacedName: types.NamespacedName{Name: modulev1alpha1.MLflowOperatorInstanceName}}
+
+	if _, err := reconciler.Reconcile(context.Background(), req); err != nil {
+		t.Fatalf("add finalizer: %v", err)
+	}
+	if _, err := reconciler.Reconcile(context.Background(), req); err != nil {
+		t.Fatalf("reconcile metrics monitor: %v", err)
+	}
+
+	monitor := &monitoringv1.ServiceMonitor{}
+	if err := fakeClient.Get(context.Background(), types.NamespacedName{
+		Name: operatorMetricsMonitorName, Namespace: "redhat-ods-applications",
+	}, monitor); err != nil {
+		t.Fatalf("get metrics ServiceMonitor: %v", err)
+	}
+	if len(monitor.OwnerReferences) != 1 || monitor.OwnerReferences[0].Name != module.Name || !*monitor.OwnerReferences[0].Controller {
+		t.Fatalf("expected module controller owner reference, got %#v", monitor.OwnerReferences)
+	}
+	if monitor.Labels["app"] != "mlflow" {
+		t.Fatalf("expected ServiceMonitor to match the operator cache selector, got labels %#v", monitor.Labels)
+	}
+	if _, found := monitor.Labels["app.kubernetes.io/managed-by"]; found {
+		t.Fatalf("ServiceMonitor should not retain a kustomize managed-by label, got labels %#v", monitor.Labels)
+	}
+	endpoint := monitor.Spec.Endpoints[0]
+	if endpoint.Path != "/metrics" || endpoint.Port != metricsPortName || endpoint.Scheme == nil || *endpoint.Scheme != monitoringv1.SchemeHTTPS {
+		t.Fatalf("unexpected endpoint: %#v", endpoint)
+	}
+	if endpoint.TLSConfig == nil || endpoint.TLSConfig.ServerName == nil || *endpoint.TLSConfig.ServerName != "mlflow-operator-controller-manager-metrics-service.redhat-ods-applications.svc" {
+		t.Fatalf("unexpected TLS config: %#v", endpoint.TLSConfig)
+	}
+	if got := monitor.Spec.Selector.MatchLabels; len(got) != 2 ||
+		got["control-plane"] != "controller-manager" ||
+		got["app.kubernetes.io/name"] != "mlflow-operator" {
+		t.Fatalf("unexpected metrics Service selector: %#v", got)
 	}
 }
 
@@ -181,6 +244,44 @@ func TestMLflowOperatorReconcileBlocksReadyUntilRequiredProjectedFieldsExist(t *
 	}
 	if module.Status.Phase != phaseProgressing {
 		t.Fatalf("expected phase %q while config is incomplete, got %q", phaseProgressing, module.Status.Phase)
+	}
+}
+
+func TestMLflowOperatorReconcileCreatesMetricsMonitorBeforeRequiredConfigIsAvailable(t *testing.T) {
+	scheme := runtime.NewScheme()
+	for _, addToScheme := range []func(*runtime.Scheme) error{
+		modulev1alpha1.AddToScheme,
+		mlflowv1.AddToScheme,
+		monitoringv1.AddToScheme,
+		corev1.AddToScheme,
+	} {
+		if err := addToScheme(scheme); err != nil {
+			t.Fatalf("add type to scheme: %v", err)
+		}
+	}
+
+	module := &modulev1alpha1.MLflowOperator{ObjectMeta: metav1.ObjectMeta{
+		Name: modulev1alpha1.MLflowOperatorInstanceName,
+	}, Spec: modulev1alpha1.MLflowOperatorSpec{MLflowOperatorCommonSpec: modulev1alpha1.MLflowOperatorCommonSpec{
+		GatewayName: "data-science-gateway",
+	}}}
+	k8sClient := fake.NewClientBuilder().WithScheme(scheme).
+		WithStatusSubresource(&modulev1alpha1.MLflowOperator{}).
+		WithObjects(module).Build()
+	reconciler := newMLflowOperatorReconciler(k8sClient, scheme, "redhat-ods-applications")
+	reconciler.ServiceMonitorAvailable = true
+	request := reconcile.Request{NamespacedName: types.NamespacedName{Name: modulev1alpha1.MLflowOperatorInstanceName}}
+
+	if _, err := reconciler.Reconcile(context.Background(), request); err != nil {
+		t.Fatalf("first reconcile: %v", err)
+	}
+	if _, err := reconciler.Reconcile(context.Background(), request); err != nil {
+		t.Fatalf("second reconcile: %v", err)
+	}
+	if err := k8sClient.Get(context.Background(), types.NamespacedName{
+		Name: operatorMetricsMonitorName, Namespace: "redhat-ods-applications",
+	}, &monitoringv1.ServiceMonitor{}); err != nil {
+		t.Fatalf("expected metrics ServiceMonitor while required module config is pending: %v", err)
 	}
 }
 

@@ -61,7 +61,7 @@ components:
         namespace: redhat-ods-applications
       - apiVersion: monitoring.coreos.com/v1
         kind: ServiceMonitor
-        name: controller-manager-metrics-monitor
+        name: mlflow-operator-controller-manager-metrics-monitor
         namespace: redhat-ods-applications
     steadyState:
       checks:
