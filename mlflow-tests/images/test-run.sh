@@ -222,10 +222,14 @@ harness_error_body() {
 
 # Compact cluster/HTTP snapshot for Jenkins Test Result. Full pod logs still go
 # through collect-debug-logs.sh into TEST_RESULTS_DIR/debug/.
+# kubectl calls are time-bounded so a hung API cannot block JUnit emission;
+# fail_suite/fail_run write the XML first, then snapshot, then refresh the
+# harness report if we created it.
 capture_failure_snapshot() {
     local reason="${1:-harness failure}"
     local snapshot_dir="${TEST_RESULTS_DIR}/debug"
     local snapshot_file="${snapshot_dir}/failure-snapshot.txt"
+    local kubectl_cmd=(kubectl --request-timeout=15s)
     mkdir -p "$snapshot_dir" || return 0
 
     {
@@ -237,21 +241,21 @@ capture_failure_snapshot() {
         echo "MLFLOW_TRACKING_URI=${MLFLOW_TRACKING_URI:-unset}"
         echo
         echo "--- deployments ---"
-        kubectl get deploy -n "${NAMESPACE:-}" -o wide 2>&1 || true
+        "${kubectl_cmd[@]}" get deploy -n "${NAMESPACE:-}" -o wide 2>&1 || true
         echo
         echo "--- pods ---"
-        kubectl get pods -n "${NAMESPACE:-}" -o wide 2>&1 || true
+        "${kubectl_cmd[@]}" get pods -n "${NAMESPACE:-}" -o wide 2>&1 || true
         echo
         echo "--- mlflow CR ---"
-        if [ -n "${NAMESPACE:-}" ] && kubectl get mlflow "${MLFLOW_NAME:-mlflow}" -n "$NAMESPACE" >/dev/null 2>&1; then
-            kubectl get mlflow "${MLFLOW_NAME:-mlflow}" -n "$NAMESPACE" \
+        if [ -n "${NAMESPACE:-}" ] && "${kubectl_cmd[@]}" get mlflow "${MLFLOW_NAME:-mlflow}" -n "$NAMESPACE" >/dev/null 2>&1; then
+            "${kubectl_cmd[@]}" get mlflow "${MLFLOW_NAME:-mlflow}" -n "$NAMESPACE" \
                 -o jsonpath='url={.status.url}{"\n"}version={.status.version}{"\n"}{range .status.conditions[*]}{.type}={.status} reason={.reason} message={.message}{"\n"}{end}' 2>&1 || true
             echo
         else
             echo "MLflow CR not found (or kubectl/namespace unavailable)"
         fi
         echo "--- warning events ---"
-        kubectl get events -n "${NAMESPACE:-}" --field-selector type=Warning --sort-by=.lastTimestamp 2>&1 | tail -n 20 || true
+        "${kubectl_cmd[@]}" get events -n "${NAMESPACE:-}" --field-selector type=Warning --sort-by=.lastTimestamp 2>&1 | tail -n 20 || true
         echo
         if [ -f "${snapshot_dir}/server-info-last-stderr.txt" ] || [ -f "${snapshot_dir}/server-info-last-body.txt" ]; then
             echo "--- last server-info probe ---"
@@ -272,31 +276,46 @@ write_harness_junit_error() {
     local test_name="$1"
     local message="$2"
     local output_file body snapshot_file
+    local extra_args=()
     output_file="$(harness_junit_path)"
     body="$(harness_error_body "$message")"
     snapshot_file="${TEST_RESULTS_DIR}/debug/failure-snapshot.txt"
     if [ -f "$snapshot_file" ]; then
         body="${body}"$'\n\n'"$(head -c 8192 "$snapshot_file" 2>/dev/null || true)"
     fi
-    if ! python3 "$SCRIPT_DIR/write_harness_junit.py" \
+    if [ "${3:-}" = "--replace" ]; then
+        extra_args+=(--replace)
+    fi
+    local writer_rc=0
+    python3 "$SCRIPT_DIR/write_harness_junit.py" \
         --output "$output_file" \
         --suite "$JUNIT_SUITE_NAME" \
         --name "$test_name" \
         --message "$message" \
-        --body "$body"; then
-        echo "WARN: failed to write harness JUnit report to ${output_file}" >&2
+        --body "$body" \
+        "${extra_args[@]}" || writer_rc=$?
+    if [ "$writer_rc" -eq 0 ]; then
         return 0
     fi
+    if [ "$writer_rc" -ne 2 ]; then
+        echo "WARN: failed to write harness JUnit report to ${output_file}" >&2
+    fi
+    return 1
 }
 
 fail_suite() {
+    local wrote_junit=0
+    if write_harness_junit_error "$1" "$2"; then
+        wrote_junit=1
+    fi
     capture_failure_snapshot "$2"
-    write_harness_junit_error "$1" "$2"
+    if [ "$wrote_junit" -eq 1 ]; then
+        write_harness_junit_error "$1" "$2" --replace || true
+    fi
 }
 
 fail_run() {
-    capture_failure_snapshot "$2"
-    write_harness_junit_error "$1" "$2"
+    fail_suite "$1" "$2"
     exit 1
 }
 

@@ -52,3 +52,22 @@ def test_write_harness_error_junit_does_not_overwrite_existing(tmp_path: Path) -
 
     assert wrote is False
     assert output.read_text(encoding="utf-8") == original
+
+
+def test_write_harness_error_junit_replace_overwrites_existing(tmp_path: Path) -> None:
+    output = tmp_path / "xunit_report_file.xml"
+    output.write_text("<testsuites><testsuite name='old'/></testsuites>", encoding="utf-8")
+
+    wrote = write_harness_error_junit(
+        str(output),
+        test_name="test_deploy",
+        message="deploy.py failed",
+        body="snapshot included",
+        replace=True,
+    )
+
+    assert wrote is True
+    root = parse(output).getroot()
+    case = root.find("testsuite").find("testcase")
+    assert case.get("name") == "test_deploy"
+    assert "snapshot included" in (case.find("error").text or "")
