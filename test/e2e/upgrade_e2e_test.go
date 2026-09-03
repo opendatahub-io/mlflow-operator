@@ -42,6 +42,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
+	modulev1alpha1 "github.com/opendatahub-io/mlflow-operator/api/mlflowoperator/v1alpha1"
 	mlflowv1 "github.com/opendatahub-io/mlflow-operator/api/v1"
 	controllerpkg "github.com/opendatahub-io/mlflow-operator/internal/controller"
 )
@@ -207,6 +208,57 @@ var _ = Describe("Upgrade", Ordered, Label("upgrade"), func() {
 		schemaCheckLogs := runSchemaVerificationJob(ctx, k8sClient, clientset, currentMLflowImage(deployment), mlflow)
 		Expect(schemaCheckLogs).To(ContainSubstring("latest="))
 		Expect(schemaCheckLogs).To(ContainSubstring("backend-revision="))
+
+		By("creating the MLflowOperator singleton before enabling the module-controller path")
+		module := &modulev1alpha1.MLflowOperator{
+			ObjectMeta: metav1.ObjectMeta{Name: modulev1alpha1.MLflowOperatorInstanceName},
+			Spec: modulev1alpha1.MLflowOperatorSpec{
+				MLflowOperatorCommonSpec: modulev1alpha1.MLflowOperatorCommonSpec{
+					GatewayName:  "data-science-gateway",
+					SectionTitle: "OpenShift Open Data Hub",
+				},
+			},
+		}
+		err := k8sClient.Create(ctx, module)
+		if !apierrors.IsAlreadyExists(err) {
+			Expect(err).NotTo(HaveOccurred())
+		}
+		createOrReplace(ctx, k8sClient, &corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "odh-mlflowoperator-config",
+				Namespace: namespace,
+			},
+			Data: map[string]string{
+				"platformVersion": "2.20.0",
+			},
+		})
+
+		By("enabling the module-controller path so MLflowOperator can publish status.releases")
+		setControllerEnv(ctx, k8sClient, map[string]string{
+			"ENABLE_MLFLOW_OPERATOR_MODULE_CONTROLLER": "true",
+			"APPLICATIONS_NAMESPACE":                   namespace,
+		})
+		controllerPodName = waitForControllerPodReady(ctx, k8sClient)
+
+		By("waiting for MLflowOperator.status.releases to report the upgraded MLflow version")
+		Expect(controllerpkg.SupportedMLflowVersion).NotTo(BeEmpty())
+		Eventually(func(g Gomega) {
+			module := &modulev1alpha1.MLflowOperator{}
+			err := k8sClient.Get(ctx, types.NamespacedName{Name: modulev1alpha1.MLflowOperatorInstanceName}, module)
+			g.Expect(err).NotTo(HaveOccurred())
+			g.Expect(moduleReady(module)).To(BeTrue())
+
+			upgraded := &mlflowv1.MLflow{}
+			g.Expect(k8sClient.Get(ctx, types.NamespacedName{Name: "mlflow"}, upgraded)).To(Succeed())
+			g.Expect(upgraded.Status.Version).To(Equal(controllerpkg.SupportedMLflowVersion))
+
+			mlflowRelease, found := moduleReleaseNamed(module.Status.Releases, "MLflow")
+			g.Expect(found).To(BeTrue())
+			g.Expect(mlflowRelease.Version).To(Equal(controllerpkg.SupportedMLflowVersion))
+			platformRelease, found := moduleReleaseNamed(module.Status.Releases, "platform")
+			g.Expect(found).To(BeTrue())
+			g.Expect(platformRelease.Version).To(Equal("2.20.0"))
+		}, 2*time.Minute, time.Second).Should(Succeed())
 	})
 })
 
@@ -217,6 +269,7 @@ func newUpgradeClients() (client.Client, kubernetes.Interface) {
 	Expect(batchv1.AddToScheme(scheme)).To(Succeed())
 	Expect(corev1.AddToScheme(scheme)).To(Succeed())
 	Expect(mlflowv1.AddToScheme(scheme)).To(Succeed())
+	Expect(modulev1alpha1.AddToScheme(scheme)).To(Succeed())
 
 	k8sClient, err := client.New(cfg, client.Options{Scheme: scheme})
 	Expect(err).NotTo(HaveOccurred())
@@ -238,6 +291,73 @@ func createOrReplace(ctx context.Context, k8sClient client.Client, obj client.Ob
 		err = k8sClient.Create(ctx, obj)
 	}
 	Expect(err).NotTo(HaveOccurred())
+}
+
+func setControllerEnv(ctx context.Context, k8sClient client.Client, env map[string]string) {
+	deployment := &appsv1.Deployment{}
+	Expect(
+		k8sClient.Get(
+			ctx,
+			types.NamespacedName{Name: controllerDeploymentName, Namespace: namespace},
+			deployment,
+		),
+	).To(Succeed())
+
+	before := deployment.DeepCopy()
+	Expect(setContainerEnv(deployment, controllerContainerName, env)).To(Succeed())
+	Expect(k8sClient.Patch(ctx, deployment, client.MergeFrom(before))).To(Succeed())
+}
+
+func setContainerEnv(deployment *appsv1.Deployment, containerName string, env map[string]string) error {
+	for i := range deployment.Spec.Template.Spec.Containers {
+		if deployment.Spec.Template.Spec.Containers[i].Name != containerName {
+			continue
+		}
+		for key, value := range env {
+			found := false
+			for j := range deployment.Spec.Template.Spec.Containers[i].Env {
+				if deployment.Spec.Template.Spec.Containers[i].Env[j].Name == key {
+					deployment.Spec.Template.Spec.Containers[i].Env[j].Value = value
+					found = true
+					break
+				}
+			}
+			if !found {
+				deployment.Spec.Template.Spec.Containers[i].Env = append(
+					deployment.Spec.Template.Spec.Containers[i].Env,
+					corev1.EnvVar{Name: key, Value: value},
+				)
+			}
+		}
+		return nil
+	}
+	return fmt.Errorf(
+		"deployment %s/%s does not contain container %q",
+		deployment.Namespace,
+		deployment.Name,
+		containerName,
+	)
+}
+
+func moduleReady(module *modulev1alpha1.MLflowOperator) bool {
+	for _, condition := range module.Status.Conditions {
+		if condition.Type == "Ready" && condition.Status == metav1.ConditionTrue {
+			return true
+		}
+	}
+	return false
+}
+
+func moduleReleaseNamed(
+	releases []modulev1alpha1.ComponentRelease,
+	name string,
+) (modulev1alpha1.ComponentRelease, bool) {
+	for _, release := range releases {
+		if release.Name == name {
+			return release, true
+		}
+	}
+	return modulev1alpha1.ComponentRelease{}, false
 }
 
 func updateControllerDeployment(ctx context.Context, k8sClient client.Client, image string, replicas int32) {

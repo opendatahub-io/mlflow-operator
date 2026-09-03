@@ -23,12 +23,14 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
+	controllerpkg "github.com/opendatahub-io/mlflow-operator/internal/controller"
 	"github.com/opendatahub-io/mlflow-operator/test/utils"
 )
 
@@ -205,7 +207,7 @@ var _ = Describe("Manager", Ordered, func() {
 	SetDefaultEventuallyTimeout(2 * time.Minute)
 	SetDefaultEventuallyPollingInterval(time.Second)
 
-	Context("Manager", func() {
+	Context("Manager", Ordered, func() {
 		It("should run successfully", func() {
 			By("validating that the controller-manager pod is running as expected")
 			verifyControllerUp := func(g Gomega) {
@@ -503,88 +505,57 @@ spec:
 			Eventually(verifyConfigDeleted, 30*time.Second).Should(Succeed())
 		})
 
-		It("should reconcile MLflow through the MLflowOperator handoff lifecycle", func() {
-			const mlflowOperatorName = "default-mlflowoperator"
-			const mlflowName = "mlflow"
-			var err error
-
-			By("enabling the MLflowOperator module controller path on the deployed operator")
-			cmd := exec.Command(
-				"kubectl", "set", "env",
-				fmt.Sprintf("deployment/%s", controllerDeploymentName),
-				"-n", namespace,
-				"ENABLE_MLFLOW_OPERATOR_MODULE_CONTROLLER=true",
+		Context("MLflowOperator handoff", Ordered, func() {
+			const (
+				mlflowOperatorName    = "default-mlflowoperator"
+				mlflowName            = "mlflow"
+				platformConfigMapName = "odh-mlflowoperator-config"
+				platformVersion       = "2.20.0"
+				gatewayDomain         = "mlflow.apps.example.com"
 			)
-			_, err = utils.Run(cmd)
-			Expect(err).NotTo(HaveOccurred(), "Failed to enable module-controller mode")
-			DeferCleanup(func() {
-				resetCmd := exec.Command(
-					"kubectl", "set", "env",
-					fmt.Sprintf("deployment/%s", controllerDeploymentName),
-					"-n", namespace,
-					"ENABLE_MLFLOW_OPERATOR_MODULE_CONTROLLER=false",
+
+			BeforeAll(func() {
+				By("enabling the MLflowOperator module controller path on the deployed operator")
+				setOperatorDeploymentEnv(
+					"ENABLE_MLFLOW_OPERATOR_MODULE_CONTROLLER=true",
+					"APPLICATIONS_NAMESPACE="+namespace,
 				)
-				_, _ = utils.Run(resetCmd)
-				waitCmd := exec.Command(
-					"kubectl", "rollout", "status",
-					fmt.Sprintf("deployment/%s", controllerDeploymentName),
-					"-n", namespace,
-					"--timeout=3m",
-				)
-				_, _ = utils.Run(waitCmd)
+				waitForOperatorRollout()
 				controllerPodName = waitForControllerPodName()
-			})
 
-			By("waiting for the controller rollout to finish after the env change")
-			cmd = exec.Command(
-				"kubectl", "rollout", "status",
-				fmt.Sprintf("deployment/%s", controllerDeploymentName),
-				"-n", namespace,
-				"--timeout=3m",
-			)
-			_, err = utils.Run(cmd)
-			Expect(err).NotTo(HaveOccurred(), "Controller deployment did not roll out after enabling module-controller mode")
-			controllerPodName = waitForControllerPodName()
-
-			By("creating the singleton MLflowOperator custom resource")
-			moduleManifest := fmt.Sprintf(`apiVersion: components.platform.opendatahub.io/v1alpha1
+				By("creating the singleton MLflowOperator custom resource")
+				moduleFile, err := writeTempManifest(
+					"mlflowoperator-",
+					fmt.Sprintf(`apiVersion: components.platform.opendatahub.io/v1alpha1
 kind: MLflowOperator
 metadata:
   name: %s
 spec:
   gatewayName: data-science-gateway
   sectionTitle: OpenShift Open Data Hub
-`, mlflowOperatorName)
-			moduleFile, err := writeTempManifest("mlflowoperator-", moduleManifest)
-			Expect(err).NotTo(HaveOccurred(), "Failed to write MLflowOperator manifest")
-			defer func() {
-				if removeErr := os.Remove(moduleFile); removeErr != nil {
-					_, _ = fmt.Fprintf(GinkgoWriter, "failed to remove %s: %v\n", moduleFile, removeErr)
-				}
-			}()
-			cmd = exec.Command("kubectl", "apply", "-f", moduleFile)
-			_, err = utils.Run(cmd)
-			Expect(err).NotTo(HaveOccurred(), "Failed to create MLflowOperator")
-			DeferCleanup(func() {
-				deleteCmd := exec.Command(
-					"kubectl", "delete", "mlflowoperator", mlflowOperatorName,
-					"--ignore-not-found=true", "--wait=false",
-				)
-				_, _ = utils.Run(deleteCmd)
-			})
+`, mlflowOperatorName))
+				Expect(err).NotTo(HaveOccurred(), "Failed to write MLflowOperator manifest")
+				defer func() {
+					if removeErr := os.Remove(moduleFile); removeErr != nil {
+						_, _ = fmt.Fprintf(GinkgoWriter, "failed to remove %s: %v\n", moduleFile, removeErr)
+					}
+				}()
+				cmd := exec.Command("kubectl", "apply", "-f", moduleFile)
+				_, err = utils.Run(cmd)
+				Expect(err).NotTo(HaveOccurred(), "Failed to create MLflowOperator")
 
-			By("waiting for the MLflowOperator singleton to report Ready=True")
-			Eventually(func(g Gomega) {
-				output, getErr := kubectlOutput(
-					"get", "mlflowoperator", mlflowOperatorName,
-					"-o", "jsonpath={.status.conditions[?(@.type=='Ready')].status}",
-				)
-				g.Expect(getErr).NotTo(HaveOccurred())
-				g.Expect(output).To(Equal("True"))
-			}, 2*time.Minute, time.Second).Should(Succeed())
+				By("waiting for the MLflowOperator singleton to report Ready=True")
+				Eventually(func(g Gomega) {
+					output, getErr := kubectlOutput(
+						"get", "mlflowoperator", mlflowOperatorName,
+						"-o", "jsonpath={.status.conditions[?(@.type=='Ready')].status}",
+					)
+					g.Expect(getErr).NotTo(HaveOccurred())
+					g.Expect(output).To(Equal("True"))
+				}, 2*time.Minute, time.Second).Should(Succeed())
 
-			By("creating an MLflow custom resource that uses local storage")
-			mlflowFile, err := writeTempManifest("mlflow-", fmt.Sprintf(`apiVersion: mlflow.opendatahub.io/v1
+				By("creating an MLflow custom resource that uses local storage")
+				mlflowFile, err := writeTempManifest("mlflow-", fmt.Sprintf(`apiVersion: mlflow.opendatahub.io/v1
 kind: MLflow
 metadata:
   name: %s
@@ -601,125 +572,374 @@ spec:
   artifactsDestination: "file:///mlflow/artifacts"
   serveArtifacts: true
 `, mlflowName))
-			Expect(err).NotTo(HaveOccurred(), "Failed to write MLflow manifest")
-			defer func() {
-				if removeErr := os.Remove(mlflowFile); removeErr != nil {
-					_, _ = fmt.Fprintf(GinkgoWriter, "failed to remove %s: %v\n", mlflowFile, removeErr)
-				}
-			}()
-			cmd = exec.Command("kubectl", "apply", "-f", mlflowFile)
-			_, err = utils.Run(cmd)
-			Expect(err).NotTo(HaveOccurred(), "Failed to create MLflow resource")
-			DeferCleanup(func() {
-				deleteCmd := exec.Command("kubectl", "delete", "mlflow", mlflowName, "--ignore-not-found=true", "--wait=false")
-				_, _ = utils.Run(deleteCmd)
+				Expect(err).NotTo(HaveOccurred(), "Failed to write MLflow manifest")
+				defer func() {
+					if removeErr := os.Remove(mlflowFile); removeErr != nil {
+						_, _ = fmt.Fprintf(GinkgoWriter, "failed to remove %s: %v\n", mlflowFile, removeErr)
+					}
+				}()
+				cmd = exec.Command("kubectl", "apply", "-f", mlflowFile)
+				_, err = utils.Run(cmd)
+				Expect(err).NotTo(HaveOccurred(), "Failed to create MLflow resource")
+
+				By("waiting for the MLflowOperatorReady dependency condition to become True on MLflow")
+				Eventually(func(g Gomega) {
+					output, getErr := kubectlOutput(
+						"get", "mlflow", mlflowName,
+						"-o", "jsonpath={.status.conditions[?(@.type=='MLflowOperatorReady')].status}",
+					)
+					g.Expect(getErr).NotTo(HaveOccurred())
+					g.Expect(output).To(Equal("True"))
+				}, 3*time.Minute, time.Second).Should(Succeed())
+
+				By("verifying the managed MLflow Deployment lands in the operator namespace")
+				Eventually(func(g Gomega) {
+					output, getErr := kubectlOutput(
+						"get", "deployment", mlflowName,
+						"-n", namespace,
+						"-o", "jsonpath={.metadata.name}",
+					)
+					g.Expect(getErr).NotTo(HaveOccurred())
+					g.Expect(output).To(Equal(mlflowName))
+				}, 5*time.Minute, time.Second).Should(Succeed())
 			})
 
-			By("waiting for the MLflowOperatorReady dependency condition to become True on MLflow")
-			Eventually(func(g Gomega) {
-				output, getErr := kubectlOutput(
-					"get", "mlflow", mlflowName,
-					"-o", "jsonpath={.status.conditions[?(@.type=='MLflowOperatorReady')].status}",
+			AfterAll(func() {
+				By("cleaning up leftover MLflow and MLflowOperator resources from the handoff context")
+				cmd := exec.Command(
+					"kubectl", "delete", "mlflow", mlflowName,
+					"--ignore-not-found=true", "--wait=true", "--timeout=5m",
 				)
-				g.Expect(getErr).NotTo(HaveOccurred())
-				g.Expect(output).To(Equal("True"))
-			}, 3*time.Minute, time.Second).Should(Succeed())
+				_, _ = utils.Run(cmd)
+				cmd = exec.Command(
+					"kubectl", "delete", "mlflowoperator", mlflowOperatorName,
+					"--ignore-not-found=true", "--wait=true", "--timeout=3m",
+				)
+				_, _ = utils.Run(cmd)
+				cmd = exec.Command(
+					"kubectl", "delete", "configmap", platformConfigMapName,
+					"-n", namespace, "--ignore-not-found=true",
+				)
+				_, _ = utils.Run(cmd)
 
-			By("verifying the managed MLflow Deployment lands in the operator namespace")
-			Eventually(func(g Gomega) {
-				output, getErr := kubectlOutput(
-					"get", "deployment", mlflowName,
+				By("disabling the MLflowOperator module controller path for later tests")
+				resetCmd := exec.Command(
+					"kubectl", "set", "env",
+					fmt.Sprintf("deployment/%s", controllerDeploymentName),
 					"-n", namespace,
-					"-o", "jsonpath={.metadata.name}",
+					"ENABLE_MLFLOW_OPERATOR_MODULE_CONTROLLER=false",
+					"APPLICATIONS_NAMESPACE-",
 				)
-				g.Expect(getErr).NotTo(HaveOccurred())
-				g.Expect(output).To(Equal(mlflowName))
-			}, 5*time.Minute, time.Second).Should(Succeed())
-
-			By("verifying MLflow status.address.url uses the operator namespace")
-			Eventually(func(g Gomega) {
-				output, getErr := kubectlOutput(
-					"get", "mlflow", mlflowName,
-					"-o", "jsonpath={.status.address.url}",
+				_, _ = utils.Run(resetCmd)
+				waitCmd := exec.Command(
+					"kubectl", "rollout", "status",
+					fmt.Sprintf("deployment/%s", controllerDeploymentName),
+					"-n", namespace,
+					"--timeout=3m",
 				)
-				g.Expect(getErr).NotTo(HaveOccurred())
-				g.Expect(output).To(ContainSubstring(namespace))
-			}, 2*time.Minute, time.Second).Should(Succeed())
+				_, _ = utils.Run(waitCmd)
+				controllerPodName = waitForControllerPodName()
+			})
 
-			By("deleting the MLflowOperator while MLflow still exists")
-			cmd = exec.Command("kubectl", "delete", "mlflowoperator", mlflowOperatorName, "--wait=false")
-			_, err = utils.Run(cmd)
-			Expect(err).NotTo(HaveOccurred(), "Failed to request MLflowOperator deletion")
+			It("should report operand health after the handoff Deployment exists", func() {
+				By("waiting for the managed Deployment to have at least one available replica")
+				Eventually(func(g Gomega) {
+					output, getErr := kubectlOutput(
+						"get", "deployment", mlflowName,
+						"-n", namespace,
+						"-o", "jsonpath={.status.availableReplicas}",
+					)
+					g.Expect(getErr).NotTo(HaveOccurred())
+					g.Expect(output).NotTo(BeEmpty())
+					available, parseErr := strconv.Atoi(output)
+					g.Expect(parseErr).NotTo(HaveOccurred())
+					g.Expect(available).To(BeNumerically(">=", 1))
+				}, 5*time.Minute, time.Second).Should(Succeed())
 
-			By("verifying MLflowOperator deletion is blocked while MLflow exists")
-			Eventually(func(g Gomega) {
-				deletionTimestamp, getErr := kubectlOutput(
-					"get", "mlflowoperator", mlflowOperatorName,
-					"-o", "jsonpath={.metadata.deletionTimestamp}",
+				By("verifying the managed Service exists")
+				Eventually(func(g Gomega) {
+					output, getErr := kubectlOutput(
+						"get", "service", mlflowName,
+						"-n", namespace,
+						"-o", "jsonpath={.metadata.name}",
+					)
+					g.Expect(getErr).NotTo(HaveOccurred())
+					g.Expect(output).To(Equal(mlflowName))
+				}, 2*time.Minute, time.Second).Should(Succeed())
+
+				By("verifying MLflow status.address.url uses the operator namespace")
+				Eventually(func(g Gomega) {
+					output, getErr := kubectlOutput(
+						"get", "mlflow", mlflowName,
+						"-o", "jsonpath={.status.address.url}",
+					)
+					g.Expect(getErr).NotTo(HaveOccurred())
+					g.Expect(output).To(ContainSubstring(namespace))
+				}, 2*time.Minute, time.Second).Should(Succeed())
+
+				if !httpRouteCRDInstalled() {
+					return
+				}
+				By("verifying the managed HTTPRoute exists when the Gateway API CRD is installed")
+				Eventually(func(g Gomega) {
+					output, getErr := kubectlOutput(
+						"get", "httproute", mlflowName,
+						"-n", namespace,
+						"-o", "jsonpath={.metadata.name}",
+					)
+					g.Expect(getErr).NotTo(HaveOccurred())
+					g.Expect(output).To(Equal(mlflowName))
+				}, 2*time.Minute, time.Second).Should(Succeed())
+			})
+
+			It("should reconcile MLflow spec.replicas into the managed Deployment", func() {
+				By("patching MLflow spec.replicas from 1 to 2")
+				cmd := exec.Command(
+					"kubectl", "patch", "mlflow", mlflowName,
+					"--type=merge",
+					"-p", `{"spec":{"replicas":2}}`,
 				)
-				g.Expect(getErr).NotTo(HaveOccurred())
-				g.Expect(deletionTimestamp).NotTo(BeEmpty())
+				_, err := utils.Run(cmd)
+				Expect(err).NotTo(HaveOccurred(), "Failed to patch MLflow replicas")
 
-				finalizers, finalizerErr := kubectlOutput(
-					"get", "mlflowoperator", mlflowOperatorName,
-					"-o", "jsonpath={.metadata.finalizers[*]}",
+				By("waiting for the managed Deployment to observe spec.replicas=2")
+				Eventually(func(g Gomega) {
+					output, getErr := kubectlOutput(
+						"get", "deployment", mlflowName,
+						"-n", namespace,
+						"-o", "jsonpath={.spec.replicas}",
+					)
+					g.Expect(getErr).NotTo(HaveOccurred())
+					g.Expect(output).To(Equal("2"))
+				}, 2*time.Minute, time.Second).Should(Succeed())
+
+				By("waiting for MLflowOperatorReady to observe the new MLflow generation")
+				Eventually(func(g Gomega) {
+					generation, genErr := kubectlOutput(
+						"get", "mlflow", mlflowName,
+						"-o", "jsonpath={.metadata.generation}",
+					)
+					g.Expect(genErr).NotTo(HaveOccurred())
+					observed, obsErr := kubectlOutput(
+						"get", "mlflow", mlflowName,
+						"-o", "jsonpath={.status.conditions[?(@.type=='MLflowOperatorReady')].observedGeneration}",
+					)
+					g.Expect(obsErr).NotTo(HaveOccurred())
+					g.Expect(observed).To(Equal(generation))
+				}, 2*time.Minute, time.Second).Should(Succeed())
+
+				By("scaling MLflow back to 1 replica so later checks keep a schedulable RWO Deployment")
+				cmd = exec.Command(
+					"kubectl", "patch", "mlflow", mlflowName,
+					"--type=merge",
+					"-p", `{"spec":{"replicas":1}}`,
 				)
-				g.Expect(finalizerErr).NotTo(HaveOccurred())
-				g.Expect(finalizers).To(ContainSubstring("mlflow.opendatahub.io/mlflow-operator-protection"))
+				_, err = utils.Run(cmd)
+				Expect(err).NotTo(HaveOccurred(), "Failed to patch MLflow replicas back to 1")
+				Eventually(func(g Gomega) {
+					output, getErr := kubectlOutput(
+						"get", "deployment", mlflowName,
+						"-n", namespace,
+						"-o", "jsonpath={.spec.replicas}",
+					)
+					g.Expect(getErr).NotTo(HaveOccurred())
+					g.Expect(output).To(Equal("1"))
+				}, 2*time.Minute, time.Second).Should(Succeed())
+				Eventually(func(g Gomega) {
+					output, getErr := kubectlOutput(
+						"get", "deployment", mlflowName,
+						"-n", namespace,
+						"-o", "jsonpath={.status.availableReplicas}",
+					)
+					g.Expect(getErr).NotTo(HaveOccurred())
+					g.Expect(output).NotTo(BeEmpty())
+					available, parseErr := strconv.Atoi(output)
+					g.Expect(parseErr).NotTo(HaveOccurred())
+					g.Expect(available).To(BeNumerically(">=", 1))
+				}, 5*time.Minute, time.Second).Should(Succeed())
+			})
 
-				reason, reasonErr := kubectlOutput(
-					"get", "mlflowoperator", mlflowOperatorName,
-					"-o", "jsonpath={.status.conditions[?(@.type=='Ready')].reason}",
+			It("should publish module releases and apply projected gateway spec", func() {
+				Expect(controllerpkg.SupportedMLflowVersion).NotTo(BeEmpty())
+
+				By("verifying status.releases includes the supported MLflow version after Ready")
+				Eventually(func(g Gomega) {
+					release, found := moduleReleaseByName("MLflow")
+					g.Expect(found).To(BeTrue())
+					g.Expect(release.Version).To(Equal(controllerpkg.SupportedMLflowVersion))
+				}, 2*time.Minute, time.Second).Should(Succeed())
+
+				By("creating the platform handshake ConfigMap in the applications namespace")
+				configFile, err := writeTempManifest("mlflowoperator-config-", fmt.Sprintf(`apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: %s
+  namespace: %s
+data:
+  platformVersion: %q
+`, platformConfigMapName, namespace, platformVersion))
+				Expect(err).NotTo(HaveOccurred(), "Failed to write platform ConfigMap manifest")
+				defer func() {
+					if removeErr := os.Remove(configFile); removeErr != nil {
+						_, _ = fmt.Fprintf(GinkgoWriter, "failed to remove %s: %v\n", configFile, removeErr)
+					}
+				}()
+				cmd := exec.Command("kubectl", "apply", "-f", configFile)
+				_, err = utils.Run(cmd)
+				Expect(err).NotTo(HaveOccurred(), "Failed to create platform ConfigMap")
+
+				By("waiting for status.releases to include the platform version from the ConfigMap")
+				Eventually(func(g Gomega) {
+					release, found := moduleReleaseByName("platform")
+					g.Expect(found).To(BeTrue())
+					g.Expect(release.Version).To(Equal(platformVersion))
+					mlflowRelease, mlflowFound := moduleReleaseByName("MLflow")
+					g.Expect(mlflowFound).To(BeTrue())
+					g.Expect(mlflowRelease.Version).To(Equal(controllerpkg.SupportedMLflowVersion))
+				}, 2*time.Minute, time.Second).Should(Succeed())
+
+				By("patching MLflowOperator.spec.gateway.domain")
+				cmd = exec.Command(
+					"kubectl", "patch", "mlflowoperator", mlflowOperatorName,
+					"--type=merge",
+					"-p", fmt.Sprintf(`{"spec":{"gateway":{"domain":%q}}}`, gatewayDomain),
 				)
-				g.Expect(reasonErr).NotTo(HaveOccurred())
-				g.Expect(reason).To(Equal("MLflowInstancesPresent"))
-			}, 2*time.Minute, time.Second).Should(Succeed())
+				_, err = utils.Run(cmd)
+				Expect(err).NotTo(HaveOccurred(), "Failed to patch MLflowOperator gateway domain")
 
-			By("confirming MLflowOperator remains blocked while MLflow still exists")
-			Consistently(func(g Gomega) {
-				_, mlflowErr := kubectlOutput(
-					"get", "mlflow", mlflowName,
-					"-o", "jsonpath={.metadata.name}",
-				)
-				g.Expect(mlflowErr).NotTo(HaveOccurred())
+				if !httpRouteCRDInstalled() {
+					return
+				}
+				By("verifying HTTPRoute parentRef and MLflow status.url when Gateway API is installed")
+				Eventually(func(g Gomega) {
+					parent, parentErr := kubectlOutput(
+						"get", "httproute", mlflowName,
+						"-n", namespace,
+						"-o", "jsonpath={.spec.parentRefs[0].name}",
+					)
+					g.Expect(parentErr).NotTo(HaveOccurred())
+					g.Expect(parent).To(Equal("data-science-gateway"))
 
-				deletionTimestamp, operatorErr := kubectlOutput(
-					"get", "mlflowoperator", mlflowOperatorName,
-					"-o", "jsonpath={.metadata.deletionTimestamp}",
-				)
-				g.Expect(operatorErr).NotTo(HaveOccurred())
-				g.Expect(deletionTimestamp).NotTo(BeEmpty())
+					statusURL, urlErr := kubectlOutput(
+						"get", "mlflow", mlflowName,
+						"-o", "jsonpath={.status.url}",
+					)
+					g.Expect(urlErr).NotTo(HaveOccurred())
+					g.Expect(statusURL).To(ContainSubstring(gatewayDomain))
+				}, 2*time.Minute, time.Second).Should(Succeed())
+			})
 
-				finalizers, finalizerErr := kubectlOutput(
-					"get", "mlflowoperator", mlflowOperatorName,
-					"-o", "jsonpath={.metadata.finalizers[*]}",
-				)
-				g.Expect(finalizerErr).NotTo(HaveOccurred())
-				g.Expect(finalizers).To(ContainSubstring("mlflow.opendatahub.io/mlflow-operator-protection"))
+			It("should block module deletion until MLflow is gone and then remove operands", func() {
+				By("deleting the MLflowOperator while MLflow still exists")
+				cmd := exec.Command("kubectl", "delete", "mlflowoperator", mlflowOperatorName, "--wait=false")
+				_, err := utils.Run(cmd)
+				Expect(err).NotTo(HaveOccurred(), "Failed to request MLflowOperator deletion")
 
-				reason, reasonErr := kubectlOutput(
-					"get", "mlflowoperator", mlflowOperatorName,
-					"-o", "jsonpath={.status.conditions[?(@.type=='Ready')].reason}",
-				)
-				g.Expect(reasonErr).NotTo(HaveOccurred())
-				g.Expect(reason).To(Equal("MLflowInstancesPresent"))
-			}, 30*time.Second, time.Second).Should(Succeed())
+				By("verifying MLflowOperator deletion is blocked while MLflow exists")
+				Eventually(func(g Gomega) {
+					deletionTimestamp, getErr := kubectlOutput(
+						"get", "mlflowoperator", mlflowOperatorName,
+						"-o", "jsonpath={.metadata.deletionTimestamp}",
+					)
+					g.Expect(getErr).NotTo(HaveOccurred())
+					g.Expect(deletionTimestamp).NotTo(BeEmpty())
 
-			By("deleting the MLflow resource to unblock MLflowOperator finalization")
-			cmd = exec.Command("kubectl", "delete", "mlflow", mlflowName, "--wait=true", "--timeout=5m")
-			_, err = utils.Run(cmd)
-			Expect(err).NotTo(HaveOccurred(), "Failed to delete MLflow resource")
+					finalizers, finalizerErr := kubectlOutput(
+						"get", "mlflowoperator", mlflowOperatorName,
+						"-o", "jsonpath={.metadata.finalizers[*]}",
+					)
+					g.Expect(finalizerErr).NotTo(HaveOccurred())
+					g.Expect(finalizers).To(ContainSubstring("mlflow.opendatahub.io/mlflow-operator-protection"))
 
-			By("waiting for the MLflowOperator deletion to complete")
-			Eventually(func(g Gomega) {
-				output, getErr := kubectlOutput(
-					"get", "mlflowoperator", mlflowOperatorName,
-					"--ignore-not-found",
-					"-o", "jsonpath={.metadata.name}",
-				)
-				g.Expect(getErr).NotTo(HaveOccurred())
-				g.Expect(output).To(BeEmpty())
-			}, 3*time.Minute, time.Second).Should(Succeed())
+					reason, reasonErr := kubectlOutput(
+						"get", "mlflowoperator", mlflowOperatorName,
+						"-o", "jsonpath={.status.conditions[?(@.type=='Ready')].reason}",
+					)
+					g.Expect(reasonErr).NotTo(HaveOccurred())
+					g.Expect(reason).To(Equal("MLflowInstancesPresent"))
+				}, 2*time.Minute, time.Second).Should(Succeed())
+
+				By("confirming MLflowOperator remains blocked while MLflow still exists")
+				Consistently(func(g Gomega) {
+					_, mlflowErr := kubectlOutput(
+						"get", "mlflow", mlflowName,
+						"-o", "jsonpath={.metadata.name}",
+					)
+					g.Expect(mlflowErr).NotTo(HaveOccurred())
+
+					deletionTimestamp, operatorErr := kubectlOutput(
+						"get", "mlflowoperator", mlflowOperatorName,
+						"-o", "jsonpath={.metadata.deletionTimestamp}",
+					)
+					g.Expect(operatorErr).NotTo(HaveOccurred())
+					g.Expect(deletionTimestamp).NotTo(BeEmpty())
+
+					finalizers, finalizerErr := kubectlOutput(
+						"get", "mlflowoperator", mlflowOperatorName,
+						"-o", "jsonpath={.metadata.finalizers[*]}",
+					)
+					g.Expect(finalizerErr).NotTo(HaveOccurred())
+					g.Expect(finalizers).To(ContainSubstring("mlflow.opendatahub.io/mlflow-operator-protection"))
+
+					reason, reasonErr := kubectlOutput(
+						"get", "mlflowoperator", mlflowOperatorName,
+						"-o", "jsonpath={.status.conditions[?(@.type=='Ready')].reason}",
+					)
+					g.Expect(reasonErr).NotTo(HaveOccurred())
+					g.Expect(reason).To(Equal("MLflowInstancesPresent"))
+				}, 30*time.Second, time.Second).Should(Succeed())
+
+				By("deleting the MLflow resource to unblock MLflowOperator finalization")
+				cmd = exec.Command("kubectl", "delete", "mlflow", mlflowName, "--wait=true", "--timeout=5m")
+				_, err = utils.Run(cmd)
+				Expect(err).NotTo(HaveOccurred(), "Failed to delete MLflow resource")
+
+				By("waiting for the MLflowOperator deletion to complete")
+				Eventually(func(g Gomega) {
+					output, getErr := kubectlOutput(
+						"get", "mlflowoperator", mlflowOperatorName,
+						"--ignore-not-found",
+						"-o", "jsonpath={.metadata.name}",
+					)
+					g.Expect(getErr).NotTo(HaveOccurred())
+					g.Expect(output).To(BeEmpty())
+				}, 3*time.Minute, time.Second).Should(Succeed())
+
+				By("verifying managed operands are gone after MLflow deletion")
+				Eventually(func(g Gomega) {
+					output, getErr := kubectlOutput(
+						"get", "deployment", mlflowName,
+						"-n", namespace,
+						"--ignore-not-found",
+						"-o", "jsonpath={.metadata.name}",
+					)
+					g.Expect(getErr).NotTo(HaveOccurred())
+					g.Expect(output).To(BeEmpty())
+				}, 3*time.Minute, time.Second).Should(Succeed())
+				Eventually(func(g Gomega) {
+					output, getErr := kubectlOutput(
+						"get", "service", mlflowName,
+						"-n", namespace,
+						"--ignore-not-found",
+						"-o", "jsonpath={.metadata.name}",
+					)
+					g.Expect(getErr).NotTo(HaveOccurred())
+					g.Expect(output).To(BeEmpty())
+				}, 2*time.Minute, time.Second).Should(Succeed())
+				if !httpRouteCRDInstalled() {
+					return
+				}
+				Eventually(func(g Gomega) {
+					output, getErr := kubectlOutput(
+						"get", "httproute", mlflowName,
+						"-n", namespace,
+						"--ignore-not-found",
+						"-o", "jsonpath={.metadata.name}",
+					)
+					g.Expect(getErr).NotTo(HaveOccurred())
+					g.Expect(output).To(BeEmpty())
+				}, 2*time.Minute, time.Second).Should(Succeed())
+			})
 		})
 
 		It("should validate CEL constraint for trace archival with file-based location", func() {
@@ -1448,6 +1668,59 @@ func expectKubectlApplyRejected(contents, wantSubstring, failMsg string) {
 	output, err := utils.Run(cmd)
 	Expect(err).To(HaveOccurred(), failMsg)
 	Expect(output).To(ContainSubstring(wantSubstring))
+}
+
+type moduleRelease struct {
+	Name    string `json:"name"`
+	Version string `json:"version"`
+}
+
+func setOperatorDeploymentEnv(env ...string) {
+	args := append([]string{
+		"set", "env",
+		fmt.Sprintf("deployment/%s", controllerDeploymentName),
+		"-n", namespace,
+	}, env...)
+	cmd := exec.Command("kubectl", args...)
+	_, err := utils.Run(cmd)
+	Expect(err).NotTo(HaveOccurred())
+}
+
+func waitForOperatorRollout() {
+	cmd := exec.Command(
+		"kubectl", "rollout", "status",
+		fmt.Sprintf("deployment/%s", controllerDeploymentName),
+		"-n", namespace,
+		"--timeout=3m",
+	)
+	_, err := utils.Run(cmd)
+	Expect(err).NotTo(HaveOccurred(), "Controller deployment did not roll out")
+}
+
+func httpRouteCRDInstalled() bool {
+	output, err := kubectlOutput("api-resources", "--api-group=gateway.networking.k8s.io", "-o", "name")
+	return err == nil && strings.Contains(output, "httproute")
+}
+
+func moduleReleases() []moduleRelease {
+	output, err := kubectlOutput("get", "mlflowoperator", "default-mlflowoperator", "-o", "json")
+	Expect(err).NotTo(HaveOccurred())
+	var obj struct {
+		Status struct {
+			Releases []moduleRelease `json:"releases"`
+		} `json:"status"`
+	}
+	Expect(json.Unmarshal([]byte(output), &obj)).To(Succeed())
+	return obj.Status.Releases
+}
+
+func moduleReleaseByName(name string) (moduleRelease, bool) {
+	for _, release := range moduleReleases() {
+		if release.Name == name {
+			return release, true
+		}
+	}
+	return moduleRelease{}, false
 }
 
 func kubectlOutput(args ...string) (string, error) {
