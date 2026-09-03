@@ -564,6 +564,13 @@ metadata:
   name: %s
 spec:
   replicas: 1
+  resources:
+    requests:
+      cpu: "1"
+      memory: 2Gi
+    limits:
+      cpu: "4"
+      memory: 3Gi
   storage:
     accessModes:
       - ReadWriteOnce
@@ -685,28 +692,43 @@ spec:
 				}, 2*time.Minute, time.Second).Should(Succeed())
 			})
 
-			It("should reconcile MLflow spec.replicas into the managed Deployment", func() {
-				// sqlite + storage needs ReadWriteMany for replicas>1 (CEL from #190).
-				// The operator skips existing PVCs, so the Kind volume stays RWO; we
-				// only assert Deployment spec.replicas, then scale back to 1.
-				By("patching MLflow spec.replicas from 1 to 2")
+			It("should reconcile MLflow spec changes into the managed Deployment", func() {
+				const (
+					baselineRequestMemory = "2Gi"
+					baselineLimitMemory   = "3Gi"
+					patchedRequestMemory  = "3Gi"
+					patchedLimitMemory    = "4Gi"
+				)
+
+				By("patching MLflow spec.resources memory requests and limits")
 				cmd := exec.Command(
 					"kubectl", "patch", "mlflow", mlflowName,
 					"--type=merge",
-					"-p", `{"spec":{"replicas":2,"storage":{"accessModes":["ReadWriteMany"]}}}`,
+					"-p", fmt.Sprintf(
+						`{"spec":{"resources":{"requests":{"memory":"%s"},"limits":{"memory":"%s"}}}}`,
+						patchedRequestMemory, patchedLimitMemory,
+					),
 				)
 				_, err := utils.Run(cmd)
-				Expect(err).NotTo(HaveOccurred(), "Failed to patch MLflow replicas")
+				Expect(err).NotTo(HaveOccurred(), "Failed to patch MLflow resources")
 
-				By("waiting for the managed Deployment to observe spec.replicas=2")
+				By("waiting for the managed Deployment to observe the patched memory settings")
 				Eventually(func(g Gomega) {
-					output, getErr := kubectlOutput(
+					requestOutput, requestErr := kubectlOutput(
 						"get", "deployment", mlflowName,
 						"-n", namespace,
-						"-o", "jsonpath={.spec.replicas}",
+						"-o", `jsonpath={.spec.template.spec.containers[?(@.name=="mlflow")].resources.requests.memory}`,
 					)
-					g.Expect(getErr).NotTo(HaveOccurred())
-					g.Expect(output).To(Equal("2"))
+					g.Expect(requestErr).NotTo(HaveOccurred())
+					g.Expect(requestOutput).To(Equal(patchedRequestMemory))
+
+					limitOutput, limitErr := kubectlOutput(
+						"get", "deployment", mlflowName,
+						"-n", namespace,
+						"-o", `jsonpath={.spec.template.spec.containers[?(@.name=="mlflow")].resources.limits.memory}`,
+					)
+					g.Expect(limitErr).NotTo(HaveOccurred())
+					g.Expect(limitOutput).To(Equal(patchedLimitMemory))
 				}, 2*time.Minute, time.Second).Should(Succeed())
 
 				By("waiting for MLflowOperatorReady to observe the new MLflow generation")
@@ -724,23 +746,38 @@ spec:
 					g.Expect(observed).To(Equal(generation))
 				}, 2*time.Minute, time.Second).Should(Succeed())
 
-				By("scaling MLflow back to 1 replica so later checks keep a schedulable RWO Deployment")
+				By("restoring the original MLflow resource settings for later handoff checks")
 				cmd = exec.Command(
 					"kubectl", "patch", "mlflow", mlflowName,
 					"--type=merge",
-					"-p", `{"spec":{"replicas":1,"storage":{"accessModes":["ReadWriteOnce"]}}}`,
+					"-p", fmt.Sprintf(
+						`{"spec":{"resources":{"requests":{"memory":"%s"},"limits":{"memory":"%s"}}}}`,
+						baselineRequestMemory, baselineLimitMemory,
+					),
 				)
 				_, err = utils.Run(cmd)
-				Expect(err).NotTo(HaveOccurred(), "Failed to patch MLflow replicas back to 1")
+				Expect(err).NotTo(HaveOccurred(), "Failed to restore MLflow resources")
+
+				By("waiting for the managed Deployment to return to the baseline memory settings")
 				Eventually(func(g Gomega) {
-					output, getErr := kubectlOutput(
+					requestOutput, requestErr := kubectlOutput(
 						"get", "deployment", mlflowName,
 						"-n", namespace,
-						"-o", "jsonpath={.spec.replicas}",
+						"-o", `jsonpath={.spec.template.spec.containers[?(@.name=="mlflow")].resources.requests.memory}`,
 					)
-					g.Expect(getErr).NotTo(HaveOccurred())
-					g.Expect(output).To(Equal("1"))
+					g.Expect(requestErr).NotTo(HaveOccurred())
+					g.Expect(requestOutput).To(Equal(baselineRequestMemory))
+
+					limitOutput, limitErr := kubectlOutput(
+						"get", "deployment", mlflowName,
+						"-n", namespace,
+						"-o", `jsonpath={.spec.template.spec.containers[?(@.name=="mlflow")].resources.limits.memory}`,
+					)
+					g.Expect(limitErr).NotTo(HaveOccurred())
+					g.Expect(limitOutput).To(Equal(baselineLimitMemory))
 				}, 2*time.Minute, time.Second).Should(Succeed())
+
+				By("waiting for the managed Deployment to become available again after rollback")
 				Eventually(func(g Gomega) {
 					output, getErr := kubectlOutput(
 						"get", "deployment", mlflowName,
