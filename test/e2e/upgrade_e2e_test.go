@@ -238,7 +238,21 @@ var _ = Describe("Upgrade", Ordered, Label("upgrade"), func() {
 			"ENABLE_MLFLOW_OPERATOR_MODULE_CONTROLLER": "true",
 			"APPLICATIONS_NAMESPACE":                   namespace,
 		})
-		controllerPodName = waitForControllerPodReady(ctx, k8sClient)
+		DeferCleanup(func() {
+			By("cleaning up MLflowOperator resources created by the upgrade spec")
+			_ = k8sClient.Delete(ctx, &modulev1alpha1.MLflowOperator{
+				ObjectMeta: metav1.ObjectMeta{Name: modulev1alpha1.MLflowOperatorInstanceName},
+			})
+			_ = k8sClient.Delete(ctx, &corev1.ConfigMap{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "odh-mlflowoperator-config",
+					Namespace: namespace,
+				},
+			})
+			By("disabling the MLflowOperator module controller path after the upgrade spec")
+			restoreLegacyOperatorPath(ctx, k8sClient, controllerPodName)
+		})
+		controllerPodName = waitForControllerPodReady(ctx, k8sClient, controllerPodName)
 
 		By("waiting for MLflowOperator.status.releases to report the upgraded MLflow version")
 		Expect(controllerpkg.SupportedMLflowVersion).NotTo(BeEmpty())
@@ -306,6 +320,52 @@ func setControllerEnv(ctx context.Context, k8sClient client.Client, env map[stri
 	before := deployment.DeepCopy()
 	Expect(setContainerEnv(deployment, controllerContainerName, env)).To(Succeed())
 	Expect(k8sClient.Patch(ctx, deployment, client.MergeFrom(before))).To(Succeed())
+}
+
+func restoreLegacyOperatorPath(ctx context.Context, k8sClient client.Client, previousPod string) {
+	deployment := &appsv1.Deployment{}
+	Expect(
+		k8sClient.Get(
+			ctx,
+			types.NamespacedName{Name: controllerDeploymentName, Namespace: namespace},
+			deployment,
+		),
+	).To(Succeed())
+
+	before := deployment.DeepCopy()
+	Expect(setContainerEnv(deployment, controllerContainerName, map[string]string{
+		"ENABLE_MLFLOW_OPERATOR_MODULE_CONTROLLER": "false",
+	})).To(Succeed())
+	Expect(unsetContainerEnv(deployment, controllerContainerName, "APPLICATIONS_NAMESPACE")).To(Succeed())
+	Expect(k8sClient.Patch(ctx, deployment, client.MergeFrom(before))).To(Succeed())
+	waitForControllerPodReady(ctx, k8sClient, previousPod)
+}
+
+func unsetContainerEnv(deployment *appsv1.Deployment, containerName string, keys ...string) error {
+	drop := make(map[string]struct{}, len(keys))
+	for _, key := range keys {
+		drop[key] = struct{}{}
+	}
+	for i := range deployment.Spec.Template.Spec.Containers {
+		if deployment.Spec.Template.Spec.Containers[i].Name != containerName {
+			continue
+		}
+		filtered := make([]corev1.EnvVar, 0, len(deployment.Spec.Template.Spec.Containers[i].Env))
+		for _, env := range deployment.Spec.Template.Spec.Containers[i].Env {
+			if _, skip := drop[env.Name]; skip {
+				continue
+			}
+			filtered = append(filtered, env)
+		}
+		deployment.Spec.Template.Spec.Containers[i].Env = filtered
+		return nil
+	}
+	return fmt.Errorf(
+		"deployment %s/%s does not contain container %q",
+		deployment.Namespace,
+		deployment.Name,
+		containerName,
+	)
 }
 
 func setContainerEnv(deployment *appsv1.Deployment, containerName string, env map[string]string) error {
@@ -407,7 +467,7 @@ func waitForControllerPodsGone(ctx context.Context, k8sClient client.Client) {
 	}, 2*time.Minute, time.Second).Should(BeEmpty())
 }
 
-func waitForControllerPodReady(ctx context.Context, k8sClient client.Client) string {
+func waitForControllerPodReady(ctx context.Context, k8sClient client.Client, excludePods ...string) string {
 	var podName string
 	Eventually(func(g Gomega) {
 		deployment := &appsv1.Deployment{}
@@ -432,6 +492,9 @@ func waitForControllerPodReady(ctx context.Context, k8sClient client.Client) str
 			readyPods = append(readyPods, pod.Name)
 		}
 		g.Expect(readyPods).To(HaveLen(1))
+		if len(excludePods) > 0 && excludePods[0] != "" {
+			g.Expect(readyPods[0]).NotTo(Equal(excludePods[0]))
+		}
 		podName = readyPods[0]
 	}, 2*time.Minute, time.Second).Should(Succeed())
 	return podName

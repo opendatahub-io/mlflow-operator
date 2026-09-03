@@ -554,6 +554,9 @@ spec:
 					g.Expect(output).To(Equal("True"))
 				}, 2*time.Minute, time.Second).Should(Succeed())
 
+				applyKindMLflowServiceAccount()
+				applyKindMLflowTLSSecret()
+
 				By("creating an MLflow custom resource that uses local storage")
 				mlflowFile, err := writeTempManifest("mlflow-", fmt.Sprintf(`apiVersion: mlflow.opendatahub.io/v1
 kind: MLflow
@@ -623,21 +626,11 @@ spec:
 				_, _ = utils.Run(cmd)
 
 				By("disabling the MLflowOperator module controller path for later tests")
-				resetCmd := exec.Command(
-					"kubectl", "set", "env",
-					fmt.Sprintf("deployment/%s", controllerDeploymentName),
-					"-n", namespace,
+				setOperatorDeploymentEnv(
 					"ENABLE_MLFLOW_OPERATOR_MODULE_CONTROLLER=false",
 					"APPLICATIONS_NAMESPACE-",
 				)
-				_, _ = utils.Run(resetCmd)
-				waitCmd := exec.Command(
-					"kubectl", "rollout", "status",
-					fmt.Sprintf("deployment/%s", controllerDeploymentName),
-					"-n", namespace,
-					"--timeout=3m",
-				)
-				_, _ = utils.Run(waitCmd)
+				waitForOperatorRollout()
 				controllerPodName = waitForControllerPodName()
 			})
 
@@ -693,11 +686,14 @@ spec:
 			})
 
 			It("should reconcile MLflow spec.replicas into the managed Deployment", func() {
+				// sqlite + storage needs ReadWriteMany for replicas>1 (CEL from #190).
+				// The operator skips existing PVCs, so the Kind volume stays RWO; we
+				// only assert Deployment spec.replicas, then scale back to 1.
 				By("patching MLflow spec.replicas from 1 to 2")
 				cmd := exec.Command(
 					"kubectl", "patch", "mlflow", mlflowName,
 					"--type=merge",
-					"-p", `{"spec":{"replicas":2}}`,
+					"-p", `{"spec":{"replicas":2,"storage":{"accessModes":["ReadWriteMany"]}}}`,
 				)
 				_, err := utils.Run(cmd)
 				Expect(err).NotTo(HaveOccurred(), "Failed to patch MLflow replicas")
@@ -732,7 +728,7 @@ spec:
 				cmd = exec.Command(
 					"kubectl", "patch", "mlflow", mlflowName,
 					"--type=merge",
-					"-p", `{"spec":{"replicas":1}}`,
+					"-p", `{"spec":{"replicas":1,"storage":{"accessModes":["ReadWriteOnce"]}}}`,
 				)
 				_, err = utils.Run(cmd)
 				Expect(err).NotTo(HaveOccurred(), "Failed to patch MLflow replicas back to 1")
@@ -764,7 +760,7 @@ spec:
 
 				By("verifying status.releases includes the supported MLflow version after Ready")
 				Eventually(func(g Gomega) {
-					release, found := moduleReleaseByName("MLflow")
+					release, found := moduleReleaseByName(g, "MLflow")
 					g.Expect(found).To(BeTrue())
 					g.Expect(release.Version).To(Equal(controllerpkg.SupportedMLflowVersion))
 				}, 2*time.Minute, time.Second).Should(Succeed())
@@ -790,10 +786,10 @@ data:
 
 				By("waiting for status.releases to include the platform version from the ConfigMap")
 				Eventually(func(g Gomega) {
-					release, found := moduleReleaseByName("platform")
+					release, found := moduleReleaseByName(g, "platform")
 					g.Expect(found).To(BeTrue())
 					g.Expect(release.Version).To(Equal(platformVersion))
-					mlflowRelease, mlflowFound := moduleReleaseByName("MLflow")
+					mlflowRelease, mlflowFound := moduleReleaseByName(g, "MLflow")
 					g.Expect(mlflowFound).To(BeTrue())
 					g.Expect(mlflowRelease.Version).To(Equal(controllerpkg.SupportedMLflowVersion))
 				}, 2*time.Minute, time.Second).Should(Succeed())
@@ -1146,24 +1142,7 @@ data:
 			By("waiting for the controller-manager pod to be running")
 			controllerPodName = waitForControllerPodName()
 
-			By("creating the TLS secret required by the MLflow deployment and migration Job on Kind")
-			tlsSecretYAML := `apiVersion: v1
-kind: Secret
-metadata:
-  name: mlflow-tls
-  namespace: ` + namespace + `
-type: kubernetes.io/tls
-data:
-  tls.crt: ZHVtbXk=
-  tls.key: ZHVtbXk=`
-
-			tlsSecretFile, err := writeTempManifest("mlflow-trace-archival-tls-", tlsSecretYAML)
-			Expect(err).NotTo(HaveOccurred(), "Failed to write TLS secret manifest")
-			defer cleanupTempManifest(tlsSecretFile)
-
-			cmd := exec.Command("kubectl", "apply", "-f", tlsSecretFile)
-			_, err = utils.Run(cmd)
-			Expect(err).NotTo(HaveOccurred(), "Failed to create mlflow-tls secret")
+			applyKindMLflowTLSSecret()
 
 			By("creating MLflow with S3-based trace archival location")
 			validArchivalYAML := dummyRemoteStoreSpec + `
@@ -1178,7 +1157,7 @@ data:
 			Expect(err).NotTo(HaveOccurred(), "Failed to write valid trace archival manifest")
 			defer cleanupTempManifest(validArchivalFile)
 
-			cmd = exec.Command("kubectl", "apply", "-f", validArchivalFile)
+			cmd := exec.Command("kubectl", "apply", "-f", validArchivalFile)
 			_, err = utils.Run(cmd)
 			Expect(err).NotTo(HaveOccurred(), "Failed to create MLflow with S3-based trace archival")
 			DeferCleanup(func() {
@@ -1653,6 +1632,66 @@ func writeTempManifest(prefix, contents string) (string, error) {
 	return file.Name(), nil
 }
 
+func applyKindMLflowServiceAccount() {
+	By("creating the ServiceAccount required by the MLflow migration Job on Kind")
+	saYAML := `apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: mlflow-sa
+  namespace: ` + namespace + `
+automountServiceAccountToken: false
+`
+	saFile, err := writeTempManifest("mlflow-sa-", saYAML)
+	Expect(err).NotTo(HaveOccurred(), "Failed to write MLflow ServiceAccount manifest")
+	defer cleanupTempManifest(saFile)
+
+	cmd := exec.Command("kubectl", "apply", "-f", saFile)
+	_, err = utils.Run(cmd)
+	Expect(err).NotTo(HaveOccurred(), "Failed to create mlflow-sa ServiceAccount")
+}
+
+func applyKindMLflowTLSSecret() {
+	By("creating the TLS secret required by the MLflow deployment and migration Job on Kind")
+	dir, err := os.MkdirTemp("", "mlflow-kind-tls-")
+	Expect(err).NotTo(HaveOccurred(), "Failed to create temp dir for Kind TLS material")
+	defer func() {
+		if removeErr := os.RemoveAll(dir); removeErr != nil {
+			_, _ = fmt.Fprintf(GinkgoWriter, "failed to remove %s: %v\n", dir, removeErr)
+		}
+	}()
+
+	certPath := filepath.Join(dir, "tls.crt")
+	keyPath := filepath.Join(dir, "tls.key")
+	cmd := exec.Command(
+		"openssl", "req", "-x509", "-nodes", "-days", "1",
+		"-newkey", "rsa:2048",
+		"-keyout", keyPath,
+		"-out", certPath,
+		"-subj", "/CN=mlflow",
+	)
+	_, err = utils.Run(cmd)
+	Expect(err).NotTo(HaveOccurred(), "Failed to generate Kind TLS material")
+
+	cmd = exec.Command(
+		"kubectl", "create", "secret", "tls", "mlflow-tls",
+		"-n", namespace,
+		"--cert="+certPath,
+		"--key="+keyPath,
+		"--dry-run=client",
+		"-o", "yaml",
+	)
+	secretYAML, err := utils.Run(cmd)
+	Expect(err).NotTo(HaveOccurred(), "Failed to render mlflow-tls secret")
+
+	secretFile, err := writeTempManifest("mlflow-tls-", secretYAML)
+	Expect(err).NotTo(HaveOccurred(), "Failed to write TLS secret manifest")
+	defer cleanupTempManifest(secretFile)
+
+	cmd = exec.Command("kubectl", "apply", "-f", secretFile)
+	_, err = utils.Run(cmd)
+	Expect(err).NotTo(HaveOccurred(), "Failed to create mlflow-tls secret")
+}
+
 func cleanupTempManifest(path string) {
 	if removeErr := os.Remove(path); removeErr != nil {
 		_, _ = fmt.Fprintf(GinkgoWriter, "failed to remove %s: %v\n", path, removeErr)
@@ -1702,20 +1741,20 @@ func httpRouteCRDInstalled() bool {
 	return err == nil && strings.Contains(output, "httproute")
 }
 
-func moduleReleases() []moduleRelease {
+func moduleReleases(g Gomega) []moduleRelease {
 	output, err := kubectlOutput("get", "mlflowoperator", "default-mlflowoperator", "-o", "json")
-	Expect(err).NotTo(HaveOccurred())
+	g.Expect(err).NotTo(HaveOccurred())
 	var obj struct {
 		Status struct {
 			Releases []moduleRelease `json:"releases"`
 		} `json:"status"`
 	}
-	Expect(json.Unmarshal([]byte(output), &obj)).To(Succeed())
+	g.Expect(json.Unmarshal([]byte(output), &obj)).To(Succeed())
 	return obj.Status.Releases
 }
 
-func moduleReleaseByName(name string) (moduleRelease, bool) {
-	for _, release := range moduleReleases() {
+func moduleReleaseByName(g Gomega, name string) (moduleRelease, bool) {
+	for _, release := range moduleReleases(g) {
 		if release.Name == name {
 			return release, true
 		}
