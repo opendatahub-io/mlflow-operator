@@ -113,7 +113,10 @@ Skip / control flags:
   SKIP_CLEANUP          true|false — leave resources in place after the run (default: false).
                         Requires exactly one backend value; use ARTIFACT_BACKENDS=file
                         or STORAGE_TYPE=file (or another single backend) when preserving
-                        a deployment for later inspection or reuse.
+                        a deployment for later inspection or reuse. The default path
+                        deletes the cluster-scoped MLflow CR after every suite,
+                        including the last one, so leftover instances cannot block
+                        MLflowOperator removal.
   CLEANUP_REUSED_RESOURCES true|false|on_success — when SKIP_DEPLOYMENT=true
                         and SKIP_CLEANUP=false, also remove the reused MLflow
                         CR, harness-managed RBAC, and any self-deployed
@@ -388,7 +391,8 @@ STORAGE_TYPE_CONFIGURED=false
 [ -n "${STORAGE_TYPE+x}" ] && STORAGE_TYPE_CONFIGURED=true
 
 # Suites to run. Each entry is an artifact storage backend (file|s3|externals3); the script
-# deploys a fresh MLflow CR per suite, runs the full test suite, then tears it down.
+# deploys a fresh MLflow CR per suite, runs the full test suite, then deletes that CR
+# (including after the last suite, and after pytest failures).
 # Backward compatibility: STORAGE_TYPE=<type> (old single-suite interface) is honoured
 # when ARTIFACT_BACKENDS is not explicitly set.
 if ! $ARTIFACT_BACKENDS_CONFIGURED; then
@@ -583,9 +587,13 @@ should_use_mlflow_prefixed_health_endpoint() {
 }
 
 stop_port_forwards() {
-    [ -n "$PF_PID" ] && kill -0 "$PF_PID" 2>/dev/null && kill "$PF_PID"
-    [ -n "$S3_PF_PID" ] && kill -0 "$S3_PF_PID" 2>/dev/null && kill "$S3_PF_PID"
-    [ -n "$ARTIFACTS_PF_PID" ] && kill -0 "$ARTIFACTS_PF_PID" 2>/dev/null && kill "$ARTIFACTS_PF_PID"
+    local pid
+    for pid in "$PF_PID" "$S3_PF_PID" "$ARTIFACTS_PF_PID"; do
+        if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+            kill "$pid" 2>/dev/null || true
+            wait "$pid" 2>/dev/null || true
+        fi
+    done
     PF_PID=""
     S3_PF_PID=""
     ARTIFACTS_PF_PID=""
@@ -867,13 +875,44 @@ should_cleanup_reused_resources() {
     esac
 }
 
-# ─── Shared teardown (EXIT trap) ──────────────────────────────────────────────
+should_delete_mlflow_instance() {
+    local cleanup_status="${1:-${OVERALL_EXIT:-0}}"
+    [ "$SKIP_CLEANUP" != "true" ] || return 1
+    if [ "$SKIP_DEPLOYMENT" != "true" ]; then
+        return 0
+    fi
+    should_cleanup_reused_resources "$cleanup_status"
+}
+
+# The MLflow CR is cluster-scoped. A leftover instance keeps the
+# mlflow.opendatahub.io/mlflow-operator-protection finalizer from allowing
+# MLflowOperator to reach Removed. Wait until the object is gone so a later
+# platform sweep does not time out on MLflowInstancesPresent.
+delete_mlflow_instance() {
+    "$_MLFLOW_INSTANCE_DELETED" && return 0
+    echo "  Deleting cluster-scoped MLflow CR ${MLFLOW_NAME}..."
+    if ! kubectl delete mlflow "$MLFLOW_NAME" --ignore-not-found --wait --timeout=120s; then
+        echo "ERROR: failed to delete MLflow CR ${MLFLOW_NAME}; leftover instances block MLflowOperator removal" >&2
+        kubectl get mlflow "$MLFLOW_NAME" -o yaml >&2 || true
+        return 1
+    fi
+    _MLFLOW_INSTANCE_DELETED=true
+}
+
+# ─── Shared teardown (EXIT / INT / TERM trap) ─────────────────────────────────
 # Removes all resources created by this run: workspace namespaces (only those the
 # script itself created, not pre-existing ones), role bindings, the MLflow CR,
 # and any self-deployed infrastructure (PostgreSQL, SeaweedFS).
 # The DataScienceCluster mlflowoperator component is assumed to remain Managed.
+# INT/TERM are trapped because Jenkins and Kubernetes send SIGTERM when a stage
+# times out; EXIT alone does not run in that case, and SIGKILL follows later.
 
+_CLEANUP_DONE=false
+_MLFLOW_INSTANCE_DELETED=false
 cleanup() {
+    local cleanup_status="${1:-${OVERALL_EXIT:-0}}"
+    "$_CLEANUP_DONE" && return
+    _CLEANUP_DONE=true
     restore_test_ca_bundle_environment
     if [ "$SKIP_CLEANUP" = "true" ]; then
         return
@@ -884,11 +923,11 @@ cleanup() {
     local should_cleanup_mlflow=false
     local should_cleanup_infrastructure=false
     local cleanup_internal_s3=false
-    if [ "$SKIP_DEPLOYMENT" != "true" ] || should_cleanup_reused_resources; then
+    if should_delete_mlflow_instance "$cleanup_status"; then
         should_cleanup_mlflow=true
     fi
     if [ "$SKIP_INFRASTRUCTURE" != "true" ]; then
-        if [ "$SKIP_DEPLOYMENT" != "true" ] || should_cleanup_reused_resources; then
+        if [ "$SKIP_DEPLOYMENT" != "true" ] || should_cleanup_reused_resources "$cleanup_status"; then
             should_cleanup_infrastructure=true
         fi
     fi
@@ -904,7 +943,7 @@ cleanup() {
             ws=$(echo "$ws" | xargs); [ -z "$ws" ] && continue
             kubectl delete rolebinding "mlflow-permissions-${MLFLOW_NAME}" -n "$ws" --ignore-not-found 2>/dev/null || true
         done
-        kubectl delete mlflow "$MLFLOW_NAME" -n "$NAMESPACE" --ignore-not-found 2>/dev/null || true
+        delete_mlflow_instance || true
         kubectl delete rolebinding "mlflow-permissions-${MLFLOW_NAME}" -n "$NAMESPACE" --ignore-not-found 2>/dev/null || true
         kubectl delete clusterrolebinding "mlflow-auth-delegator-${MLFLOW_NAME}" --ignore-not-found 2>/dev/null || true
         kubectl delete clusterrolebinding "mlflow-config-view-${MLFLOW_NAME}" --ignore-not-found 2>/dev/null || true
@@ -919,7 +958,16 @@ cleanup() {
     fi
 }
 
-trap cleanup EXIT
+terminate_on_signal() {
+    local signal_status="$1"
+    trap - EXIT INT TERM
+    cleanup "$signal_status"
+    exit "$signal_status"
+}
+
+trap 'cleanup "$?"' EXIT
+trap 'terminate_on_signal 130' INT
+trap 'terminate_on_signal 143' TERM
 
 # ─── CSV patching (OpenShift/OLM) ─────────────────────────────────────────────
 # Done once before the suite loop — the MLflow operator manifests don't change
@@ -995,7 +1043,28 @@ EOF
         --dry-run=client -o yaml | kubectl apply -f -
 }
 
-run_suite() {
+finalize_suite() {
+    local suite_status="$1"
+    stop_port_forwards
+
+    if should_delete_mlflow_instance "$suite_status"; then
+        echo "  Removing MLflow instance ${MLFLOW_NAME} after the ${STORAGE_TYPE} suite..."
+        delete_mlflow_instance || OVERALL_EXIT=1
+    fi
+
+    if [ "$SUITE_HAS_NEXT" = "true" ] && \
+       { [ "$SKIP_DEPLOYMENT" != "true" ] || should_cleanup_reused_resources "$suite_status"; } && \
+       [ "$SKIP_INFRASTRUCTURE" != "true" ]; then
+        echo "  Resetting suite infrastructure before the next backend..."
+        local cleanup_internal_s3=false
+        if [ "$STORAGE_TYPE" = "s3" ]; then
+            cleanup_internal_s3=true
+        fi
+        cleanup_self_managed_infrastructure "$cleanup_internal_s3" "true"
+    fi
+}
+
+run_suite_body() {
     echo ""
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     echo "  Suite: storage=${STORAGE_TYPE} backend=${BACKEND_STORE} registry=${REGISTRY_STORE}"
@@ -1126,33 +1195,6 @@ run_suite() {
         fi
         _OPERATOR_DEPLOYED=true
     fi
-
-    # ── Between-suite teardown (runs on every exit path) ────────────────────────
-    # Registered here so it fires even when RBAC, health-check, or token steps fail,
-    # ensuring the current suite is fully reset before the next backend starts.
-    # Single-backend preserve/reuse flows still rely on the final EXIT cleanup semantics.
-    local _suite_teardown_done=false
-    _suite_teardown() {
-        local suite_status=$?
-        "$_suite_teardown_done" && return
-        _suite_teardown_done=true
-        stop_port_forwards
-
-        if [ "$SUITE_HAS_NEXT" = "true" ] && \
-           { [ "$SKIP_DEPLOYMENT" != "true" ] || should_cleanup_reused_resources "$suite_status"; }; then
-            echo "  Resetting suite state before the next backend..."
-            kubectl delete mlflow "$MLFLOW_NAME" -n "$NAMESPACE" --ignore-not-found --wait --timeout=120s 2>/dev/null || true
-
-            if [ "$SKIP_INFRASTRUCTURE" != "true" ]; then
-                local cleanup_internal_s3=false
-                if [ "$STORAGE_TYPE" = "s3" ]; then
-                    cleanup_internal_s3=true
-                fi
-                cleanup_self_managed_infrastructure "$cleanup_internal_s3" "true"
-            fi
-        fi
-    }
-    trap _suite_teardown RETURN
 
     # ── RBAC ────────────────────────────────────────────────────────────────────
     # Applied after deploy.py so the SA exists; runs before tests execute.
@@ -1322,6 +1364,14 @@ run_suite() {
 
     restore_test_ca_bundle_environment
     return "$suite_exit"
+}
+
+run_suite() {
+    local suite_status=0
+    _MLFLOW_INSTANCE_DELETED=false
+    run_suite_body || suite_status=$?
+    finalize_suite "$suite_status"
+    return "$suite_status"
 }
 
 # ─── Main ─────────────────────────────────────────────────────────────────────

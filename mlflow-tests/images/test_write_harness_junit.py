@@ -19,6 +19,19 @@ def bash_with_mapfile() -> str:
     return bash
 
 
+def _write_executable(path: Path, contents: str) -> None:
+    path.write_text(contents, encoding="utf-8")
+    path.chmod(0o755)
+
+
+def _mlflow_delete_commands(kubectl_log: str) -> list[str]:
+    return [
+        line
+        for line in kubectl_log.splitlines()
+        if line.split()[:2] == ["delete", "mlflow"]
+    ]
+
+
 def test_harness_junit_path_includes_storage_type(tmp_path: Path) -> None:
     assert harness_junit_path(str(tmp_path), "file") == str(tmp_path / "xunit_report_file.xml")
     assert harness_junit_path(str(tmp_path), None) == str(tmp_path / "xunit_report.xml")
@@ -207,12 +220,14 @@ def test_artifacts_server_accepts_multi_backend_list_and_postgresql_alias(
     bash = bash_with_mapfile()
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
+    kubectl_log = tmp_path / "kubectl.log"
 
     fake_kubectl = fake_bin / "kubectl"
     fake_kubectl.write_text(
         dedent(
-            """\
+            f"""\
             #!/bin/sh
+            echo "$*" >> "{kubectl_log}"
             case "$*" in
                 *"wait --for=condition=Available deployment/mlflow-artifacts"*) exit 1 ;;
             esac
@@ -254,6 +269,7 @@ def test_artifacts_server_accepts_multi_backend_list_and_postgresql_alias(
             "SKIP_OPERATOR": "true",
             "SKIP_INFRASTRUCTURE": "true",
             "SKIP_CLEANUP": "false",
+            "FAIL_FAST": "false",
             "BACKEND_STORE": "postgresql",
             "REGISTRY_STORE": "postgresql",
             "ARTIFACT_BACKENDS": "file, s3",
@@ -272,6 +288,7 @@ def test_artifacts_server_accepts_multi_backend_list_and_postgresql_alias(
     assert result.returncode == 1
     assert "mlflow-artifacts Deployment did not become available" in result.stderr
     assert "test_config" not in result.stderr
+    assert len(_mlflow_delete_commands(kubectl_log.read_text(encoding="utf-8"))) == 2
 
 
 @pytest.mark.parametrize(
@@ -392,3 +409,191 @@ def test_artifacts_server_readiness_failure_writes_harness_junit(
     error = test_case.find("error")
     assert error is not None
     assert error.get("message") == expected_message
+
+
+@pytest.mark.parametrize(
+    ("overrides", "expected_returncode", "expect_delete"),
+    [
+        ({"UV_PYTEST_EXIT": "0"}, 0, True),
+        ({"UV_PYTEST_EXIT": "1"}, 1, True),
+        ({"UV_DEPLOY_EXIT": "1"}, 1, True),
+        ({"HARNESS_SIGNAL": "INT"}, 130, True),
+        ({"HARNESS_SIGNAL": "TERM"}, 143, True),
+        ({"SKIP_CLEANUP": "true"}, 1, False),
+        (
+            {
+                "SKIP_DEPLOYMENT": "true",
+                "SKIP_CLEANUP": "false",
+                "CLEANUP_REUSED_RESOURCES": "false",
+            },
+            1,
+            False,
+        ),
+        (
+            {
+                "SKIP_DEPLOYMENT": "true",
+                "SKIP_CLEANUP": "false",
+                "CLEANUP_REUSED_RESOURCES": "true",
+            },
+            1,
+            True,
+        ),
+        (
+            {
+                "SKIP_DEPLOYMENT": "true",
+                "SKIP_CLEANUP": "false",
+                "CLEANUP_REUSED_RESOURCES": "on_success",
+                "UV_PYTEST_EXIT": "0",
+            },
+            0,
+            True,
+        ),
+        (
+            {
+                "SKIP_DEPLOYMENT": "true",
+                "SKIP_CLEANUP": "false",
+                "CLEANUP_REUSED_RESOURCES": "on_success",
+            },
+            1,
+            False,
+        ),
+    ],
+    ids=[
+        "last-suite-success",
+        "last-suite-failed-pytest",
+        "partial-deploy-failure",
+        "interrupt",
+        "terminate",
+        "skip-cleanup",
+        "reuse-preserve",
+        "reuse-cleanup",
+        "reuse-cleanup-on-success",
+        "reuse-preserve-on-failure",
+    ],
+)
+def test_last_suite_deletes_cluster_scoped_mlflow_cr(
+    tmp_path: Path,
+    overrides: dict[str, str],
+    expected_returncode: int,
+    expect_delete: bool,
+) -> None:
+    bash = bash_with_mapfile()
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    kubectl_log = tmp_path / "kubectl.log"
+
+    _write_executable(
+        fake_bin / "kubectl",
+        dedent(
+            f"""\
+            #!/bin/sh
+            echo "$*" >> "{kubectl_log}"
+            case "$*" in
+                *"create token"*)
+                    printf 'fake-token\\n'
+                    ;;
+                *"jsonpath={{.status.url}}"*)
+                    printf 'https://mlflow.example/mlflow'
+                    ;;
+                *"jsonpath={{.spec.traceArchival.enabled}}"*)
+                    printf 'false'
+                    ;;
+            esac
+            exit 0
+            """
+        ),
+    )
+    _write_executable(
+        fake_bin / "curl",
+        dedent(
+            """\
+            #!/bin/sh
+            output_file=""
+            while [ "$#" -gt 0 ]; do
+                if [ "$1" = "-o" ]; then
+                    output_file="$2"
+                    shift 2
+                else
+                    shift
+                fi
+            done
+            [ -z "$output_file" ] || printf '{}' > "$output_file"
+            printf '200'
+            """
+        ),
+    )
+    _write_executable(fake_bin / "sleep", "#!/bin/sh\nexit 0\n")
+    _write_executable(
+        fake_bin / "uv",
+        dedent(
+            """\
+            #!/bin/sh
+            case "$*" in
+                *deploy.py*) exit "${UV_DEPLOY_EXIT:-0}" ;;
+                *pytest*)
+                    if [ -n "${HARNESS_SIGNAL:-}" ]; then
+                        kill -s "${HARNESS_SIGNAL}" "$PPID"
+                        exit 0
+                    fi
+                    exit "${UV_PYTEST_EXIT:-1}"
+                    ;;
+            esac
+            exit 0
+            """
+        ),
+    )
+
+    results_dir = tmp_path / "results"
+    env = os.environ.copy()
+    env.pop("DB_TYPE", None)
+    env.update(
+        {
+            "PATH": f"{fake_bin}{os.pathsep}{env['PATH']}",
+            "TEST_RESULTS_DIR": str(results_dir),
+            "MLFLOW_TEST_SUPPORTED_VERSION": "3.14",
+            "SUPPORTED_MLFLOW_VERSION_RAW": "3.14.0",
+            "ARTIFACTS_SERVER": "false",
+            "ARTIFACTS_SERVER_GATEWAY": "false",
+            "INFRASTRUCTURE_PLATFORM": "openshift",
+            "FORCE_PORT_FORWARD": "false",
+            "DEPLOY_MLFLOW_OPERATOR": "false",
+            "SKIP_DEPLOYMENT": "false",
+            "SKIP_OPERATOR": "true",
+            "SKIP_INFRASTRUCTURE": "true",
+            "SKIP_CLEANUP": "false",
+            "CLEANUP_REUSED_RESOURCES": "false",
+            "BACKEND_STORE": "sqlite",
+            "REGISTRY_STORE": "sqlite",
+            "ARTIFACT_BACKENDS": "s3",
+            "workspaces": "test-workspace",
+        }
+    )
+    env.update(overrides)
+
+    result = subprocess.run(
+        [bash, str(Path(__file__).with_name("test-run.sh"))],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=60,
+    )
+
+    assert result.returncode == expected_returncode
+    log_text = kubectl_log.read_text(encoding="utf-8") if kubectl_log.exists() else ""
+    deletes = _mlflow_delete_commands(log_text)
+    if expect_delete:
+        assert len(deletes) == 1, (
+            "expected exactly one MLflow CR deletion, kubectl log:\n"
+            f"{log_text}\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+        )
+        assert "--wait" in deletes[0]
+        assert all("-n" not in line.split() for line in deletes)
+        assert "Deleting cluster-scoped MLflow CR mlflow" in result.stdout
+        if expected_returncode == 1:
+            log_lines = log_text.splitlines()
+            assert log_lines.index(deletes[0]) > next(
+                i for i, line in enumerate(log_lines) if line == "get namespaces"
+            ), "failure diagnostics must be collected before deleting the MLflow CR"
+    else:
+        assert deletes == [], f"unexpected MLflow CR deletion: {deletes}\nstderr:\n{result.stderr}"

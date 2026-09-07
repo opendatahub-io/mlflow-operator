@@ -154,7 +154,7 @@ certificate verification.
 | `SKIP_DEPLOYMENT` | `false` | Skip all cluster deployment and use pre-existing resources. Requires exactly one backend matching the reused MLflow CR. |
 | `SKIP_OPERATOR` | `false` | Skip operator deployment only. |
 | `SKIP_INFRASTRUCTURE` | `false` | Skip PostgreSQL/SeaweedFS deployment. |
-| `SKIP_CLEANUP` | `false` | Leave the deployment in place after the run. Requires exactly one backend; use it for inspection or later reuse. |
+| `SKIP_CLEANUP` | `false` | Leave the deployment in place after the run. By default, failure diagnostics are collected before the harness deletes its cluster-scoped MLflow CR after every suite, including the final suite and interrupted runs. Requires exactly one backend; use it for inspection or later reuse. |
 | `CLEANUP_REUSED_RESOURCES` | `false` | With `SKIP_DEPLOYMENT=true` and `SKIP_CLEANUP=false`, control cleanup of reused resources: `false` preserves them, `true` always deletes them, and `on_success` deletes them only after a successful run. |
 
 ### Other
