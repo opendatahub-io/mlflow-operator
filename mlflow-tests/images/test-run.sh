@@ -543,6 +543,7 @@ export workspaces="$WORKSPACE_LIST"
 PF_PID=""
 S3_PF_PID=""
 ARTIFACTS_PF_PID=""
+ACTIVE_CHILD_PID=""
 TEST_CA_BUNDLE_FILE=""
 declare -A _TEST_CA_ENV_VALUES=()
 declare -A _TEST_CA_ENV_WAS_SET=()
@@ -597,6 +598,15 @@ stop_port_forwards() {
     PF_PID=""
     S3_PF_PID=""
     ARTIFACTS_PF_PID=""
+}
+
+run_interruptible() {
+    local child_status=0
+    "$@" &
+    ACTIVE_CHILD_PID=$!
+    wait "$ACTIVE_CHILD_PID" || child_status=$?
+    ACTIVE_CHILD_PID=""
+    return "$child_status"
 }
 
 cleanup_self_managed_infrastructure() {
@@ -749,7 +759,7 @@ sys.stdout.write("\n".join(certificates))
 
 wait_for_mlflow_cr_available() {
     echo "  Waiting for MLflow CR to report Available=True..."
-    if kubectl wait \
+    if run_interruptible kubectl wait \
         --for=condition=Available \
         "mlflow/${MLFLOW_NAME}" \
         --namespace "$NAMESPACE" \
@@ -809,7 +819,7 @@ wait_for_mlflow_server_info() {
 
 wait_for_artifacts_server_route() {
     echo "  Waiting for the dedicated artifact Deployment..."
-    if ! kubectl wait --for=condition=Available deployment/mlflow-artifacts \
+    if ! run_interruptible kubectl wait --for=condition=Available deployment/mlflow-artifacts \
         --namespace "$NAMESPACE" --timeout=300s; then
         echo "ERROR: mlflow-artifacts Deployment did not become available" >&2
         collect_debug_logs "artifact deployment readiness failure"
@@ -891,7 +901,7 @@ should_delete_mlflow_instance() {
 delete_mlflow_instance() {
     "$_MLFLOW_INSTANCE_DELETED" && return 0
     echo "  Deleting cluster-scoped MLflow CR ${MLFLOW_NAME}..."
-    if ! kubectl delete mlflow "$MLFLOW_NAME" --ignore-not-found --wait --timeout=120s; then
+    if ! run_interruptible kubectl delete mlflow "$MLFLOW_NAME" --ignore-not-found --wait --timeout=120s; then
         echo "ERROR: failed to delete MLflow CR ${MLFLOW_NAME}; leftover instances block MLflowOperator removal" >&2
         kubectl get mlflow "$MLFLOW_NAME" -o yaml >&2 || true
         return 1
@@ -909,6 +919,7 @@ delete_mlflow_instance() {
 
 _CLEANUP_DONE=false
 _MLFLOW_INSTANCE_DELETED=false
+_SUITE_TEARDOWN_FAILED=false
 cleanup() {
     local cleanup_status="${1:-${OVERALL_EXIT:-0}}"
     "$_CLEANUP_DONE" && return
@@ -943,7 +954,9 @@ cleanup() {
             ws=$(echo "$ws" | xargs); [ -z "$ws" ] && continue
             kubectl delete rolebinding "mlflow-permissions-${MLFLOW_NAME}" -n "$ws" --ignore-not-found 2>/dev/null || true
         done
-        delete_mlflow_instance || true
+        if ! delete_mlflow_instance; then
+            return 1
+        fi
         kubectl delete rolebinding "mlflow-permissions-${MLFLOW_NAME}" -n "$NAMESPACE" --ignore-not-found 2>/dev/null || true
         kubectl delete clusterrolebinding "mlflow-auth-delegator-${MLFLOW_NAME}" --ignore-not-found 2>/dev/null || true
         kubectl delete clusterrolebinding "mlflow-config-view-${MLFLOW_NAME}" --ignore-not-found 2>/dev/null || true
@@ -960,8 +973,15 @@ cleanup() {
 
 terminate_on_signal() {
     local signal_status="$1"
-    trap - EXIT INT TERM
-    cleanup "$signal_status"
+    trap - EXIT
+    trap '' INT TERM
+    if [ -n "$ACTIVE_CHILD_PID" ] && kill -0 "$ACTIVE_CHILD_PID" 2>/dev/null; then
+        kill -TERM "$ACTIVE_CHILD_PID" 2>/dev/null || true
+        wait "$ACTIVE_CHILD_PID" 2>/dev/null || true
+        ACTIVE_CHILD_PID=""
+    fi
+    collect_debug_logs "signal interruption"
+    cleanup "$signal_status" || true
     exit "$signal_status"
 }
 
@@ -1049,7 +1069,10 @@ finalize_suite() {
 
     if should_delete_mlflow_instance "$suite_status"; then
         echo "  Removing MLflow instance ${MLFLOW_NAME} after the ${STORAGE_TYPE} suite..."
-        delete_mlflow_instance || OVERALL_EXIT=1
+        if ! delete_mlflow_instance; then
+            OVERALL_EXIT=1
+            return 1
+        fi
     fi
 
     if [ "$SUITE_HAS_NEXT" = "true" ] && \
@@ -1187,7 +1210,7 @@ run_suite_body() {
         fi
 
         local deploy_rc=0
-        uv run --project "$UV_PROJECT_DIR" --no-sync "$DEPLOY_PY" "${deploy_args[@]}" || deploy_rc=$?
+        run_interruptible uv run --project "$UV_PROJECT_DIR" --no-sync "$DEPLOY_PY" "${deploy_args[@]}" || deploy_rc=$?
         if [ "$deploy_rc" -ne 0 ]; then
             collect_debug_logs "deploy.py failure"
             fail_suite "test_deploy" "deploy.py failed (exit code ${deploy_rc})"
@@ -1284,7 +1307,7 @@ run_suite_body() {
 
     if [ "$INFERRED_UPGRADE_PHASE" = "post_upgrade" ]; then
         echo "  Waiting for MLflow CR status.version to reach ${SUPPORTED_MLFLOW_VERSION_RAW}..."
-        if ! kubectl wait \
+        if ! run_interruptible kubectl wait \
             --for="jsonpath={.status.version}=${SUPPORTED_MLFLOW_VERSION_RAW}" \
             "mlflow/${MLFLOW_NAME}" \
             --namespace "$NAMESPACE" \
@@ -1351,7 +1374,7 @@ run_suite_body() {
     echo "  Running tests (output: $results_file)..."
     cd "$SCRIPT_DIR/.."
     local suite_exit=0
-    uv run --project "$UV_PROJECT_DIR" --no-sync pytest --junit-xml="$results_file" "${PYTEST_ARGS[@]}" || suite_exit=$?
+    run_interruptible uv run --project "$UV_PROJECT_DIR" --no-sync pytest --junit-xml="$results_file" "${PYTEST_ARGS[@]}" || suite_exit=$?
     cd "$SCRIPT_DIR"
 
     if [ "$suite_exit" -ne 0 ]; then
@@ -1368,9 +1391,15 @@ run_suite_body() {
 
 run_suite() {
     local suite_status=0
+    local finalize_status=0
     _MLFLOW_INSTANCE_DELETED=false
+    _SUITE_TEARDOWN_FAILED=false
     run_suite_body || suite_status=$?
-    finalize_suite "$suite_status"
+    finalize_suite "$suite_status" || finalize_status=$?
+    if [ "$finalize_status" -ne 0 ]; then
+        _SUITE_TEARDOWN_FAILED=true
+        return 1
+    fi
     return "$suite_status"
 }
 
@@ -1383,9 +1412,13 @@ for suite_idx in "${!_resolved_backends[@]}"; do
     if [ "$suite_idx" -lt $((ARTIFACT_BACKEND_COUNT - 1)) ]; then
         SUITE_HAS_NEXT=true
     fi
-    if ! run_suite; then
+    suite_status=0
+    run_suite || suite_status=$?
+    if [ "$suite_status" -ne 0 ]; then
         OVERALL_EXIT=1
-        [ "$FAIL_FAST" = "true" ] && break
+        if [ "$_SUITE_TEARDOWN_FAILED" = "true" ] || [ "$FAIL_FAST" = "true" ]; then
+            break
+        fi
     fi
 done
 

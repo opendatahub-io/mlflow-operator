@@ -240,7 +240,20 @@ def test_artifacts_server_accepts_multi_backend_list_and_postgresql_alias(
 
     fake_curl = fake_bin / "curl"
     fake_curl.write_text(
-        "#!/bin/sh\nprintf '{}' > \"$7\"\nprintf '200'\n",
+        dedent(
+            """\
+            #!/bin/sh
+            while [ "$#" -gt 0 ]; do
+                if [ "$1" = "-o" ]; then
+                    printf '{}' > "$2"
+                    shift 2
+                else
+                    shift
+                fi
+            done
+            printf '200'
+            """
+        ),
         encoding="utf-8",
     )
     fake_curl.chmod(0o755)
@@ -481,6 +494,7 @@ def test_last_suite_deletes_cluster_scoped_mlflow_cr(
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
     kubectl_log = tmp_path / "kubectl.log"
+    uv_log = tmp_path / "uv.log"
 
     _write_executable(
         fake_bin / "kubectl",
@@ -532,8 +546,10 @@ def test_last_suite_deletes_cluster_scoped_mlflow_cr(
                 *deploy.py*) exit "${UV_DEPLOY_EXIT:-0}" ;;
                 *pytest*)
                     if [ -n "${HARNESS_SIGNAL:-}" ]; then
+                        trap 'echo child-stopped >> "$UV_LOG"; exit 0' TERM
+                        echo child-started >> "$UV_LOG"
                         kill -s "${HARNESS_SIGNAL}" "$PPID"
-                        exit 0
+                        while true; do sleep 1; done
                     fi
                     exit "${UV_PYTEST_EXIT:-1}"
                     ;;
@@ -566,6 +582,7 @@ def test_last_suite_deletes_cluster_scoped_mlflow_cr(
             "REGISTRY_STORE": "sqlite",
             "ARTIFACT_BACKENDS": "s3",
             "workspaces": "test-workspace",
+            "UV_LOG": str(uv_log),
         }
     )
     env.update(overrides)
@@ -590,10 +607,93 @@ def test_last_suite_deletes_cluster_scoped_mlflow_cr(
         assert "--wait" in deletes[0]
         assert all("-n" not in line.split() for line in deletes)
         assert "Deleting cluster-scoped MLflow CR mlflow" in result.stdout
-        if expected_returncode == 1:
+        if expected_returncode != 0:
             log_lines = log_text.splitlines()
             assert log_lines.index(deletes[0]) > next(
                 i for i, line in enumerate(log_lines) if line == "get namespaces"
             ), "failure diagnostics must be collected before deleting the MLflow CR"
+        if "HARNESS_SIGNAL" in overrides:
+            assert uv_log.read_text(encoding="utf-8").splitlines() == [
+                "child-started",
+                "child-stopped",
+            ]
     else:
         assert deletes == [], f"unexpected MLflow CR deletion: {deletes}\nstderr:\n{result.stderr}"
+
+
+def test_mlflow_delete_failure_stops_before_next_backend(tmp_path: Path) -> None:
+    bash = bash_with_mapfile()
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    kubectl_log = tmp_path / "kubectl.log"
+    uv_log = tmp_path / "uv.log"
+
+    _write_executable(
+        fake_bin / "kubectl",
+        dedent(
+            f"""\
+            #!/bin/sh
+            echo "$*" >> "{kubectl_log}"
+            case "$*" in
+                "delete mlflow "*) exit 1 ;;
+                *"create token"*) printf 'fake-token\\n' ;;
+                *"jsonpath={{.status.url}}"*) printf 'https://mlflow.example/mlflow' ;;
+                *"jsonpath={{.spec.traceArchival.enabled}}"*) printf 'false' ;;
+            esac
+            exit 0
+            """
+        ),
+    )
+    _write_executable(
+        fake_bin / "curl",
+        "#!/bin/sh\nwhile [ \"$#\" -gt 0 ]; do [ \"$1\" = -o ] && { printf '{}' > \"$2\"; shift; }; shift; done\nprintf '200'\n",
+    )
+    _write_executable(fake_bin / "sleep", "#!/bin/sh\nexit 0\n")
+    _write_executable(
+        fake_bin / "uv",
+        "#!/bin/sh\necho \"$*\" >> \"$UV_LOG\"\nexit 0\n",
+    )
+
+    env = os.environ.copy()
+    env.pop("DB_TYPE", None)
+    env.update(
+        {
+            "PATH": f"{fake_bin}{os.pathsep}{env['PATH']}",
+            "TEST_RESULTS_DIR": str(tmp_path / "results"),
+            "MLFLOW_TEST_SUPPORTED_VERSION": "3.14",
+            "SUPPORTED_MLFLOW_VERSION_RAW": "3.14.0",
+            "ARTIFACTS_SERVER": "false",
+            "ARTIFACTS_SERVER_GATEWAY": "false",
+            "INFRASTRUCTURE_PLATFORM": "openshift",
+            "FORCE_PORT_FORWARD": "false",
+            "DEPLOY_MLFLOW_OPERATOR": "false",
+            "SKIP_DEPLOYMENT": "false",
+            "SKIP_OPERATOR": "true",
+            "SKIP_INFRASTRUCTURE": "true",
+            "SKIP_CLEANUP": "false",
+            "FAIL_FAST": "false",
+            "BACKEND_STORE": "sqlite",
+            "REGISTRY_STORE": "sqlite",
+            "ARTIFACT_BACKENDS": "file,s3",
+            "workspaces": "test-workspace",
+            "UV_LOG": str(uv_log),
+        }
+    )
+
+    result = subprocess.run(
+        [bash, str(Path(__file__).with_name("test-run.sh"))],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=60,
+    )
+
+    assert result.returncode == 1
+    assert "failed to delete MLflow CR mlflow" in result.stderr
+    deploys = [
+        line
+        for line in uv_log.read_text(encoding="utf-8").splitlines()
+        if "deploy.py" in line
+    ]
+    assert len(deploys) == 1, "the next backend must not start after MLflow CR deletion fails"
