@@ -1353,6 +1353,9 @@ run_suite_body() {
         s3|externals3) export artifact_storage="s3" ;;
         *)             export artifact_storage="$STORAGE_TYPE" ;;
     esac
+    # Keep the unnormalised backend available to tests that need to distinguish
+    # the self-hosted SeaweedFS path from an externally managed S3 service.
+    export artifact_backend="$STORAGE_TYPE"
     # deploy.py defaults --serve-artifacts to "true"; export the same default so
     # Config.SERVE_ARTIFACTS stays in sync if the default ever changes.
     export serve_artifacts="${SERVE_ARTIFACTS}"

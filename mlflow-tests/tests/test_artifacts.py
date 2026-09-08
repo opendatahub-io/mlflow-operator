@@ -272,12 +272,13 @@ class TestMLflowArtifacts(TestBase):
     ) -> None:
         """Load a model through the multipart download path from the test container.
 
-        The server signs URLs using the cluster Service DNS name.  The integration
-        launcher maps that name to its SeaweedFS localhost port-forward, while the
-        MLflow pod continues to resolve it through Kubernetes DNS.
+        Self-hosted SeaweedFS signs URLs using the cluster Service DNS name. The
+        integration launcher maps that name to its localhost port-forward, while
+        externally managed S3 signs URLs with its externally reachable endpoint.
         """
-        signed_url_host = f"minio-service.{Config.MLFLOW_NAMESPACE}.svc.cluster.local"
-        assert socket.gethostbyname(signed_url_host) == "127.0.0.1"
+        if Config.ARTIFACT_BACKEND == "s3":
+            signed_url_host = f"minio-service.{Config.MLFLOW_NAMESPACE}.svc.cluster.local"
+            assert socket.gethostbyname(signed_url_host) == "127.0.0.1"
 
         workspace = Config.WORKSPACES[0]
         user = create_user_with_permissions(

@@ -19,7 +19,14 @@ def _assert_trace_payloads(observed_traces, expected_payloads: list[dict]) -> No
         trace = observed_traces.get(payload["trace_id"])
         assert trace is not None, f"Trace {payload['trace_id']} was not found after archival"
         assert trace.data.spans, f"Trace {payload['trace_id']} has no persisted spans"
-        root_span = trace.data.spans[0]
+        expected_root_span_id = payload["spans"][0].span_id
+        root_span = next(
+            (span for span in trace.data.spans if span.span_id == expected_root_span_id),
+            None,
+        )
+        assert root_span is not None, (
+            f"Trace {payload['trace_id']} does not contain root span {expected_root_span_id}"
+        )
         assert root_span.name == payload["trace_name"], (
             f"Expected root span '{payload['trace_name']}', got '{root_span.name}'"
         )

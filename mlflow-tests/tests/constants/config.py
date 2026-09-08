@@ -12,6 +12,7 @@ class Config:
     CA_BUNDLE: str = os.getenv("ca_bundle", "")
     REQUEST_TIMEOUT: int = int(os.getenv("MLFLOW_REQUEST_TIMEOUT", "30"))
     ARTIFACT_STORAGE = os.getenv("artifact_storage", "file")
+    ARTIFACT_BACKEND = os.getenv("artifact_backend", ARTIFACT_STORAGE)
     SERVE_ARTIFACTS = os.getenv("serve_artifacts", "true") == "true"
     ARTIFACTS_SERVER = os.getenv("artifacts_server", "false") == "true"
     ARTIFACTS_SERVER_GATEWAY = os.getenv("artifacts_server_gateway", "false") == "true"
