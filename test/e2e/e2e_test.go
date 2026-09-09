@@ -85,6 +85,11 @@ var _ = Describe("Manager", Ordered, func() {
 		_, err = utils.Run(cmd)
 		Expect(err).NotTo(HaveOccurred(), "Failed to install Auth CRD")
 
+		By("installing Gateway API HTTPRoute CRD for e2e")
+		cmd = exec.Command("kubectl", "apply", "-f", "test/crd/httproutes.gateway.networking.k8s.io.yaml")
+		_, err = utils.Run(cmd)
+		Expect(err).NotTo(HaveOccurred(), "Failed to install HTTPRoute CRD")
+
 		By("deploying the controller-manager")
 		cmd = exec.Command("make", "deploy", fmt.Sprintf("IMG=%s", projectImage))
 		_, err = utils.Run(cmd)
@@ -585,17 +590,20 @@ spec:
 					"kubectl", "delete", "mlflow", mlflowName,
 					"--ignore-not-found=true", "--wait=true", "--timeout=5m",
 				)
-				_, _ = utils.Run(cmd)
+				_, err := utils.Run(cmd)
+				Expect(err).NotTo(HaveOccurred(), "Failed to delete MLflow resource during handoff cleanup")
 				cmd = exec.Command(
 					"kubectl", "delete", "mlflowoperator", mlflowOperatorName,
 					"--ignore-not-found=true", "--wait=true", "--timeout=3m",
 				)
-				_, _ = utils.Run(cmd)
+				_, err = utils.Run(cmd)
+				Expect(err).NotTo(HaveOccurred(), "Failed to delete MLflowOperator resource during handoff cleanup")
 				cmd = exec.Command(
 					"kubectl", "delete", "configmap", platformConfigMapName,
 					"-n", namespace, "--ignore-not-found=true",
 				)
-				_, _ = utils.Run(cmd)
+				_, err = utils.Run(cmd)
+				Expect(err).NotTo(HaveOccurred(), "Failed to delete platform ConfigMap during handoff cleanup")
 
 				By("disabling the MLflowOperator module controller path for later tests")
 				setOperatorDeploymentEnv(
@@ -642,10 +650,7 @@ spec:
 					g.Expect(output).To(ContainSubstring(namespace))
 				}, 2*time.Minute, time.Second).Should(Succeed())
 
-				if !httpRouteCRDInstalled() {
-					return
-				}
-				By("verifying the managed HTTPRoute exists when the Gateway API CRD is installed")
+				By("verifying the managed HTTPRoute exists")
 				Eventually(func(g Gomega) {
 					output, getErr := kubectlOutput(
 						"get", "httproute", mlflowName,
@@ -805,25 +810,7 @@ data:
 				_, err = utils.Run(cmd)
 				Expect(err).NotTo(HaveOccurred(), "Failed to patch MLflowOperator gateway domain")
 
-				By("waiting for MLflowOperator status.observedGeneration to catch up after the gateway patch")
-				Eventually(func(g Gomega) {
-					generation, genErr := kubectlOutput(
-						"get", "mlflowoperator", mlflowOperatorName,
-						"-o", "jsonpath={.metadata.generation}",
-					)
-					g.Expect(genErr).NotTo(HaveOccurred())
-					observed, obsErr := kubectlOutput(
-						"get", "mlflowoperator", mlflowOperatorName,
-						"-o", "jsonpath={.status.observedGeneration}",
-					)
-					g.Expect(obsErr).NotTo(HaveOccurred())
-					g.Expect(observed).To(Equal(generation))
-				}, 2*time.Minute, time.Second).Should(Succeed())
-
-				if !httpRouteCRDInstalled() {
-					return
-				}
-				By("verifying HTTPRoute parentRef and MLflow status.url when Gateway API is installed")
+				By("verifying HTTPRoute parentRef and MLflow status.url after gateway domain projection")
 				Eventually(func(g Gomega) {
 					parent, parentErr := kubectlOutput(
 						"get", "httproute", mlflowName,
@@ -939,9 +926,7 @@ data:
 					g.Expect(getErr).NotTo(HaveOccurred())
 					g.Expect(output).To(BeEmpty())
 				}, 2*time.Minute, time.Second).Should(Succeed())
-				if !httpRouteCRDInstalled() {
-					return
-				}
+				By("verifying the managed HTTPRoute is removed after MLflow deletion")
 				Eventually(func(g Gomega) {
 					output, getErr := kubectlOutput(
 						"get", "httproute", mlflowName,
@@ -1634,11 +1619,6 @@ func waitForOperatorRollout() {
 	)
 	_, err := utils.Run(cmd)
 	Expect(err).NotTo(HaveOccurred(), "Controller deployment did not roll out")
-}
-
-func httpRouteCRDInstalled() bool {
-	output, err := kubectlOutput("api-resources", "--api-group=gateway.networking.k8s.io", "-o", "name")
-	return err == nil && strings.Contains(output, "httproute")
 }
 
 func moduleReleases(g Gomega) []moduleRelease {
