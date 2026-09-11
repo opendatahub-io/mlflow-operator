@@ -18,6 +18,7 @@ class Config:
     ARTIFACTS_SERVER_GATEWAY = os.getenv("artifacts_server_gateway", "false") == "true"
     MLFLOW_ARTIFACTS_URI = os.getenv("MLFLOW_ARTIFACTS_URI", "").rstrip("/")
     TRACE_ARCHIVAL_ENABLED = os.getenv("trace_archival_enabled", "false") == "true"
+    GARBAGE_COLLECTION_ENABLED = os.getenv("garbage_collection_enabled", "false") == "true"
     MLFLOW_NAMESPACE = os.getenv("mlflow_namespace", "opendatahub")
     AWS_ACCESS_KEY = os.getenv("AWS_ACCESS_KEY_ID", "")
     AWS_SECRET_KEY = os.getenv("AWS_SECRET_ACCESS_KEY", "")

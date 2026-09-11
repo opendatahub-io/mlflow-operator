@@ -63,6 +63,10 @@ class MLflowDeployer:
             and self.args.registry_store == "postgres"
         )
 
+    def _garbage_collection_enabled(self) -> bool:
+        """Return whether the test deployment can run GC against remote storage."""
+        return self._trace_archival_enabled()
+
     def _set_env_file_value(self, path: Path, key: str, value: str, description=None) -> None:
         """Set KEY=value in a params.env file without GNU sed -i (breaks on macOS)."""
         if description:
@@ -827,6 +831,7 @@ class MLflowDeployer:
         use_postgres_registry = self.args.registry_store == "postgres"
         use_s3_artifacts = self.args.artifact_storage in ("s3", "externals3")
         enable_trace_archival = self._trace_archival_enabled()
+        enable_garbage_collection = self._garbage_collection_enabled()
 
         # Nothing to wait for here — _setup_tls_ca_bundle (called below, after all
         # infra certs are gathered) handles the propagation wait internally.
@@ -898,6 +903,9 @@ class MLflowDeployer:
                     "retention": self.args.trace_archival_retention,
                     "maxTracesPerPass": 1000,
                 }
+            if enable_garbage_collection:
+                # A smoke test manually instantiates this CronJob's template.
+                mlflow_cr["spec"]["garbageCollection"] = {"schedule": "0 0 1 1 *"}
         else:
             # File-based artifact storage
             # File storage is served by tracking unless the dedicated server owns it.
@@ -1384,6 +1392,8 @@ class MLflowDeployer:
             )
         elif self.args.artifact_storage in ("s3", "externals3"):
             print("  Trace Archival: disabled (requires PostgreSQL backend and registry stores)")
+        if self._garbage_collection_enabled():
+            print("  Garbage Collection: enabled (PostgreSQL + S3 test configuration)")
         self._print_and_require_cluster()
         print()
 

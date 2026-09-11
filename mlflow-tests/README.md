@@ -215,7 +215,7 @@ The framework defines the following custom pytest markers:
 - **`@pytest.mark.Traces`**: Test direct trace-ingestion RBAC and experiment-scoped trace authorization
 - **`@pytest.mark.Artifacts`**: Test artifact operations, model logging, and S3 storage verification
 - **`@pytest.mark.artifacts_server`**: Test direct dedicated artifact functionality and, when enabled, live Gateway rewrites
-- **`@pytest.mark.smoke`**: Fast sanity-check tests suitable for pre-merge smoke runs, including trace archival in S3 rows where both metadata stores use PostgreSQL; that coverage creates several traces, runs the operator CronJob as a one-shot Job, and checks archive-object creation plus post-archive readability with `SPANS_LOCATION=ARCHIVE_REPO`. S3 rows involving SQLite skip this case because the harness provisions their shared PVC as `ReadWriteOnce`.
+- **`@pytest.mark.smoke`**: Fast sanity-check tests suitable for pre-merge smoke runs, including trace archival and garbage collection in S3 rows where both metadata stores use PostgreSQL. GC soft-deletes an experiment and verifies a one-shot Job from the operator CronJob removes its metadata and artifact. S3 rows involving SQLite skip these cases because the harness provisions their shared PVC as `ReadWriteOnce`.
 - **`@pytest.mark.pre_upgrade`**: Seed static MLflow state for upgrade validation
 - **`@pytest.mark.post_upgrade`**: Validate static MLflow state after an upgrade
 

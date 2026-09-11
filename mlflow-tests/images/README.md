@@ -202,6 +202,8 @@ AWS_ACCESS_KEY_ID=... AWS_SECRET_ACCESS_KEY=... BUCKET=my-bucket S3_ENDPOINT_URL
 
 `deploy.py` enables `spec.traceArchival` automatically only for `s3` or `externals3` when both the backend and registry stores use PostgreSQL (same bucket, `/trace-archive` prefix, schedule `0 0 1 1 *` so the CronJob does not fire during CI). Harness-driven runs default `TRACE_ARCHIVAL_RETENTION=1m` and pass that through to the MLflow CR so the smoke suite can create several traces, persist them as DB-backed spans via OTLP `/v1/traces` (prefixed tracking URI first, then the unprefixed Kind port-forward path), run a Job from the CronJob template, and verify that archive objects appear, traces remain readable, and `SPANS_LOCATION=ARCHIVE_REPO`. S3 rows involving SQLite retain their `ReadWriteOnce` PVC and omit trace archival; the smoke test reads the deployed CR and skips when archival is not enabled.
 
+The same safe PostgreSQL/S3 rows enable `spec.garbageCollection` with the non-firing schedule `0 0 1 1 *`. Its smoke test soft-deletes an experiment containing a run artifact, creates a one-off Job from `mlflow-gc`, and verifies that run and experiment metadata plus the S3 object are permanently removed. The split artifact-server topology is covered by its dedicated smoke tests; it is not used for the in-cluster GC Job because its test-runner port-forward URL is not reachable from that Job.
+
 For dedicated artifact serving, the Kind CI launcher installs the pinned `HTTPRoute` CRD before the
 operator starts and the harness port-forwards `mlflow-artifacts` for direct workspace-authenticated
 upload, list, download, and multipart smoke coverage. Set `ARTIFACTS_SERVER_GATEWAY=true` only on

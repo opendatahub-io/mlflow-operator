@@ -1374,6 +1374,14 @@ run_suite_body() {
         return 1
     fi
     export trace_archival_enabled="${deployed_trace_archival:-false}"
+    local deployed_garbage_collection
+    if ! deployed_garbage_collection="$(kubectl get mlflow "$MLFLOW_NAME" -o jsonpath='{.spec.garbageCollection.schedule}')"; then
+        echo "ERROR: Failed to read garbage collection state from MLflow CR ${MLFLOW_NAME}" >&2
+        fail_suite "test_read_garbage_collection_state" "Failed to read garbage collection state from MLflow CR ${MLFLOW_NAME}"
+        restore_test_ca_bundle_environment
+        return 1
+    fi
+    export garbage_collection_enabled="${deployed_garbage_collection:+true}"
 
     local results_file="${TEST_RESULTS_DIR}/xunit_report_${STORAGE_TYPE}.xml"
     echo "  Running tests (output: $results_file)..."

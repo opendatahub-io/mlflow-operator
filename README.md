@@ -654,6 +654,8 @@ MLflow coverage is split between:
 
 Ginkgo e2e covers trace archival CEL validation and operator resource lifecycle/cleanup without waiting for a cron tick or starting a Job against dummy storage. `mlflow-tests` smoke coverage creates several traces, persists them as DB-backed spans via OTLP `/v1/traces` (OpenShift HTTPRoute rewrites `/mlflow/v1`; Kind uses the unprefixed pod path), waits past a short harness-configured retention, runs a live archival Job from the CronJob template on object storage (`s3` / `externals3`), and verifies both archive object creation and post-archive trace readability. Live `file://` archival Jobs are avoided because the default PVC is ReadWriteOnce.
 
+Garbage collection has the same two-layer coverage. Ginkgo verifies that `spec.garbageCollection` creates and removes `mlflow-gc`, its ServiceAccount, and GC RBAC without allowing the CronJob to fire. On PostgreSQL + S3-compatible harness rows, `mlflow-tests` soft-deletes an experiment with a run artifact, runs a one-off Job from the `mlflow-gc` template, and verifies permanent removal of the run, experiment, and backing object. The test also runs in the dedicated split artifact-server S3 matrix to cover persisted `mlflow-artifacts:/` locations.
+
 For a repo-level map of Red Hat OpenShift AI MLflow fork validation, including
 Jenkins shift-left smoke and upgrade coverage, see the
 [RHOAI MLflow Fork Testing Guide](docs/rhoai-mlflow-testing.md).

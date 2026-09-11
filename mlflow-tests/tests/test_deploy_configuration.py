@@ -12,8 +12,12 @@ import pytest
 import yaml
 
 
-_DEPLOY_PATH = Path(__file__).parents[2] / ".github" / "actions" / "deploy" / "deploy.py"
-_DEPLOY_SPEC = importlib.util.spec_from_file_location("mlflow_operator_deploy", _DEPLOY_PATH)
+_DEPLOY_PATH = (
+    Path(__file__).parents[2] / ".github" / "actions" / "deploy" / "deploy.py"
+)
+_DEPLOY_SPEC = importlib.util.spec_from_file_location(
+    "mlflow_operator_deploy", _DEPLOY_PATH
+)
 assert _DEPLOY_SPEC is not None and _DEPLOY_SPEC.loader is not None
 _DEPLOY_MODULE = importlib.util.module_from_spec(_DEPLOY_SPEC)
 _DEPLOY_SPEC.loader.exec_module(_DEPLOY_MODULE)
@@ -95,7 +99,9 @@ def test_generated_file_cr_enables_split_serving_with_persistent_storage() -> No
     )
     deployer._tls_ca_bundle_cm = None
     deployer._ca_cert_pem = None
-    deployer.run_command = lambda *args, **kwargs: subprocess.CompletedProcess([], 0, "", "")
+    deployer.run_command = lambda *args, **kwargs: subprocess.CompletedProcess(
+        [], 0, "", ""
+    )
     deployer.wait_for_deployment_to_exist = lambda *args, **kwargs: None
     deployer.wait_for_mlflow_ready = lambda *args, **kwargs: None
 
@@ -125,7 +131,9 @@ def test_kind_operator_deployment_applies_mlflow_url_override(tmp_path: Path) ->
         lambda path, key, value, description=None: updates.append((key, value))
     )
     deployer.generate_tls_certificates = lambda: None
-    deployer.run_command = lambda *args, **kwargs: subprocess.CompletedProcess([], 0, "", "")
+    deployer.run_command = lambda *args, **kwargs: subprocess.CompletedProcess(
+        [], 0, "", ""
+    )
 
     deployer.deploy_mlflow_operator()
 
@@ -134,7 +142,9 @@ def test_kind_operator_deployment_applies_mlflow_url_override(tmp_path: Path) ->
 
 @pytest.mark.smoke
 @pytest.mark.artifacts_server
-def test_kind_overlay_rebakes_operator_values_from_overlay_params(tmp_path: Path) -> None:
+def test_kind_overlay_rebakes_operator_values_from_overlay_params(
+    tmp_path: Path,
+) -> None:
     repo_root = Path(__file__).parents[2]
     test_repo = tmp_path / "repo"
     overlay = test_repo / ".github/test-infra/overlays/kind"
@@ -225,7 +235,9 @@ def test_generated_s3_cr_only_enables_safe_trace_archival(
     )
     deployer._tls_ca_bundle_cm = None
     deployer._ca_cert_pem = None
-    deployer.run_command = lambda *args, **kwargs: subprocess.CompletedProcess([], 0, "", "")
+    deployer.run_command = lambda *args, **kwargs: subprocess.CompletedProcess(
+        [], 0, "", ""
+    )
     deployer.wait_for_deployment_to_exist = lambda *args, **kwargs: None
     deployer.wait_for_mlflow_ready = lambda *args, **kwargs: None
 
@@ -233,6 +245,9 @@ def test_generated_s3_cr_only_enables_safe_trace_archival(
 
     mlflow_cr = yaml.safe_load(Path("/tmp/mlflow-cr.yaml").read_text())
     assert ("traceArchival" in mlflow_cr["spec"]) is expected
+    assert ("garbageCollection" in mlflow_cr["spec"]) is expected
+    if expected:
+        assert mlflow_cr["spec"]["garbageCollection"] == {"schedule": "0 0 1 1 *"}
     if not expected:
         assert mlflow_cr["spec"]["storage"]["accessModes"] == ["ReadWriteOnce"]
     else:

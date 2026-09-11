@@ -704,6 +704,123 @@ spec:
 			)
 		})
 
+		It("should create and clean up garbage collection resources", func() {
+			const (
+				gcCronJobName = "mlflow-gc"
+				gcSAName      = "mlflow-gc-sa"
+				gcRBACName    = "mlflow-gc"
+			)
+
+			By("waiting for the controller-manager pod to be running")
+			controllerPodName = waitForControllerPodName()
+
+			By("creating MLflow with garbage collection enabled on a non-firing schedule")
+			gcYAML := dummyRemoteStoreSpec + `
+  garbageCollection:
+    schedule: "0 0 1 1 *"
+    olderThan: "30d"`
+			gcFile, err := writeTempManifest("mlflow-gc-valid-", gcYAML)
+			Expect(err).NotTo(HaveOccurred(), "Failed to write garbage collection manifest")
+			defer cleanupTempManifest(gcFile)
+			cmd := exec.Command("kubectl", "apply", "-f", gcFile)
+			_, err = utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred(), "Failed to create MLflow with garbage collection")
+			DeferCleanup(func() {
+				_, _ = utils.Run(exec.Command("kubectl", "delete", "mlflow", "mlflow", "--ignore-not-found=true"))
+			})
+
+			By("verifying the garbage collection CronJob, ServiceAccount, and RBAC")
+			Eventually(func(g Gomega) {
+				schedule, getErr := kubectlOutput(
+					"get", "cronjob", gcCronJobName, "-n", namespace,
+					"-o", "jsonpath={.spec.schedule}",
+				)
+				g.Expect(getErr).NotTo(HaveOccurred())
+				g.Expect(schedule).To(Equal("0 0 1 1 *"))
+				command, commandErr := kubectlOutput(
+					"get", "cronjob", gcCronJobName, "-n", namespace, "-o",
+					"jsonpath={.spec.jobTemplate.spec.template.spec.containers[0].command}",
+				)
+				g.Expect(commandErr).NotTo(HaveOccurred())
+				g.Expect(command).To(ContainSubstring("mlflow"))
+				args, argsErr := kubectlOutput(
+					"get", "cronjob", gcCronJobName, "-n", namespace, "-o",
+					"jsonpath={.spec.jobTemplate.spec.template.spec.containers[0].args}",
+				)
+				g.Expect(argsErr).NotTo(HaveOccurred())
+				g.Expect(args).To(ContainSubstring("gc"))
+				g.Expect(args).To(ContainSubstring("--older-than=30d"))
+				sa, saErr := kubectlOutput(
+					"get", "cronjob", gcCronJobName, "-n", namespace, "-o",
+					"jsonpath={.spec.jobTemplate.spec.template.spec.serviceAccountName}",
+				)
+				g.Expect(saErr).NotTo(HaveOccurred())
+				g.Expect(sa).To(Equal(gcSAName))
+				trackingURI, uriErr := kubectlOutput(
+					"get", "cronjob", gcCronJobName, "-n", namespace, "-o",
+					"jsonpath={.spec.jobTemplate.spec.template.spec.containers[0].env[?(@.name=='MLFLOW_TRACKING_URI')].value}",
+				)
+				g.Expect(uriErr).NotTo(HaveOccurred())
+				g.Expect(trackingURI).To(ContainSubstring("/mlflow"))
+				for _, resource := range [][]string{
+					{"sa", gcSAName},
+					{"clusterrole", gcRBACName},
+					{"clusterrolebinding", gcRBACName},
+				} {
+					resourceArgs := []string{"get", resource[0], resource[1], "-o", "jsonpath={.metadata.name}"}
+					if resource[0] == "sa" {
+						resourceArgs = append([]string{"get", resource[0], resource[1], "-n", namespace}, resourceArgs[3:]...)
+					}
+					name, resourceErr := kubectlOutput(resourceArgs...)
+					g.Expect(resourceErr).NotTo(HaveOccurred())
+					g.Expect(name).To(Equal(resource[1]))
+				}
+				for _, verb := range []string{"list", "watch"} {
+					allowed, rbacErr := kubectlOutput(
+						"auth", "can-i", verb, "namespaces",
+						fmt.Sprintf("--as=system:serviceaccount:%s:%s", namespace, gcSAName),
+					)
+					g.Expect(rbacErr).NotTo(HaveOccurred())
+					g.Expect(allowed).To(Equal("yes"))
+				}
+				for _, verb := range []string{"list", "watch"} {
+					allowed, rbacErr := kubectlOutput(
+						"auth", "can-i", verb, "mlflowconfigs.mlflow.kubeflow.org",
+						fmt.Sprintf("--as=system:serviceaccount:%s:%s", namespace, gcSAName),
+					)
+					g.Expect(rbacErr).NotTo(HaveOccurred())
+					g.Expect(allowed).To(Equal("yes"))
+				}
+			}, 2*time.Minute, time.Second).Should(Succeed())
+
+			By("disabling garbage collection and waiting for cleanup")
+			cmd = exec.Command(
+				"kubectl", "patch", "mlflow", "mlflow", "--type=json", "-p",
+				`[{"op":"remove","path":"/spec/garbageCollection"}]`,
+			)
+			_, err = utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred(), "Failed to disable garbage collection")
+			Eventually(func(g Gomega) {
+				for _, resource := range [][]string{
+					{"cronjob", gcCronJobName},
+					{"sa", gcSAName},
+					{"clusterrole", gcRBACName},
+					{"clusterrolebinding", gcRBACName},
+				} {
+					args := []string{"get", resource[0], resource[1], "--ignore-not-found", "-o", "jsonpath={.metadata.name}"}
+					if resource[0] == "cronjob" || resource[0] == "sa" {
+						args = []string{
+							"get", resource[0], resource[1], "-n", namespace,
+							"--ignore-not-found", "-o", "jsonpath={.metadata.name}",
+						}
+					}
+					name, getErr := kubectlOutput(args...)
+					g.Expect(getErr).NotTo(HaveOccurred())
+					g.Expect(name).To(BeEmpty(), "%s %s should be deleted", resource[0], resource[1])
+				}
+			}, 2*time.Minute, time.Second).Should(Succeed())
+		})
+
 		It("should reject trace archival when required fields are missing or retention is invalid", func() {
 			By("waiting for the controller-manager pod to be running")
 			controllerPodName = waitForControllerPodName()

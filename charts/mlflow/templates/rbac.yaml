@@ -56,6 +56,14 @@ metadata:
     {{- toYaml . | nindent 4 }}
     {{- end }}
 rules:
+  # `--all-workspaces` resolves the Kubernetes workspace provider, which lists
+  # and watches namespaces to discover eligible workspaces.
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["list", "watch"]
+  - apiGroups: ["mlflow.kubeflow.org"]
+    resources: ["mlflowconfigs"]
+    verbs: ["list", "watch"]
   # `mlflow gc` deletes metadata directly from the backend store, but proxied artifact
   # deletion still goes through the MLflow server and is authorized as experiments/update.
   # Long term, rework `mlflow gc` to resolve backing storage and delete artifacts directly.
