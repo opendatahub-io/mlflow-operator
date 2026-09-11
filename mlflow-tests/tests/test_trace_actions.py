@@ -3,16 +3,17 @@ from types import SimpleNamespace
 from unittest.mock import Mock, call
 
 import pytest
-from requests import exceptions as requests_exceptions
-from urllib3.exceptions import MaxRetryError, NewConnectionError
 from mlflow.entities.span import NO_OP_SPAN_TRACE_ID
 from mlflow.entities.trace_status import TraceStatus
 from mlflow.exceptions import MlflowException
+from requests import exceptions as requests_exceptions
+from urllib3.exceptions import MaxRetryError, NewConnectionError
 
 from .actions import trace_actions
 from .actions.trace_actions import action_log_trace, action_post_trace_v3_direct
-from .validations.trace_archival_validations import _assert_trace_payloads
+from .actions.trace_archival_actions import wait_for_expected_traces
 from .shared import TestContext
+from .validations.trace_archival_validations import _assert_trace_payloads
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -192,3 +193,29 @@ def test_trace_archival_validation_finds_root_span_without_relying_on_order() ->
             }
         ],
     )
+
+
+def test_wait_for_expected_traces_waits_for_root_span(monkeypatch: pytest.MonkeyPatch) -> None:
+    child_span = SimpleNamespace(span_id="child-span")
+    root_span = SimpleNamespace(span_id="root-span")
+    partial_trace = SimpleNamespace(
+        info=SimpleNamespace(trace_id="trace-0"), data=SimpleNamespace(spans=[child_span])
+    )
+    complete_trace = SimpleNamespace(
+        info=SimpleNamespace(trace_id="trace-0"),
+        data=SimpleNamespace(spans=[child_span, root_span]),
+    )
+    admin_client = Mock()
+    admin_client.search_traces.side_effect = [[partial_trace], [complete_trace]]
+    sleep = Mock()
+    monotonic = Mock(side_effect=[0, 0, 1])
+    monkeypatch.setattr("tests.actions.trace_archival_actions.time.sleep", sleep)
+    monkeypatch.setattr("tests.actions.trace_archival_actions.time.monotonic", monotonic)
+
+    observed = wait_for_expected_traces(
+        admin_client, "1", {"trace-0": "root-span"}
+    )
+
+    assert observed == {"trace-0": complete_trace}
+    assert admin_client.search_traces.call_count == 2
+    sleep.assert_called_once_with(2)

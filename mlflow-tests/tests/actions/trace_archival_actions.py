@@ -108,7 +108,13 @@ def count_archive_objects(s3_client, bucket: str) -> int:
     return count
 
 
-def wait_for_expected_traces(admin_client, experiment_id: str, expected_trace_ids: set[str]):
+def wait_for_expected_traces(
+    admin_client,
+    experiment_id: str,
+    expected_root_span_ids: dict[str, str],
+):
+    """Wait until each seeded trace contains its asynchronously exported root span."""
+    expected_trace_ids = set(expected_root_span_ids)
     deadline = time.monotonic() + TRACE_VISIBILITY_TIMEOUT_SECONDS
     observed = {}
     while time.monotonic() < deadline:
@@ -117,14 +123,18 @@ def wait_for_expected_traces(admin_client, experiment_id: str, expected_trace_id
         for trace in traces:
             if trace.info.trace_id not in expected_trace_ids or not trace.data.spans:
                 continue
+            expected_root_span_id = expected_root_span_ids[trace.info.trace_id]
+            if not any(span.span_id == expected_root_span_id for span in trace.data.spans):
+                continue
             observed[trace.info.trace_id] = trace
         if len(observed) >= len(expected_trace_ids):
             return observed
         time.sleep(POLL_INTERVAL_SECONDS)
 
     pytest.fail(
-        f"Expected {len(expected_trace_ids)} visible traces for {sorted(expected_trace_ids)}, "
-        f"found {len(observed)} after {TRACE_VISIBILITY_TIMEOUT_SECONDS}s"
+        f"Expected {len(expected_trace_ids)} visible traces with root spans "
+        f"{expected_root_span_ids}, found {len(observed)} after "
+        f"{TRACE_VISIBILITY_TIMEOUT_SECONDS}s"
     )
 
 
@@ -436,11 +446,14 @@ def action_seed_archival_traces(test_context: TestContext) -> None:
         _create_trace_payload(test_context.user_client, test_context.active_experiment_id, index)
         for index in range(ARCHIVAL_TRACE_COUNT)
     ]
-    expected_trace_ids = {payload["trace_id"] for payload in expected_payloads}
+    expected_root_span_ids = {
+        payload["trace_id"]: payload["spans"][0].span_id for payload in expected_payloads
+    }
+    expected_trace_ids = set(expected_root_span_ids)
     observed = wait_for_expected_traces(
         test_context.user_client,
         test_context.active_experiment_id,
-        expected_trace_ids,
+        expected_root_span_ids,
     )
     test_context.archival_state["expected_payloads"] = expected_payloads
     test_context.archival_state["expected_trace_ids"] = expected_trace_ids
