@@ -45,8 +45,23 @@ if [ "${ARTIFACTS_SERVER:-false}" = "true" ]; then
   if ! kubectl get crd httproutes.gateway.networking.k8s.io >/dev/null 2>&1; then
     kubectl apply -f "$repo_root/test/crd/httproutes.gateway.networking.k8s.io.yaml"
   fi
-  kubectl wait --for=condition=Established \
-    crd/httproutes.gateway.networking.k8s.io --timeout=60s
+  # A newly-created CRD can briefly have no status.conditions. kubectl wait
+  # treats that transient state as an accessor error instead of waiting, so
+  # poll the condition directly while the API server finishes establishing it.
+  crd_established=false
+  for attempt in {1..60}; do
+    crd_status="$(kubectl get crd httproutes.gateway.networking.k8s.io \
+      -o 'jsonpath={.status.conditions[?(@.type=="Established")].status}' 2>/dev/null || true)"
+    if [ "$crd_status" = "True" ]; then
+      crd_established=true
+      break
+    fi
+    sleep 1
+  done
+  if [ "$crd_established" != "true" ]; then
+    echo "ERROR: HTTPRoute CRD did not become Established within 60 seconds" >&2
+    exit 1
+  fi
 fi
 
 pytest_marker_args=()
