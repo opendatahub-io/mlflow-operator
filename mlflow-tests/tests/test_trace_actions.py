@@ -1,12 +1,14 @@
 from types import SimpleNamespace
-from unittest.mock import Mock
+from unittest.mock import Mock, call
 
 import pytest
+from requests import exceptions as requests_exceptions
 from mlflow.entities.span import NO_OP_SPAN_TRACE_ID
 from mlflow.entities.trace_status import TraceStatus
 from mlflow.exceptions import MlflowException
 
-from .actions.trace_actions import action_log_trace
+from .actions import trace_actions
+from .actions.trace_actions import action_log_trace, action_post_trace_v3_direct
 from .validations.trace_archival_validations import _assert_trace_payloads
 from .shared import TestContext
 
@@ -50,6 +52,70 @@ def test_action_log_trace_records_trace_id_and_ends_trace() -> None:
         request_id="tr-123",
         status=TraceStatus.OK,
     )
+
+
+def test_action_post_trace_v3_direct_retries_connection_errors(monkeypatch: pytest.MonkeyPatch) -> None:
+    response = Mock(status_code=200)
+    post = Mock(side_effect=[requests_exceptions.ConnectionError("refused"), response])
+    sleep = Mock()
+    monkeypatch.setattr(trace_actions.requests, "post", post)
+    monkeypatch.setattr(trace_actions.time, "sleep", sleep)
+    monkeypatch.setattr(trace_actions, "get_mlflow_base_uri", lambda: "https://mlflow.example")
+
+    test_context = TestContext(
+        active_experiment_id="123",
+        active_user=SimpleNamespace(upass="token"),
+        active_workspace="workspace",
+    )
+
+    action_post_trace_v3_direct(test_context)
+
+    assert post.call_count == 2
+    sleep.assert_called_once_with(1)
+    assert test_context.current_trace_id is not None
+    assert test_context.current_trace_name is not None
+
+
+def test_action_post_trace_v3_direct_does_not_retry_http_errors(monkeypatch: pytest.MonkeyPatch) -> None:
+    response = Mock(status_code=403, text="Permission denied")
+    response.json.return_value = {"error": {"code": "PERMISSION_DENIED", "message": "Permission denied"}}
+    post = Mock(return_value=response)
+    sleep = Mock()
+    monkeypatch.setattr(trace_actions.requests, "post", post)
+    monkeypatch.setattr(trace_actions.time, "sleep", sleep)
+    monkeypatch.setattr(trace_actions, "get_mlflow_base_uri", lambda: "https://mlflow.example")
+
+    test_context = TestContext(
+        active_experiment_id="123",
+        active_user=SimpleNamespace(upass="token"),
+        active_workspace="workspace",
+    )
+
+    with pytest.raises(MlflowException, match="Permission denied"):
+        action_post_trace_v3_direct(test_context)
+
+    post.assert_called_once()
+    sleep.assert_not_called()
+
+
+def test_action_post_trace_v3_direct_stops_after_retry_budget(monkeypatch: pytest.MonkeyPatch) -> None:
+    post = Mock(side_effect=requests_exceptions.ConnectionError("refused"))
+    sleep = Mock()
+    monkeypatch.setattr(trace_actions.requests, "post", post)
+    monkeypatch.setattr(trace_actions.time, "sleep", sleep)
+    monkeypatch.setattr(trace_actions, "get_mlflow_base_uri", lambda: "https://mlflow.example")
+
+    test_context = TestContext(
+        active_experiment_id="123",
+        active_user=SimpleNamespace(upass="token"),
+        active_workspace="workspace",
+    )
+
+    with pytest.raises(requests_exceptions.ConnectionError, match="refused"):
+        action_post_trace_v3_direct(test_context)
+
+    assert post.call_count == 3
+    assert sleep.call_args_list == [call(1), call(2)]
 
 
 def test_trace_archival_validation_finds_root_span_without_relying_on_order() -> None:

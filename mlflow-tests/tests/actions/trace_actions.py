@@ -6,6 +6,7 @@ import time
 import uuid
 
 import requests
+from requests import exceptions as requests_exceptions
 from mlflow.entities.span import NO_OP_SPAN_TRACE_ID
 from mlflow.entities.trace import Trace
 from mlflow.entities.trace_data import TraceData
@@ -24,6 +25,11 @@ from tests.http_utils import get_mlflow_base_uri, get_requests_verify_value
 from tests.shared import TestContext
 
 logger = logging.getLogger(__name__)
+
+_TRACE_POST_MAX_ATTEMPTS = 3
+_TRACE_POST_RETRY_DELAY_SECONDS = 1
+
+
 def action_log_trace(test_context: TestContext) -> None:
     """Log a trace via the SDK-oriented client path.
 
@@ -93,16 +99,32 @@ def action_post_trace_v3_direct(test_context: TestContext) -> None:
         state=TraceState.OK,
     )
     trace = Trace(info=trace_info, data=TraceData(spans=[]))
-    response = requests.post(
-        f"{get_mlflow_base_uri()}/api/3.0/mlflow/traces",
-        json=json.loads(message_to_json(StartTraceV3(trace=trace.to_proto()))),
-        headers={
+    request_kwargs = {
+        "json": json.loads(message_to_json(StartTraceV3(trace=trace.to_proto()))),
+        "headers": {
             "Authorization": f"Bearer {test_context.active_user.upass}",
             WORKSPACE_HEADER_NAME: test_context.active_workspace,
         },
-        verify=get_requests_verify_value(),
-        timeout=Config.REQUEST_TIMEOUT,
-    )
+        "verify": get_requests_verify_value(),
+        "timeout": Config.REQUEST_TIMEOUT,
+    }
+    trace_endpoint = f"{get_mlflow_base_uri()}/api/3.0/mlflow/traces"
+
+    for attempt in range(1, _TRACE_POST_MAX_ATTEMPTS + 1):
+        try:
+            response = requests.post(trace_endpoint, **request_kwargs)
+            break
+        except requests_exceptions.ConnectionError:
+            if attempt == _TRACE_POST_MAX_ATTEMPTS:
+                raise
+            delay = _TRACE_POST_RETRY_DELAY_SECONDS * attempt
+            logger.warning(
+                "Trace POST connection failed (attempt %s/%s); retrying in %ss",
+                attempt,
+                _TRACE_POST_MAX_ATTEMPTS,
+                delay,
+            )
+            time.sleep(delay)
 
     if response.status_code >= 400:
         response_message = response.text
