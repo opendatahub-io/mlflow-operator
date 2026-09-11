@@ -1,8 +1,10 @@
+import errno
 from types import SimpleNamespace
 from unittest.mock import Mock, call
 
 import pytest
 from requests import exceptions as requests_exceptions
+from urllib3.exceptions import MaxRetryError, NewConnectionError
 from mlflow.entities.span import NO_OP_SPAN_TRACE_ID
 from mlflow.entities.trace_status import TraceStatus
 from mlflow.exceptions import MlflowException
@@ -17,6 +19,14 @@ from .shared import TestContext
 def create_experiments_and_runs() -> dict:
     """Override the integration bootstrap fixture for helper-level tests."""
     return {}
+
+
+def _connection_error_from_socket_error(socket_error: OSError) -> requests_exceptions.ConnectionError:
+    connection_error = NewConnectionError(None, str(socket_error))
+    connection_error.__cause__ = socket_error
+    return requests_exceptions.ConnectionError(
+        MaxRetryError(None, "/mlflow/api/3.0/mlflow/traces", reason=connection_error)
+    )
 
 
 def test_action_log_trace_raises_permission_denied_for_noop_span() -> None:
@@ -56,7 +66,14 @@ def test_action_log_trace_records_trace_id_and_ends_trace() -> None:
 
 def test_action_post_trace_v3_direct_retries_connection_errors(monkeypatch: pytest.MonkeyPatch) -> None:
     response = Mock(status_code=200)
-    post = Mock(side_effect=[requests_exceptions.ConnectionError("refused"), response])
+    post = Mock(
+        side_effect=[
+            _connection_error_from_socket_error(
+                ConnectionRefusedError(errno.ECONNREFUSED, "Connection refused")
+            ),
+            response,
+        ]
+    )
     sleep = Mock()
     monkeypatch.setattr(trace_actions.requests, "post", post)
     monkeypatch.setattr(trace_actions.time, "sleep", sleep)
@@ -99,7 +116,11 @@ def test_action_post_trace_v3_direct_does_not_retry_http_errors(monkeypatch: pyt
 
 
 def test_action_post_trace_v3_direct_stops_after_retry_budget(monkeypatch: pytest.MonkeyPatch) -> None:
-    post = Mock(side_effect=requests_exceptions.ConnectionError("refused"))
+    post = Mock(
+        side_effect=_connection_error_from_socket_error(
+            ConnectionRefusedError(errno.ECONNREFUSED, "Connection refused")
+        )
+    )
     sleep = Mock()
     monkeypatch.setattr(trace_actions.requests, "post", post)
     monkeypatch.setattr(trace_actions.time, "sleep", sleep)
@@ -116,6 +137,32 @@ def test_action_post_trace_v3_direct_stops_after_retry_budget(monkeypatch: pytes
 
     assert post.call_count == 3
     assert sleep.call_args_list == [call(1), call(2)]
+
+
+def test_action_post_trace_v3_direct_does_not_retry_non_refused_connection_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    post = Mock(
+        side_effect=_connection_error_from_socket_error(
+            ConnectionResetError(errno.ECONNRESET, "Connection reset")
+        )
+    )
+    sleep = Mock()
+    monkeypatch.setattr(trace_actions.requests, "post", post)
+    monkeypatch.setattr(trace_actions.time, "sleep", sleep)
+    monkeypatch.setattr(trace_actions, "get_mlflow_base_uri", lambda: "https://mlflow.example")
+
+    test_context = TestContext(
+        active_experiment_id="123",
+        active_user=SimpleNamespace(upass="token"),
+        active_workspace="workspace",
+    )
+
+    with pytest.raises(requests_exceptions.ConnectionError):
+        action_post_trace_v3_direct(test_context)
+
+    post.assert_called_once()
+    sleep.assert_not_called()
 
 
 def test_trace_archival_validation_finds_root_span_without_relying_on_order() -> None:

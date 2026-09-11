@@ -1,5 +1,6 @@
 """Trace action functions."""
 
+import errno
 import json
 import logging
 import time
@@ -28,6 +29,29 @@ logger = logging.getLogger(__name__)
 
 _TRACE_POST_MAX_ATTEMPTS = 3
 _TRACE_POST_RETRY_DELAY_SECONDS = 1
+
+
+def _is_connection_refused(error: requests_exceptions.ConnectionError) -> bool:
+    """Return whether a request failed before the TCP connection was established."""
+    pending = [error]
+    seen = set()
+    while pending:
+        current = pending.pop()
+        if id(current) in seen:
+            continue
+        seen.add(id(current))
+        if isinstance(current, OSError) and current.errno == errno.ECONNREFUSED:
+            return True
+
+        for nested_error in (
+            current.__cause__,
+            current.__context__,
+            getattr(current, "reason", None),
+            *current.args,
+        ):
+            if isinstance(nested_error, BaseException):
+                pending.append(nested_error)
+    return False
 
 
 def action_log_trace(test_context: TestContext) -> None:
@@ -114,8 +138,8 @@ def action_post_trace_v3_direct(test_context: TestContext) -> None:
         try:
             response = requests.post(trace_endpoint, **request_kwargs)
             break
-        except requests_exceptions.ConnectionError:
-            if attempt == _TRACE_POST_MAX_ATTEMPTS:
+        except requests_exceptions.ConnectionError as error:
+            if attempt == _TRACE_POST_MAX_ATTEMPTS or not _is_connection_refused(error):
                 raise
             delay = _TRACE_POST_RETRY_DELAY_SECONDS * attempt
             logger.warning(
