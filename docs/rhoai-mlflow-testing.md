@@ -136,7 +136,8 @@ splits upgrade coverage into three pieces:
   `post_upgrade` validation.
 - `upgrade-tests` runs the Go end-to-end path in
   `test/e2e/upgrade_e2e_test.go`, which validates operator-managed migration and
-  rollout behavior against a seeded `3.10.1` image.
+  rollout behavior against a seeded `3.10.1` image, then enables the module
+  controller path to assert `MLflowOperator.status.releases`.
 
 For local reproduction or OpenShift reuse flows, start with
 [`mlflow-tests/images/README.md`](../mlflow-tests/images/README.md) rather than
