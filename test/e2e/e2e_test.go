@@ -845,6 +845,21 @@ data:
 				_, err = utils.Run(cmd)
 				Expect(err).NotTo(HaveOccurred(), "Failed to patch MLflowOperator gateway domain")
 
+				By("waiting for MLflowOperator status.observedGeneration to match metadata.generation")
+				Eventually(func(g Gomega) {
+					generation, genErr := kubectlOutput(
+						"get", "mlflowoperator", mlflowOperatorName,
+						"-o", "jsonpath={.metadata.generation}",
+					)
+					g.Expect(genErr).NotTo(HaveOccurred())
+					observed, obsErr := kubectlOutput(
+						"get", "mlflowoperator", mlflowOperatorName,
+						"-o", "jsonpath={.status.observedGeneration}",
+					)
+					g.Expect(obsErr).NotTo(HaveOccurred())
+					g.Expect(observed).To(Equal(generation))
+				}, 2*time.Minute, time.Second).Should(Succeed())
+
 				By("verifying HTTPRoute parentRef and MLflow status.url after gateway domain projection")
 				Eventually(func(g Gomega) {
 					parent, parentErr := kubectlOutput(
