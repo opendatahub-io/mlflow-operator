@@ -49,6 +49,8 @@ const metricsTestServiceAccountName = "mlflow-operator-metrics-test"
 
 const metricsCurlPodName = "curl-metrics"
 
+const curlMLflowPodName = "curl-mlflow"
+
 const dummyRemoteStoreSpec = `apiVersion: mlflow.opendatahub.io/v1
 kind: MLflow
 metadata:
@@ -131,6 +133,10 @@ var _ = Describe("Manager", Ordered, func() {
 			"-n", metricsTestNamespace, "--ignore-not-found=true")
 		_, _ = utils.Run(cmd)
 
+		By("cleaning up the curl pod for MLflow Service reachability")
+		cmd = exec.Command("kubectl", "delete", "pod", curlMLflowPodName, "-n", namespace, "--ignore-not-found=true")
+		_, _ = utils.Run(cmd)
+
 		By("cleaning up the ClusterRoleBinding for metrics")
 		cmd = exec.Command("kubectl", "delete", "clusterrolebinding", metricsRoleBindingName, "--ignore-not-found=true")
 		_, _ = utils.Run(cmd)
@@ -196,6 +202,15 @@ var _ = Describe("Manager", Ordered, func() {
 				_, _ = fmt.Fprintf(GinkgoWriter, "Metrics logs:\n %s", metricsOutput)
 			} else {
 				_, _ = fmt.Fprintf(GinkgoWriter, "Failed to get curl-metrics logs: %s", err)
+			}
+
+			By("Fetching curl-mlflow logs")
+			cmd = exec.Command("kubectl", "logs", curlMLflowPodName, "-n", namespace)
+			mlflowCurlLogs, mlflowCurlErr := utils.Run(cmd)
+			if mlflowCurlErr == nil {
+				_, _ = fmt.Fprintf(GinkgoWriter, "%s logs:\n %s", curlMLflowPodName, mlflowCurlLogs)
+			} else {
+				_, _ = fmt.Fprintf(GinkgoWriter, "Failed to get %s logs: %s", curlMLflowPodName, mlflowCurlErr)
 			}
 
 			By("Fetching controller manager pod description")
@@ -290,61 +305,18 @@ var _ = Describe("Manager", Ordered, func() {
 
 			// +kubebuilder:scaffold:e2e-metrics-webhooks-readiness
 
-			By("cleaning up any existing curl-metrics pod")
-			cmd = exec.Command("kubectl", "delete", "pod", metricsCurlPodName,
-				"-n", metricsTestNamespace, "--ignore-not-found=true")
-			_, _ = utils.Run(cmd)
-
-			By("creating the curl-metrics pod to access the metrics endpoint")
-			cmd = exec.Command("kubectl", "run", metricsCurlPodName, "--restart=Never",
-				"--namespace", metricsTestNamespace,
-				"--image=curlimages/curl:latest",
-				"--overrides",
-				fmt.Sprintf(`{
-					"spec": {
-						"containers": [{
-							"name": "curl",
-							"image": "curlimages/curl:latest",
-							"command": ["/bin/sh", "-c"],
-							"args": ["curl -v -k -H 'Authorization: Bearer %s' https://%s.%s.svc.cluster.local:8443/metrics"],
-							"securityContext": {
-								"readOnlyRootFilesystem": true,
-								"allowPrivilegeEscalation": false,
-								"capabilities": {
-									"drop": ["ALL"]
-								},
-								"runAsNonRoot": true,
-								"runAsUser": 1000,
-								"seccompProfile": {
-									"type": "RuntimeDefault"
-								}
-							}
-						}],
-						"serviceAccountName": "%s"
-					}
-				}`, token, metricsServiceName, namespace, metricsTestServiceAccountName))
-			_, err = utils.Run(cmd)
-			Expect(err).NotTo(HaveOccurred(), "Failed to create curl-metrics pod")
-
-			By("waiting for the curl-metrics pod to complete.")
-			verifyCurlUp := func(g Gomega) {
-				cmd := exec.Command("kubectl", "get", "pods", metricsCurlPodName,
-					"-o", "jsonpath={.status.phase}",
-					"-n", metricsTestNamespace)
-				output, err := utils.Run(cmd)
-				g.Expect(err).NotTo(HaveOccurred())
-				g.Expect(output).To(Equal("Succeeded"), "curl pod in wrong status")
-			}
-			Eventually(verifyCurlUp, 5*time.Minute).Should(Succeed())
-
-			By("getting the metrics by checking curl-metrics logs")
-			verifyMetricsAvailable := func(g Gomega) {
-				metricsOutput, err := getMetricsOutput(metricsTestNamespace)
-				g.Expect(err).NotTo(HaveOccurred(), "Failed to retrieve logs from curl pod")
-				g.Expect(metricsOutput).NotTo(BeEmpty())
-				g.Expect(metricsOutput).To(MatchRegexp(`< HTTP/(1\.1|2) 200`))
-			}
-			Eventually(verifyMetricsAvailable, 2*time.Minute).Should(Succeed())
+			By("curling the metrics endpoint from an in-cluster pod")
+			runRestrictedCurlPod(
+				metricsCurlPodName,
+				metricsTestNamespace,
+				fmt.Sprintf(
+					"-H 'Authorization: Bearer %s' https://%s.%s.svc.cluster.local:8443/metrics",
+					token,
+					metricsServiceName,
+					namespace,
+				),
+				metricsTestServiceAccountName,
+			)
 		})
 
 		// +kubebuilder:scaffold:e2e-webhooks-checks
@@ -664,16 +636,37 @@ spec:
 					g.Expect(available).To(BeNumerically(">=", 1))
 				}, 5*time.Minute, time.Second).Should(Succeed())
 
-				By("verifying the managed Service exists")
+				By("verifying the managed Service has ready endpoints")
 				Eventually(func(g Gomega) {
-					output, getErr := kubectlOutput(
+					name, nameErr := kubectlOutput(
 						"get", "service", mlflowName,
 						"-n", namespace,
 						"-o", "jsonpath={.metadata.name}",
 					)
-					g.Expect(getErr).NotTo(HaveOccurred())
-					g.Expect(output).To(Equal(mlflowName))
+					g.Expect(nameErr).NotTo(HaveOccurred())
+					g.Expect(name).To(Equal(mlflowName))
+
+					addrs, addrErr := kubectlOutput(
+						"get", "endpoints", mlflowName,
+						"-n", namespace,
+						"-o", "jsonpath={.subsets[*].addresses[*].ip}",
+					)
+					g.Expect(addrErr).NotTo(HaveOccurred())
+					g.Expect(addrs).NotTo(BeEmpty())
 				}, 2*time.Minute, time.Second).Should(Succeed())
+
+				By("curling MLflow server-info through the in-cluster Service")
+				runRestrictedCurlPod(
+					curlMLflowPodName,
+					namespace,
+					fmt.Sprintf(
+						"https://%s.%s.svc.cluster.local:8443%s/api/3.0/mlflow/server-info",
+						mlflowName,
+						namespace,
+						controllerpkg.StaticPrefix,
+					),
+					"",
+				)
 
 				By("verifying MLflow status.address.url uses the operator namespace")
 				Eventually(func(g Gomega) {
@@ -1633,11 +1626,51 @@ func serviceAccountToken(serviceAccountNamespace, serviceAccount string) (string
 	return out, nil
 }
 
-// getMetricsOutput retrieves and returns the logs from the curl pod used to access the metrics endpoint.
-func getMetricsOutput(metricsNamespace string) (string, error) {
-	By("getting the curl-metrics logs")
-	cmd := exec.Command("kubectl", "logs", metricsCurlPodName, "-n", metricsNamespace)
-	return utils.Run(cmd)
+func runRestrictedCurlPod(podName, ns, curlArgs, serviceAccount string) {
+	cmd := exec.Command("kubectl", "delete", "pod", podName, "-n", ns, "--ignore-not-found=true")
+	_, _ = utils.Run(cmd)
+
+	saLine := ""
+	if serviceAccount != "" {
+		saLine = fmt.Sprintf(`,"serviceAccountName": %q`, serviceAccount)
+	}
+	cmd = exec.Command("kubectl", "run", podName, "--restart=Never",
+		"--namespace", ns,
+		"--image=curlimages/curl:latest",
+		"--overrides",
+		fmt.Sprintf(`{
+			"spec": {
+				"containers": [{
+					"name": "curl",
+					"image": "curlimages/curl:latest",
+					"command": ["/bin/sh", "-c"],
+					"args": ["curl -v -k %s"],
+					"securityContext": {
+						"readOnlyRootFilesystem": true,
+						"allowPrivilegeEscalation": false,
+						"capabilities": {"drop": ["ALL"]},
+						"runAsNonRoot": true,
+						"runAsUser": 1000,
+						"seccompProfile": {"type": "RuntimeDefault"}
+					}
+				}]
+				%s
+			}
+		}`, curlArgs, saLine))
+	_, err := utils.Run(cmd)
+	Expect(err).NotTo(HaveOccurred(), "Failed to create %s pod", podName)
+
+	Eventually(func(g Gomega) {
+		phase, phaseErr := kubectlOutput(
+			"get", "pods", podName,
+			"-o", "jsonpath={.status.phase}",
+			"-n", ns,
+		)
+		g.Expect(phaseErr).NotTo(HaveOccurred())
+		logs, _ := utils.Run(exec.Command("kubectl", "logs", podName, "-n", ns))
+		g.Expect(phase).To(Equal("Succeeded"), "curl pod status=%s logs=%s", phase, logs)
+		g.Expect(logs).To(MatchRegexp(`< HTTP/(1\.1|2) 200`))
+	}, 5*time.Minute, time.Second).Should(Succeed())
 }
 
 func waitForControllerPodName() string {
