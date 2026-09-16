@@ -239,10 +239,7 @@ var _ = Describe("Upgrade", Ordered, Label("upgrade"), func() {
 			"APPLICATIONS_NAMESPACE":                   namespace,
 		})
 		DeferCleanup(func() {
-			By("cleaning up MLflowOperator resources created by the upgrade spec")
-			_ = k8sClient.Delete(ctx, &modulev1alpha1.MLflowOperator{
-				ObjectMeta: metav1.ObjectMeta{Name: modulev1alpha1.MLflowOperatorInstanceName},
-			})
+			By("removing the platform handshake ConfigMap created by this spec")
 			_ = k8sClient.Delete(ctx, &corev1.ConfigMap{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "odh-mlflowoperator-config",
