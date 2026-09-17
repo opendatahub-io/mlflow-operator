@@ -239,6 +239,14 @@ var _ = Describe("Upgrade", Ordered, Label("upgrade"), func() {
 			"APPLICATIONS_NAMESPACE":                   namespace,
 		})
 		DeferCleanup(func() {
+			By("deleting MLflow before MLflowOperator so the protection finalizer can release")
+			deleteAndWait(ctx, k8sClient, &mlflowv1.MLflow{
+				ObjectMeta: metav1.ObjectMeta{Name: "mlflow"},
+			}, 5*time.Minute)
+			By("deleting MLflowOperator after MLflow is gone")
+			deleteAndWait(ctx, k8sClient, &modulev1alpha1.MLflowOperator{
+				ObjectMeta: metav1.ObjectMeta{Name: modulev1alpha1.MLflowOperatorInstanceName},
+			}, 3*time.Minute)
 			By("removing the platform handshake ConfigMap created by this spec")
 			_ = k8sClient.Delete(ctx, &corev1.ConfigMap{
 				ObjectMeta: metav1.ObjectMeta{
@@ -302,6 +310,18 @@ func createOrReplace(ctx context.Context, k8sClient client.Client, obj client.Ob
 		err = k8sClient.Create(ctx, obj)
 	}
 	Expect(err).NotTo(HaveOccurred())
+}
+
+func deleteAndWait(ctx context.Context, k8sClient client.Client, obj client.Object, timeout time.Duration) {
+	key := client.ObjectKeyFromObject(obj)
+	if err := k8sClient.Delete(ctx, obj); err != nil && !apierrors.IsNotFound(err) {
+		Expect(err).NotTo(HaveOccurred())
+	}
+	Eventually(func() bool {
+		current := obj.DeepCopyObject().(client.Object)
+		err := k8sClient.Get(ctx, key, current)
+		return apierrors.IsNotFound(err)
+	}, timeout, time.Second).Should(BeTrue(), "%s should be gone", key.Name)
 }
 
 func setControllerEnv(ctx context.Context, k8sClient client.Client, env map[string]string) {
