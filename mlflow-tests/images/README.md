@@ -165,6 +165,15 @@ checks, and garbage-collection checks. Otherwise, these clients follow
 | `SKIP_CLEANUP` | `false` | Leave the deployment in place after the run. By default, failure diagnostics are collected before the harness deletes its cluster-scoped MLflow CR after every suite, including the final suite and interrupted runs. Requires exactly one backend; use it for inspection or later reuse. |
 | `CLEANUP_REUSED_RESOURCES` | `false` | With `SKIP_DEPLOYMENT=true` and `SKIP_CLEANUP=false`, control cleanup of reused resources: `false` preserves them, `true` always deletes them, and `on_success` deletes them only after a successful run. |
 
+When `SKIP_DEPLOYMENT=true`, the harness reads `spec.artifactsServer.enabled` and
+`spec.serveArtifacts` from the existing MLflow CR before artifact-specific validation,
+readiness checks, URI setup, and pytest exports. These values override `ARTIFACTS_SERVER`
+and `SERVE_ARTIFACTS` (including the `serve_artifacts` alias); omitted CR fields mean
+`false`. Failure to read the CR aborts the run with a failing harness JUnit report.
+`ARTIFACTS_SERVER_GATEWAY` still selects Gateway validation, but is effectively
+`false` when the reused CR has no dedicated artifact server. Fresh deployments
+continue to use the environment flags and validate PostgreSQL deployment settings.
+
 ### Other
 
 | Variable | Default | Description |
