@@ -109,6 +109,9 @@ Operator / OpenShift:
 Skip / control flags:
   SKIP_DEPLOYMENT       true|false — skip all cluster deployment (default: false).
                         Requires exactly one backend matching the reused MLflow CR.
+                        Reads artifact-serving settings from that CR instead of
+                        deployment flags. Gateway checks require its artifact
+                        server to be enabled and ARTIFACTS_SERVER_GATEWAY=true.
   SKIP_OPERATOR         true|false — skip operator deployment only (default: false)
   SKIP_INFRASTRUCTURE   true|false — skip PostgreSQL/SeaweedFS deployment (default: false)
   SKIP_CLEANUP          true|false — leave resources in place after the run (default: false).
@@ -471,6 +474,29 @@ case "$CLEANUP_REUSED_RESOURCES" in
         ;;
 esac
 
+if [ "$SKIP_DEPLOYMENT" = "true" ]; then
+    # Deployment flags do not describe the CR being reused.
+    if ! deployed_artifact_settings="$(kubectl get mlflow "$MLFLOW_NAME" \
+        -o jsonpath='{.spec.artifactsServer.enabled}{"|"}{.spec.serveArtifacts}')"; then
+        echo "ERROR: Failed to read artifact-serving settings from MLflow CR ${MLFLOW_NAME}" >&2
+        fail_run "test_read_artifact_settings" "Failed to read artifact-serving settings from MLflow CR ${MLFLOW_NAME}"
+    fi
+    if ! [[ "$deployed_artifact_settings" =~ ^(true|false)?\|(true|false)?$ ]]; then
+        echo "ERROR: Invalid artifact-serving settings in MLflow CR ${MLFLOW_NAME}" >&2
+        fail_run "test_read_artifact_settings" "Invalid artifact-serving settings in MLflow CR ${MLFLOW_NAME}"
+    fi
+    ARTIFACTS_SERVER="${deployed_artifact_settings%%|*}"
+    SERVE_ARTIFACTS="${deployed_artifact_settings#*|}"
+    # Both CR booleans default to false, unlike deploy.py's serve-artifacts flag.
+    ARTIFACTS_SERVER="${ARTIFACTS_SERVER:-false}"
+    SERVE_ARTIFACTS="${SERVE_ARTIFACTS:-false}"
+    if [ "$ARTIFACTS_SERVER" != "true" ]; then
+        ARTIFACTS_SERVER_GATEWAY=false
+        unset MLFLOW_ARTIFACTS_URI
+    fi
+    echo "Reusing MLflow CR ${MLFLOW_NAME}: artifactsServer.enabled=${ARTIFACTS_SERVER}, serveArtifacts=${SERVE_ARTIFACTS}"
+fi
+
 # Platform for infrastructure overlays: base|openshift.
 # Defaults to openshift only when the cluster actually exposes route resources;
 # otherwise falls back to base. Can always be overridden explicitly.
@@ -491,21 +517,23 @@ if [ "$ARTIFACTS_SERVER" = "true" ]; then
         echo "ERROR: ARTIFACTS_SERVER_GATEWAY=true cannot use FORCE_PORT_FORWARD; the test must traverse the Gateway." >&2
         fail_run "test_config" "ARTIFACTS_SERVER_GATEWAY=true cannot use FORCE_PORT_FORWARD; the test must traverse the Gateway."
     fi
-    case "$BACKEND_STORE" in
-        postgres|postgresql) ;;
-        *)
-            echo "ERROR: ARTIFACTS_SERVER=true requires BACKEND_STORE=postgres and REGISTRY_STORE=postgres." >&2
-            fail_run "test_config" "ARTIFACTS_SERVER=true requires BACKEND_STORE=postgres and REGISTRY_STORE=postgres."
-            ;;
-    esac
-    case "$REGISTRY_STORE" in
-        postgres|postgresql) ;;
-        *)
-            echo "ERROR: ARTIFACTS_SERVER=true requires BACKEND_STORE=postgres and REGISTRY_STORE=postgres." >&2
-            fail_run "test_config" "ARTIFACTS_SERVER=true requires BACKEND_STORE=postgres and REGISTRY_STORE=postgres."
-            ;;
-    esac
-    SERVE_ARTIFACTS=false
+    if [ "$SKIP_DEPLOYMENT" != "true" ]; then
+        case "$BACKEND_STORE" in
+            postgres|postgresql) ;;
+            *)
+                echo "ERROR: ARTIFACTS_SERVER=true requires BACKEND_STORE=postgres and REGISTRY_STORE=postgres." >&2
+                fail_run "test_config" "ARTIFACTS_SERVER=true requires BACKEND_STORE=postgres and REGISTRY_STORE=postgres."
+                ;;
+        esac
+        case "$REGISTRY_STORE" in
+            postgres|postgresql) ;;
+            *)
+                echo "ERROR: ARTIFACTS_SERVER=true requires BACKEND_STORE=postgres and REGISTRY_STORE=postgres." >&2
+                fail_run "test_config" "ARTIFACTS_SERVER=true requires BACKEND_STORE=postgres and REGISTRY_STORE=postgres."
+                ;;
+        esac
+        SERVE_ARTIFACTS=false
+    fi
 elif [ "$ARTIFACTS_SERVER_GATEWAY" = "true" ]; then
     echo "ERROR: ARTIFACTS_SERVER_GATEWAY=true requires ARTIFACTS_SERVER=true." >&2
     fail_run "test_config" "ARTIFACTS_SERVER_GATEWAY=true requires ARTIFACTS_SERVER=true."
@@ -1383,8 +1411,6 @@ run_suite_body() {
     # Keep the unnormalised backend available to tests that need to distinguish
     # the self-hosted SeaweedFS path from an externally managed S3 service.
     export artifact_backend="$STORAGE_TYPE"
-    # deploy.py defaults --serve-artifacts to "true"; export the same default so
-    # Config.SERVE_ARTIFACTS stays in sync if the default ever changes.
     export serve_artifacts="${SERVE_ARTIFACTS}"
     export TRACE_ARCHIVAL_RETENTION
     export artifacts_server="${ARTIFACTS_SERVER}"

@@ -671,6 +671,8 @@ For local runs, `bash mlflow-tests/images/test-run.sh` derives `MLFLOW_TEST_SUPP
 
 Normal harness-owned runs collect failure diagnostics before deleting their cluster-scoped `MLflow` CR after every suite, including the final suite. `INT` and `TERM` run the same idempotent cleanup before exiting so interrupted test containers cannot leave an instance that blocks `MLflowOperator` removal; explicit preserve/reuse flags retain their documented behavior.
 
+When `SKIP_DEPLOYMENT=true`, the harness derives artifact-serving settings from the existing MLflow CR rather than deployment flags. This keeps post-upgrade artifact checks aligned with the preserved deployment: `ARTIFACTS_SERVER_GATEWAY=true` only enables Gateway validation if that CR has a dedicated artifact server. Fresh deployments remain flag-driven. See the [harness documentation](mlflow-tests/images/README.md) for details.
+
 In the seeded upgrade validation workflow, the historical source state now uses both a pinned `3.10.1` MLflow runtime image and the matching pinned historical operator image before the job patches the deployment in place to the PR-built operator/runtime pair for `post_upgrade`.
 That seeded source state also restores the operator `config/rbac` tree from commit `38b88c61fa4acd0f35081e4d0685c10c0c5bea91` before pre-upgrade deployment, then reapplies the current operator manifests when the seeded validation job upgrades to the PR-built operator.
 

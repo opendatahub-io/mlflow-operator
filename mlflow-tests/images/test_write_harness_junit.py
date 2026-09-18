@@ -183,6 +183,7 @@ def test_invalid_artifacts_server_config_writes_harness_junit(
             "INFRASTRUCTURE_PLATFORM": "openshift",
             "FORCE_PORT_FORWARD": "false",
             "SKIP_CLEANUP": "false",
+            "SKIP_DEPLOYMENT": "false",
             "CLEANUP_REUSED_RESOURCES": "false",
             "BACKEND_STORE": "postgres",
             "REGISTRY_STORE": "postgres",
@@ -329,6 +330,7 @@ def test_artifacts_server_readiness_failure_writes_harness_junit(
             """\
             #!/bin/sh
             case "$*" in
+                *".spec.artifactsServer.enabled"*) printf 'true|false' ;;
                 *"wait --for=condition=Available deployment/mlflow-artifacts"*)
                     [ "$ARTIFACT_FAILURE_MODE" = "deployment" ] && exit 1
                     ;;
@@ -503,6 +505,7 @@ def test_last_suite_deletes_cluster_scoped_mlflow_cr(
             #!/bin/sh
             echo "$*" >> "{kubectl_log}"
             case "$*" in
+                *".spec.artifactsServer.enabled"*) printf 'false|true' ;;
                 *"create token"*)
                     printf 'fake-token\\n'
                     ;;
