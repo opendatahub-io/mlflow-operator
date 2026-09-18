@@ -830,23 +830,10 @@ data:
 				}, 2*time.Minute, time.Second).Should(Succeed())
 
 				By("bumping platformVersion and waiting for status.releases to follow")
-				const bumpedPlatformVersion = "2.20.1"
-				patchPlatformConfigVersion(namespace, platformConfigMapName, bumpedPlatformVersion)
-				Eventually(func(g Gomega) {
-					release, found := moduleReleaseByName(g, "platform")
-					g.Expect(found).To(BeTrue())
-					g.Expect(release.Version).To(Equal(bumpedPlatformVersion))
-					expectDeploymentAvailable(g, mlflowName)
-				}, 2*time.Minute, time.Second).Should(Succeed())
+				setPlatformConfigVersion(platformConfigMapName, "2.20.1", mlflowName)
 
 				By("restoring platformVersion and waiting for status.releases to follow")
-				patchPlatformConfigVersion(namespace, platformConfigMapName, platformVersion)
-				Eventually(func(g Gomega) {
-					release, found := moduleReleaseByName(g, "platform")
-					g.Expect(found).To(BeTrue())
-					g.Expect(release.Version).To(Equal(platformVersion))
-					expectDeploymentAvailable(g, mlflowName)
-				}, 2*time.Minute, time.Second).Should(Succeed())
+				setPlatformConfigVersion(platformConfigMapName, platformVersion, mlflowName)
 
 				By("patching MLflowOperator.spec.gateway.domain")
 				cmd = exec.Command(
@@ -1861,29 +1848,33 @@ func moduleReleaseByName(g Gomega, name string) (moduleRelease, bool) {
 	return moduleRelease{}, false
 }
 
-func patchPlatformConfigVersion(ns, name, version string) {
+func setPlatformConfigVersion(configMap, version, deployment string) {
 	payload := fmt.Sprintf(`{"data":{"platformVersion":%q}}`, version)
 	cmd := exec.Command(
-		"kubectl", "patch", "configmap", name,
-		"-n", ns,
+		"kubectl", "patch", "configmap", configMap,
+		"-n", namespace,
 		"--type=merge",
 		"-p", payload,
 	)
 	_, err := utils.Run(cmd)
 	Expect(err).NotTo(HaveOccurred(), "Failed to patch platform ConfigMap version")
-}
 
-func expectDeploymentAvailable(g Gomega, name string) {
-	output, err := kubectlOutput(
-		"get", "deployment", name,
-		"-n", namespace,
-		"-o", "jsonpath={.status.availableReplicas}",
-	)
-	g.Expect(err).NotTo(HaveOccurred())
-	g.Expect(output).NotTo(BeEmpty())
-	available, parseErr := strconv.Atoi(output)
-	g.Expect(parseErr).NotTo(HaveOccurred())
-	g.Expect(available).To(BeNumerically(">=", 1))
+	Eventually(func(g Gomega) {
+		release, found := moduleReleaseByName(g, "platform")
+		g.Expect(found).To(BeTrue())
+		g.Expect(release.Version).To(Equal(version))
+
+		output, getErr := kubectlOutput(
+			"get", "deployment", deployment,
+			"-n", namespace,
+			"-o", "jsonpath={.status.availableReplicas}",
+		)
+		g.Expect(getErr).NotTo(HaveOccurred())
+		g.Expect(output).NotTo(BeEmpty())
+		available, parseErr := strconv.Atoi(output)
+		g.Expect(parseErr).NotTo(HaveOccurred())
+		g.Expect(available).To(BeNumerically(">=", 1))
+	}, 2*time.Minute, time.Second).Should(Succeed())
 }
 
 func kubectlOutput(args ...string) (string, error) {
