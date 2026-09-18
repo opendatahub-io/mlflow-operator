@@ -829,6 +829,25 @@ data:
 					g.Expect(mlflowRelease.Version).To(Equal(controllerpkg.SupportedMLflowVersion))
 				}, 2*time.Minute, time.Second).Should(Succeed())
 
+				By("bumping platformVersion and waiting for status.releases to follow")
+				const bumpedPlatformVersion = "2.20.1"
+				patchPlatformConfigVersion(namespace, platformConfigMapName, bumpedPlatformVersion)
+				Eventually(func(g Gomega) {
+					release, found := moduleReleaseByName(g, "platform")
+					g.Expect(found).To(BeTrue())
+					g.Expect(release.Version).To(Equal(bumpedPlatformVersion))
+					expectDeploymentAvailable(g, mlflowName)
+				}, 2*time.Minute, time.Second).Should(Succeed())
+
+				By("restoring platformVersion and waiting for status.releases to follow")
+				patchPlatformConfigVersion(namespace, platformConfigMapName, platformVersion)
+				Eventually(func(g Gomega) {
+					release, found := moduleReleaseByName(g, "platform")
+					g.Expect(found).To(BeTrue())
+					g.Expect(release.Version).To(Equal(platformVersion))
+					expectDeploymentAvailable(g, mlflowName)
+				}, 2*time.Minute, time.Second).Should(Succeed())
+
 				By("patching MLflowOperator.spec.gateway.domain")
 				cmd = exec.Command(
 					"kubectl", "patch", "mlflowoperator", mlflowOperatorName,
@@ -1840,6 +1859,31 @@ func moduleReleaseByName(g Gomega, name string) (moduleRelease, bool) {
 		}
 	}
 	return moduleRelease{}, false
+}
+
+func patchPlatformConfigVersion(ns, name, version string) {
+	payload := fmt.Sprintf(`{"data":{"platformVersion":%q}}`, version)
+	cmd := exec.Command(
+		"kubectl", "patch", "configmap", name,
+		"-n", ns,
+		"--type=merge",
+		"-p", payload,
+	)
+	_, err := utils.Run(cmd)
+	Expect(err).NotTo(HaveOccurred(), "Failed to patch platform ConfigMap version")
+}
+
+func expectDeploymentAvailable(g Gomega, name string) {
+	output, err := kubectlOutput(
+		"get", "deployment", name,
+		"-n", namespace,
+		"-o", "jsonpath={.status.availableReplicas}",
+	)
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(output).NotTo(BeEmpty())
+	available, parseErr := strconv.Atoi(output)
+	g.Expect(parseErr).NotTo(HaveOccurred())
+	g.Expect(available).To(BeNumerically(">=", 1))
 }
 
 func kubectlOutput(args ...string) (string, error) {
