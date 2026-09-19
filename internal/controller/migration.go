@@ -32,6 +32,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/equality"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -58,6 +59,7 @@ const (
 	migrationJobCommand               = `exec python3.12 -c "$MIGRATION_PYTHON_SCRIPT"`
 	migrationJobBackoffLimit          = int32(3)
 	migrationJobTTLSeconds            = int32(24 * 60 * 60) // 24 hours
+	migrationJobCPURequest            = "250m"
 
 	migrationScriptExitCodeVersionMismatch     = 10
 	migrationScriptExitCodeUnsupportedBackend  = 11
@@ -605,6 +607,12 @@ func buildMigrationJobFromDeployment(mlflow *mlflowv1.MLflow, deployment *appsv1
 	jobContainer.StartupProbe = nil
 	jobContainer.Lifecycle = nil
 	jobContainer.Resources.Claims = nil
+	if jobContainer.Resources.Requests == nil {
+		jobContainer.Resources.Requests = corev1.ResourceList{}
+	}
+	// Database migrations are short-lived and predominantly I/O-bound, so they
+	// should not reserve the tracking server's full CPU request.
+	jobContainer.Resources.Requests[corev1.ResourceCPU] = resource.MustParse(migrationJobCPURequest)
 	jobContainer.Env = filterEnvVar(jobContainer.Env, readReplicaBackendStoreURIEnvName)
 	jobContainer.Env = append(jobContainer.Env, corev1.EnvVar{
 		Name:  readReplicaBackendStoreURIEnvName,

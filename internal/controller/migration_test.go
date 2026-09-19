@@ -298,6 +298,7 @@ func TestBuildMigrationJobFromDeployment(t *testing.T) {
 
 	container := job.Spec.Template.Spec.Containers[0]
 	g.Expect(container.Name).To(gomega.Equal(migrationJobContainerName))
+	g.Expect(container.Resources.Requests.Cpu().String()).To(gomega.Equal(migrationJobCPURequest))
 	g.Expect(container.Command).To(gomega.Equal([]string{"/bin/sh", "-ec"}))
 	g.Expect(container.Args).To(gomega.HaveLen(1))
 	g.Expect(container.Args[0]).To(gomega.ContainSubstring("python3.12"))
