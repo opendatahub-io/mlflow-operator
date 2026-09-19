@@ -131,6 +131,11 @@ inputs:
     description: 'Optional Kubernetes LabelSelector to restrict which namespaces are exposed as MLflow workspaces (e.g. {"matchLabels":{"mlflow-enabled":"true"}})'
     required: false
     default: ''
+  workers:
+    description: 'Number of MLflow workers'
+    required: false
+    default: '1'
+  
 
 outputs:
   mlflow_url:
@@ -161,6 +166,8 @@ runs:
     - name: Deploy MLflow
       id: deploy
       shell: bash
+      env:
+        WORKERS: ${{ inputs.workers }}
       run: |
         cd ${{ github.action_path }}
         python deploy.py \
@@ -185,6 +192,7 @@ runs:
           --s3-secret-key "${{ inputs.s3_secret_key }}" \
           --s3-endpoint "${{ inputs.s3_endpoint }}" \
           --workspace-label-selector '${{ inputs.workspace_label_selector }}' \
+          --workers "$WORKERS" \
           ${{ inputs.postgres_tls == 'true' && '--postgres-tls' || '' }} \
           ${{ inputs.seaweedfs_tls == 'true' && '--seaweedfs-tls' || '' }}
 
