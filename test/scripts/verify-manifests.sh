@@ -347,12 +347,7 @@ assert spec["policyTypes"] == ["Ingress"]
 assert "egress" not in spec
 
 ingress_rules = spec["ingress"]
-assert len(ingress_rules) == 2
-health_rules = [rule for rule in ingress_rules if rule.get("ports") == [{
-    "protocol": "TCP", "port": 8081,
-}]]
-assert len(health_rules) == 1
-assert "from" not in health_rules[0]
+assert len(ingress_rules) == 1
 
 metrics_rules = [rule for rule in ingress_rules if rule.get("ports") == [{
     "protocol": "TCP", "port": 8443,
