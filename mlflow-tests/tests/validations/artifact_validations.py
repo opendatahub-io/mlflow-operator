@@ -157,9 +157,10 @@ def validate_model_loaded(test_context: TestContext) -> None:
 
 
 def validate_storage(test_context: TestContext) -> None:
-    """Validate that artifacts are stored in either file or S3.
+    """Validate that the artifact location matches the configured access mode.
 
-    Checks that artifact_location uses S3 or file protocol.
+    Checks that artifact_location uses the dedicated server, direct S3, or the
+    tracking server's artifact proxy as configured.
 
     Args:
         test_context: Test context containing artifact_location.
@@ -174,20 +175,28 @@ def validate_storage(test_context: TestContext) -> None:
         "Artifact location not set in test context"
     logger.debug(f"Artifact location: {test_context.artifact_location}")
 
-    if Config.ARTIFACT_STORAGE == "s3" and not Config.SERVE_ARTIFACTS:
-        # Validate S3 protocol
+    if Config.ARTIFACTS_SERVER:
+        assert Config.MLFLOW_ARTIFACTS_URI, \
+            "MLFLOW_ARTIFACTS_URI is required when the dedicated artifact server is enabled"
+        expected_prefix = (
+            f"{Config.MLFLOW_ARTIFACTS_URI}/api/2.0/mlflow-artifacts/artifacts/"
+        )
+        is_artifacts_server = test_context.artifact_location.startswith(expected_prefix)
+        assert is_artifacts_server, \
+            f"Expected dedicated artifact server location ({expected_prefix}...), but got: " \
+            f"{test_context.artifact_location}"
+        logger.info(f"Successfully validated dedicated artifact server location: {test_context.artifact_location}")
+    elif Config.ARTIFACT_STORAGE == "s3" and not Config.SERVE_ARTIFACTS:
         is_s3 = test_context.artifact_location.startswith('s3://')
         assert is_s3, \
             f"Expected S3 storage (s3://...), but got: {test_context.artifact_location}"
-    else:
-        is_file = test_context.artifact_location.startswith('mlflow-artifacts:')
-        assert is_file, \
-            f"Expected File storage (mlflow-artifacts:/...), but got: {test_context.artifact_location}"
-
-    if Config.ARTIFACT_STORAGE == "s3" and not Config.SERVE_ARTIFACTS:
         logger.info(f"Successfully validated S3 storage: {test_context.artifact_location}")
     else:
-        logger.info(f"Successfully validated File storage: {test_context.artifact_location}")
+        is_proxy = test_context.artifact_location.startswith('mlflow-artifacts:')
+        assert is_proxy, \
+            f"Expected proxied artifact location (mlflow-artifacts:/...), but got: " \
+            f"{test_context.artifact_location}"
+        logger.info(f"Successfully validated proxied artifact location: {test_context.artifact_location}")
 
 
 def validate_custom_artifact_location(test_context: TestContext) -> None:
