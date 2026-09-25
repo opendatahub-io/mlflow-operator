@@ -17,6 +17,7 @@ class Config:
     ARTIFACTS_SERVER = os.getenv("artifacts_server", "false") == "true"
     ARTIFACTS_SERVER_GATEWAY = os.getenv("artifacts_server_gateway", "false") == "true"
     MLFLOW_ARTIFACTS_URI = os.getenv("MLFLOW_ARTIFACTS_URI", "").rstrip("/")
+    MLFLOW_ARTIFACTS_ROOT = os.getenv("MLFLOW_ARTIFACTS_ROOT", "").rstrip("/")
     TRACE_ARCHIVAL_ENABLED = os.getenv("trace_archival_enabled", "false") == "true"
     GARBAGE_COLLECTION_ENABLED = os.getenv("garbage_collection_enabled", "false") == "true"
     MLFLOW_NAMESPACE = os.getenv("mlflow_namespace", "opendatahub")

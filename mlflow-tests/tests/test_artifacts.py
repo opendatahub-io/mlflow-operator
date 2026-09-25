@@ -432,6 +432,8 @@ class TestMLflowArtifactsServer(TestBase):
         run_id, artifact_name, request_args = self._create_artifact(
             create_user_with_permissions
         )
+        action_get_run_info(self.test_context)
+        validate_storage(self.test_context)
         self._exercise_common_artifact_paths(
             Config.MLFLOW_ARTIFACTS_URI,
             run_id,

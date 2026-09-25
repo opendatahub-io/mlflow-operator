@@ -36,7 +36,11 @@ def artifact_settings_harness(
                     printf '%s' "$CR_ARTIFACT_SETTINGS"
                     ;;
                 *"jsonpath={.status.artifactsUrl}"*)
-                    printf 'https://mlflow.example/mlflow-artifacts/api/2.0/mlflow-artifacts/artifacts'
+                    if [ "$CR_STATUS_READ_EXIT" != "0" ]; then
+                        echo 'Error from server (Forbidden): cannot get MLflow status' >&2
+                        exit "$CR_STATUS_READ_EXIT"
+                    fi
+                    printf '%s' "$CR_STATUS_ARTIFACTS_URL"
                     ;;
                 *"jsonpath={.status.url}"*) printf 'https://mlflow.example/mlflow' ;;
                 *"get httproute mlflow-artifacts"*) printf 'Accepted=True\\nResolvedRefs=True\\n' ;;
@@ -75,6 +79,7 @@ def artifact_settings_harness(
                         "serve_artifacts=$serve_artifacts" \\
                         "artifacts_server_gateway=$artifacts_server_gateway" \\
                         "MLFLOW_ARTIFACTS_URI=${MLFLOW_ARTIFACTS_URI-unset}" \\
+                        "MLFLOW_ARTIFACTS_ROOT=${MLFLOW_ARTIFACTS_ROOT-unset}" \\
                         "MLFLOW_TRACKING_URI=$MLFLOW_TRACKING_URI" > "$PYTEST_ENV_LOG"
                     ;;
             esac
@@ -95,6 +100,8 @@ def artifact_settings_harness(
             "SUPPORTED_MLFLOW_VERSION_RAW": "3.14.0",
             "CR_READ_EXIT": "0",
             "CR_ARTIFACT_SETTINGS": "false|true",
+            "CR_STATUS_READ_EXIT": "0",
+            "CR_STATUS_ARTIFACTS_URL": "https://mlflow.example/mlflow-artifacts/api/2.0/mlflow-artifacts/artifacts",
             "ARTIFACTS_SERVER": "true",
             "ARTIFACTS_SERVER_GATEWAY": "true",
             "SERVE_ARTIFACTS": "false",
@@ -114,6 +121,7 @@ def artifact_settings_harness(
             "NAMESPACE": "test-namespace",
             "workspaces": "test-workspace",
             "MLFLOW_ARTIFACTS_URI": "https://stale.example/mlflow-artifacts",
+            "MLFLOW_ARTIFACTS_ROOT": "https://stale.example/artifacts",
         }
     )
 
@@ -174,6 +182,7 @@ def read_exports(tmp_path: Path) -> dict[str, str]:
                 "INFRASTRUCTURE_PLATFORM": "base",
                 "ARTIFACTS_SERVER_GATEWAY": "false",
                 "ARTIFACT_BACKENDS": "s3",
+                "CR_STATUS_ARTIFACTS_URL": "",
             },
             "true",
             "false",
@@ -214,12 +223,13 @@ def test_reused_artifact_settings_override_flags(
         expected_server == "true"
     )
     assert ("get httproute mlflow-artifacts" in log) == (expected_gateway == "true")
-    assert (".status.artifactsUrl" in log) == (expected_gateway == "true")
+    assert (".status.artifactsUrl" in log) == (expected_server == "true")
     assert ("port-forward svc/mlflow-artifacts" in log) == (
         expected_server == "true" and expected_gateway == "false"
     )
     if expected_server == "false":
         assert exported["MLFLOW_ARTIFACTS_URI"] == "unset"
+        assert exported["MLFLOW_ARTIFACTS_ROOT"] == "unset"
     elif expected_gateway == "true":
         assert (
             exported["MLFLOW_ARTIFACTS_URI"]
@@ -235,6 +245,15 @@ def test_reused_artifact_settings_override_flags(
         assert (
             exported["MLFLOW_ARTIFACTS_URI"]
             == "https://localhost:8444/mlflow-artifacts"
+        )
+    status_root = overrides.get(
+        "CR_STATUS_ARTIFACTS_URL",
+        "https://mlflow.example/mlflow-artifacts/api/2.0/mlflow-artifacts/artifacts",
+    )
+    if expected_server == "true":
+        assert exported["MLFLOW_ARTIFACTS_ROOT"] == (
+            status_root
+            or f"{exported['MLFLOW_ARTIFACTS_URI']}/api/2.0/mlflow-artifacts/artifacts"
         )
     assert "deploy.py" not in (tmp_path / "uv.log").read_text(encoding="utf-8")
     assert _mlflow_delete_commands(log) == []
@@ -278,6 +297,35 @@ def test_reused_artifact_settings_failure_writes_junit(
     assert "wait " not in log
     assert "port-forward " not in log
     assert _mlflow_delete_commands(log) == []
+
+
+@pytest.mark.parametrize("gateway", [True, False], ids=["gateway", "direct"])
+def test_artifacts_status_read_failure_writes_junit(
+    tmp_path: Path,
+    artifact_settings_harness: Callable[..., subprocess.CompletedProcess[str]],
+    gateway: bool,
+) -> None:
+    result = artifact_settings_harness(
+        {
+            "ARTIFACTS_SERVER_GATEWAY": str(gateway).lower(),
+            "CR_ARTIFACT_SETTINGS": "true|false",
+            "CR_STATUS_READ_EXIT": "1",
+        }
+    )
+    message = "Failed to read status.artifactsUrl from MLflow CR mlflow"
+    assert result.returncode == 1
+    assert message in result.stderr
+    case = (
+        parse(tmp_path / "results" / "xunit_report_file.xml")
+        .getroot()
+        .find("./testsuite/testcase")
+    )
+    assert case is not None
+    assert case.get("name") == "test_read_artifacts_status_url"
+    error = case.find("error")
+    assert error is not None
+    assert error.get("message") == message
+    assert not (tmp_path / "uv.log").exists()
 
 
 @pytest.mark.parametrize(

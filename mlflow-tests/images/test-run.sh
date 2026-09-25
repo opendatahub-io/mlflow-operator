@@ -493,6 +493,7 @@ if [ "$SKIP_DEPLOYMENT" = "true" ]; then
     if [ "$ARTIFACTS_SERVER" != "true" ]; then
         ARTIFACTS_SERVER_GATEWAY=false
         unset MLFLOW_ARTIFACTS_URI
+        unset MLFLOW_ARTIFACTS_ROOT
     fi
     echo "Reusing MLflow CR ${MLFLOW_NAME}: artifactsServer.enabled=${ARTIFACTS_SERVER}, serveArtifacts=${SERVE_ARTIFACTS}"
 fi
@@ -906,8 +907,15 @@ wait_for_artifacts_server_route() {
     local artifacts_url=""
     retry=0
     max_retries=12
-    until artifacts_url=$(kubectl get mlflow "$MLFLOW_NAME" -n "$NAMESPACE" -o jsonpath='{.status.artifactsUrl}' 2>/dev/null) && \
-        [ -n "$artifacts_url" ]; do
+    while true; do
+        if ! artifacts_url="$(kubectl get mlflow "$MLFLOW_NAME" -n "$NAMESPACE" -o jsonpath='{.status.artifactsUrl}')"; then
+            echo "ERROR: Failed to read status.artifactsUrl from MLflow CR ${MLFLOW_NAME}" >&2
+            collect_debug_logs "artifact status URL read failure"
+            fail_suite "test_read_artifacts_status_url" \
+                "Failed to read status.artifactsUrl from MLflow CR ${MLFLOW_NAME}"
+            return 1
+        fi
+        [ -n "$artifacts_url" ] && break
         retry=$((retry + 1))
         if [ "$retry" -ge "$max_retries" ]; then
             echo "ERROR: MLflow CR status.artifactsUrl is empty with ARTIFACTS_SERVER=true" >&2
@@ -1356,9 +1364,14 @@ run_suite_body() {
         return 1
     fi
     if [ "$ARTIFACTS_SERVER" = "true" ]; then
+        local published_artifacts_url
+        if ! published_artifacts_url="$(kubectl get mlflow "$MLFLOW_NAME" -n "$NAMESPACE" -o jsonpath='{.status.artifactsUrl}')"; then
+            echo "ERROR: Failed to read status.artifactsUrl from MLflow CR ${MLFLOW_NAME}" >&2
+            fail_suite "test_read_artifacts_status_url" \
+                "Failed to read status.artifactsUrl from MLflow CR ${MLFLOW_NAME}"
+            return 1
+        fi
         if [ "$ARTIFACTS_SERVER_GATEWAY" = "true" ]; then
-            local published_artifacts_url
-            published_artifacts_url="$(kubectl get mlflow "$MLFLOW_NAME" -n "$NAMESPACE" -o jsonpath='{.status.artifactsUrl}')"
             export MLFLOW_ARTIFACTS_URI="${published_artifacts_url%/api/2.0/mlflow-artifacts/artifacts}"
         else
             local artifacts_port=8444
@@ -1377,7 +1390,11 @@ run_suite_body() {
             sleep 2
             export MLFLOW_ARTIFACTS_URI="https://${artifacts_uri_host}:${artifacts_port}/mlflow-artifacts"
         fi
+        export MLFLOW_ARTIFACTS_ROOT="${published_artifacts_url:-${MLFLOW_ARTIFACTS_URI}/api/2.0/mlflow-artifacts/artifacts}"
         echo "  MLFLOW_ARTIFACTS_URI=$MLFLOW_ARTIFACTS_URI"
+        echo "  MLFLOW_ARTIFACTS_ROOT=$MLFLOW_ARTIFACTS_ROOT"
+    else
+        unset MLFLOW_ARTIFACTS_URI MLFLOW_ARTIFACTS_ROOT
     fi
 
     if [ "$INFERRED_UPGRADE_PHASE" = "post_upgrade" ]; then

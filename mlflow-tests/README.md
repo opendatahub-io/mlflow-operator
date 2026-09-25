@@ -70,6 +70,7 @@ The framework supports configuration via environment variables:
 | `artifacts_server` | Whether the dedicated artifact-server integration topology is deployed | `false` | K8s |
 | `artifacts_server_gateway` | Whether live Gateway rewrite assertions are enabled | `false` | K8s |
 | `MLFLOW_ARTIFACTS_URI` | Direct artifact-server base URI set by the harness | `""` | K8s |
+| `MLFLOW_ARTIFACTS_ROOT` | Persisted artifact API root set by the harness for dedicated-server location validation | `""` | K8s |
 | `mlflow_namespace` | Namespace containing the MLflow Deployments | `opendatahub` | K8s |
 | `MLFLOW_S3_ENDPOINT_URL` | S3 endpoint URL | Optional | Both |
 | `AWS_ACCESS_KEY_ID` | AWS access key for S3 | Optional | Both |
