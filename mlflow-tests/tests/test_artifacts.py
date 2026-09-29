@@ -48,8 +48,20 @@ from .base import TestBase
 
 logger = logging.getLogger(__name__)
 
+# Secret creation records the expected bucket only when these settings are present.
+# Without them the activation wait fails before it polls.
 RUNS_CUSTOM_ARTIFACT_OVERRIDE_TEST = (
-    Config.ARTIFACT_STORAGE == "s3" and not Config.SERVE_ARTIFACTS
+    Config.ARTIFACT_STORAGE == "s3"
+    and not Config.SERVE_ARTIFACTS
+    and all(
+        (value or "").strip()
+        for value in (
+            Config.AWS_ACCESS_KEY,
+            Config.AWS_SECRET_KEY,
+            Config.S3_URL,
+            Config.S3_BUCKET,
+        )
+    )
 )
 
 
@@ -184,8 +196,8 @@ class TestMLflowArtifacts(TestBase):
                 user_info=UserInfo(workspace=Config.WORKSPACES[0], verbs=[KubeVerb.CREATE, KubeVerb.UPDATE, KubeVerb.GET], resource_types=[ResourceType.EXPERIMENTS]),
                 workspace_to_use=Config.WORKSPACES[0],
                 test_steps=[
-                    TestStep(action_func=action_create_artifact_connection_secret),
-                    TestStep(action_func=action_create_mlflowconfig),
+                    TestStep(action_func=action_create_artifact_connection_secret, validate_func=validate_no_error),
+                    TestStep(action_func=action_create_mlflowconfig, validate_func=validate_no_error),
                     TestStep(action_func=action_wait_for_mlflowconfig_active, validate_func=validate_no_error),
                     TestStep(action_func=action_create_experiment, validate_func=validate_experiment_created),
                     TestStep(action_func=action_start_run, validate_func=validate_run_created),
