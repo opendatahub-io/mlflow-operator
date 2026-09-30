@@ -1,5 +1,5 @@
-# OpenShift scale-testing configuration for the local Phase 2 MLflow image.
-# Load the image into every test node, or replace it with an approved published digest.
+# OpenShift scale-testing configuration for the Phase 2 MLflow image on Quay.
+# Publish the image to this tag before deployment; a digest can be used after publication.
 # Create mlflow-db-credentials and mlflow-s3-credentials in the operand namespace first.
 apiVersion: mlflow.opendatahub.io/v1
 kind: MLflow
@@ -7,7 +7,7 @@ metadata:
   name: mlflow
 spec:
   image:
-    image: localhost/mlflow:openshift-scale-testing-34c75beb
+    image: quay.io/hukhan/mlflow:openshift-scale-testing-34c75beb
     imagePullPolicy: IfNotPresent
   replicas: 2
   workers: 1

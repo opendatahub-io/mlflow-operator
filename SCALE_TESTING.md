@@ -1,7 +1,8 @@
 # OpenShift SQL trace rollup scale testing
 
-This is a local testing branch, not a production rollout. No branches or images
-have been published. Phase 3 implements RHOAIENG-78203's standalone rollup scheduler.
+This is a testing branch, not a production rollout. Phase 3 implements
+RHOAIENG-78203's standalone rollup scheduler. Runtime configuration uses the
+user-selected Quay tag; publication is performed separately by the user.
 
 ## Coordinated sources and images
 
@@ -16,16 +17,18 @@ All three repositories use local branch `db-optimization/mlflow-openshift-scale-
   `a29587217b3df52bb31a45797e0bdfbe4910c767`.
   The final local Operator commit is recorded in the companion handoff.
 
-The Phase 2 runtime is `localhost/mlflow:openshift-scale-testing-34c75beb`, local
-Podman image ID `sha256:9f0e60377d5b6c9a5a6bd234680f4a9792186fa9fd990f00def1fc37a60c5123`.
+The deployment runtime reference is `quay.io/hukhan/mlflow:openshift-scale-testing-34c75beb`.
+The verified Phase 2 build is available locally as `localhost/mlflow:openshift-scale-testing-34c75beb`,
+with Podman image ID `sha256:9f0e60377d5b6c9a5a6bd234680f4a9792186fa9fd990f00def1fc37a60c5123`.
 It contains MLflow `3.16.2.dev0` and the Phase 1 plugin wheel (package version still
 `1.6.0`, SHA256 `8217520438f1849d7b0602ef7fd4944fa7fe99ff30f63a9e369d00125e5d17ff`).
 MLflow's `SCALE_TESTING.md` explains the local wheel override and the pinned Git
 wheel source used after publication. Remote Git builds cannot access that commit yet.
 
-Operator metadata and both default runtime `params.env` files target this local
-runtime. Migration checks the exact `3.16.2.dev0` version. Historical sample image
-pins are illustrative; use `config/samples/mlflow_v1_mlflow_trace_rollups.yaml` for
+Both default runtime `params.env` files and the scale-testing sample target the
+Quay runtime reference above. Operator metadata targets the same MLflow version.
+Migration checks the exact `3.16.2.dev0` version. Historical sample image pins are
+illustrative; use `config/samples/mlflow_v1_mlflow_trace_rollups.yaml` for
 this coordinated test. Never deploy this Operator with an older runtime image.
 
 ## Build and prepare
@@ -38,13 +41,15 @@ make build
 make docker-build CONTAINER_TOOL=podman IMG=localhost/mlflow-operator:openshift-scale-testing
 ```
 
-For an OpenShift test, provide images accessible to every node. Publication needs
-the user's direction; alternatively use an explicitly chosen local image-loading
-mechanism. A `localhost/...` image in workstation Podman storage is not available
-to cluster nodes. Replace the Operator overlay image and the sample CR runtime
-image with the approved registry references, preferably digests. Set the Operator's
-`MLFLOW_IMAGE` to that same runtime image, and configure the real external
-`MLFLOW_URL` and Gateway before applying the selected OpenShift overlay.
+For an OpenShift test, publish the verified Phase 2 runtime to
+`quay.io/hukhan/mlflow:openshift-scale-testing-34c75beb` before deployment. The user is
+performing this publication; updating the reference does not verify registry
+availability. After publication, a digest can replace the tag for reproducibility.
+The Operator image still needs a cluster-accessible registry reference or an
+explicit node image-loading mechanism. Update the Operator overlay image
+accordingly. The Operator's `MLFLOW_IMAGE` and the sample CR already use the same
+Quay runtime reference. Configure the real external `MLFLOW_URL` and Gateway
+before applying the selected OpenShift overlay.
 
 Create database and S3 connection Secrets in the operand namespace. The sample
 expects `mlflow-db-credentials` key `backend-store-uri`, and `mlflow-s3-credentials`
@@ -102,6 +107,6 @@ Validation logs and executable runtime checks are in the companion
 final results. Local checks cover generation, rendering, API admission/warnings,
 Secret-backed SQLite, cleanup, migration suspension, and execution against local
 PostgreSQL with the Phase 2 image. No live OpenShift deployment, RBAC/scale test,
-remote GitHub CI, registry publication, other architecture, MySQL runtime, or
-hermetic Konflux Git prefetch has been performed. Standalone Helm users must
+remote GitHub CI, registry pull verification, other architecture, MySQL runtime,
+or hermetic Konflux Git prefetch has been performed. Standalone Helm users must
 coordinate schema migration and maintenance themselves.

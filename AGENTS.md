@@ -438,7 +438,7 @@ The `config/samples/` directory contains example MLflow custom resource configur
    - Requires Secret with S3 credentials in the same namespace
 
 9. **mlflow_v1_mlflow_trace_rollups.yaml** - SQL trace rollup scale testing
-   - Local Phase 2 runtime image; must be published or loaded into test nodes
+   - Phase 2 runtime at `quay.io/hukhan/mlflow:openshift-scale-testing-34c75beb`; publish before deployment
    - Secret-backed PostgreSQL and S3 storage
    - Explicit nightly schedule, UTC timezone, resources, and partition/worker limits
 

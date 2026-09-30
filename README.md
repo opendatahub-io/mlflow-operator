@@ -372,8 +372,9 @@ For ODH/RHOAI MLflow images that ship `mlflow.store.db.migration_gap`, that Job 
 This branch targets MLflow `3.16.2.dev0` and the matching local Kubernetes plugin
 feature build. See [SCALE_TESTING.md](SCALE_TESTING.md) for image provenance,
 Operator build instructions, and OpenShift prerequisites. The checked-in runtime
-image defaults are local-only; registry publication or loading the image into
-all test nodes is required before deployment.
+image defaults and scale-testing sample use
+`quay.io/hukhan/mlflow:openshift-scale-testing-34c75beb`. Publish the Phase 2 image
+to that tag before deployment.
 
 Remote PostgreSQL/MySQL tracking stores create `mlflow-trace-rollups` by default.
 The CronJob calls MLflow's Python rollup entrypoint directly, runs nightly at
