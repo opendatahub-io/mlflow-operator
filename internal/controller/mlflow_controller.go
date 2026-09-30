@@ -169,6 +169,35 @@ func (r *MLflowReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		return ctrl.Result{}, err
 	}
 
+	traceRollupsSQL, err := r.traceRollupsSQLBackend(ctx, mlflow, targetNamespace)
+	if err != nil {
+		setObservedURLs(mlflow, targetNamespace, false, cfg)
+		log.Error(err, "Failed to resolve trace rollup backend")
+		meta.SetStatusCondition(&mlflow.Status.Conditions, metav1.Condition{
+			Type:    "Available",
+			Status:  metav1.ConditionFalse,
+			Reason:  "TraceRollupBackendResolutionFailed",
+			Message: err.Error(),
+		})
+		meta.SetStatusCondition(&mlflow.Status.Conditions, metav1.Condition{
+			Type:    "Progressing",
+			Status:  metav1.ConditionFalse,
+			Reason:  "TraceRollupBackendResolutionFailed",
+			Message: err.Error(),
+		})
+		if statusErr := r.updateStatus(ctx, mlflow); statusErr != nil {
+			log.Error(statusErr, "Failed to update MLflow status after trace rollup backend resolution")
+		}
+		return ctrl.Result{}, err
+	}
+	// Retain the CronJob during migration so its unfinished Jobs can be drained,
+	// including older Jobs that identify the CronJob only by owner reference.
+	if (!isTraceRollupsEnabled(mlflow) || !traceRollupsSQL) && !migrationRequested(mlflow) {
+		if err := r.cleanupTraceRollups(ctx, mlflow, targetNamespace); err != nil {
+			return ctrl.Result{}, err
+		}
+	}
+
 	// Clean up GC resources when garbage collection is disabled.
 	if mlflow.Spec.GarbageCollection == nil {
 		gcSuffix := "-gc" + getResourceSuffix(mlflow.Name)
@@ -339,6 +368,7 @@ func (r *MLflowReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	}
 	renderer := NewHelmRenderer(helmChartPath)
 	renderOpts := RenderOptions{
+		TraceRollupsDisabled:          !traceRollupsSQL,
 		PlatformTrustedCABundleExists: platformCABundleExists,
 		// If ConsoleLink is available, we can assume we are on OpenShift
 		IsOpenShift:                      r.ConsoleLinkAvailable,
@@ -482,15 +512,14 @@ func (r *MLflowReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	}
 
 	if allDeploymentsReady {
-		migrationJob := &batchv1.Job{}
-		jobErr := r.Get(ctx, types.NamespacedName{Name: migrationJobName(mlflow), Namespace: targetNamespace}, migrationJob)
+		migrationJob, jobErr := r.successfulMigrationJobForRollout(ctx, mlflow, targetNamespace)
 		switch {
-		case jobErr == nil && isJobSuccessful(migrationJob):
-			if err := r.markMigrationSuccessful(ctx, mlflow); err != nil {
+		case jobErr == nil && migrationJob != nil:
+			if err := r.markMigrationSuccessful(ctx, mlflow, migrationJob); err != nil {
 				log.Error(err, "Failed to finalize migration status after rollout became ready")
 				return ctrl.Result{}, err
 			}
-		case jobErr != nil && !errors.IsNotFound(jobErr):
+		case jobErr != nil:
 			log.Error(jobErr, "Failed to get migration Job")
 			return ctrl.Result{}, jobErr
 		}

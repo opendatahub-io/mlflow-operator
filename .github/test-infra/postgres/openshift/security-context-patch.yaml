@@ -1,0 +1,13 @@
+# OpenShift SCC assigns namespace-valid UID/GID values. Do not pin the upstream
+# PostgreSQL fixture's Kind-specific user/group IDs in this overlay.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgres-deployment
+spec:
+  template:
+    spec:
+      securityContext:
+        $patch: replace
+        seccompProfile:
+          type: RuntimeDefault

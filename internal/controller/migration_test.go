@@ -469,6 +469,22 @@ func TestMigrationScriptValidatesSupportedVersion(t *testing.T) {
 	}
 }
 
+func TestMigrationScriptCoordinatesBackendMigrationWithTraceRollups(t *testing.T) {
+	t.Parallel()
+
+	for _, snippet := range []string{
+		"def with_trace_rollup_migration_lock(uri, operation):",
+		"SELECT pg_try_advisory_lock(78203, 1)",
+		"SELECT GET_LOCK('mlflow-operator-trace-rollups-migration', 10)",
+		"if name == \"backend\":",
+		"with_trace_rollup_migration_lock(uri, lambda: migrate_store(name, uri))",
+	} {
+		if !strings.Contains(migrationPythonScript, snippet) {
+			t.Fatalf("migrationPythonScript is missing rollup coordination %q", snippet)
+		}
+	}
+}
+
 func TestMigrationScriptDefinesSpecificExitCodes(t *testing.T) {
 	t.Parallel()
 

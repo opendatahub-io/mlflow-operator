@@ -266,7 +266,7 @@ spec:
       value: us-east-1
 ```
 
-`spec.env` and `spec.envFrom` are applied to the MLflow Deployment, the garbage collection CronJob, and the trace-archival CronJob so S3 region, endpoint, and credential configuration stay consistent across those workloads.
+`spec.env` and `spec.envFrom` are applied to the tracking and dedicated artifact Deployments and the garbage collection, trace-archival, and SQL trace-rollup CronJobs so configuration stays consistent across those workloads.
 
 To use cloud-native workload identity instead of static access keys (for example AWS IRSA on ROSA or EKS), set `spec.serviceAccountAnnotations` on the MLflow CR. Those annotations are applied to the main `mlflow-sa` ServiceAccount and, when enabled, to `mlflow-gc-sa` and `mlflow-trace-archival-sa`:
 
@@ -401,6 +401,83 @@ The repository's test deployer creates `ReadWriteOnce` storage whenever either m
 When trace archival is disabled or the CR is deleted, the operator cleans up the CronJob, ConfigMap, and ServiceAccount.
 
 See `config/samples/mlflow_v1_mlflow_trace_archival.yaml` for a complete example.
+
+### SQL Trace Rollups
+
+For PostgreSQL and MySQL tracking stores, the operator schedules SQL trace
+analytics maintenance by default. SQLite is excluded, including SQLite URIs
+resolved from a backend Secret. The runtime image must provide
+`mlflow.tracing.trace_rollup_service.run_sql_trace_rollup_scheduler`, and the
+operator's supported MLflow version must match that image. A runtime version
+alone does not guarantee that the entrypoint is present.
+
+```yaml
+spec:
+  traceRollups:
+    enabled: true
+    schedule: "0 2 * * *"
+    timeZone: "Etc/UTC"
+    resources:
+      requests:
+        cpu: "250m"
+        memory: "512Mi"
+      limits:
+        memory: "1Gi"
+```
+
+Omitting the block uses the nightly defaults shown above: 02:00 UTC. Schedule
+and timezone can be overridden independently; for example, `America/New_York`
+keeps 02:00 in that timezone subject to daylight-saving rules. An enabled
+schedule must use five cron fields and a valid IANA timezone. Invalid timing
+fails rendering before migration can scale down servers. Unused timing does
+not block scheduling opt-out or SQLite deployments.
+
+The CronJob invokes the Python entrypoint directly on the primary database,
+without the MLflow jobs backend, a PVC, or a mounted API token. It inherits
+the server image, backend credentials, CA bundle, placement, and main service
+account. `concurrencyPolicy: Forbid` prevents overlapping scheduled runs.
+Operator-managed migration suspends scheduling and waits for unfinished
+rollup Jobs before schema changes; successful migration restores scheduling.
+Jobs created from the CronJob template inherit the instance label needed
+for this coordination. Do not launch additional manual maintenance during
+migration.
+
+Set `spec.traceRollups.enabled: false` to remove scheduled maintenance. This
+keeps `MLFLOW_SQL_TRACE_ROLLUPS_ENABLED=true` in metadata-connected tracking
+and artifact servers so they can read existing aggregates and restart safely.
+The rollup opt-out path skips backend Secret resolution so an unavailable
+Secret does not itself block cleanup. Other deployment prerequisites still
+apply: split artifact serving validates its metadata Secrets before cleanup,
+and server pods need valid credentials to start. If migration is requested
+at the same time, the CronJob is suspended and removed after its Jobs finish;
+cleanup does not depend on the migration succeeding.
+
+An explicit `MLFLOW_SQL_TRACE_ROLLUPS_ENABLED` entry in `spec.env`, either
+`value` or `valueFrom`, overrides the default once in each workload. Explicit
+`false` makes maintenance Jobs exit successfully without opening a database
+engine; it does not remove the CronJob. Use scheduling opt-out to remove it.
+Disabling the runtime feature after aggregates exist requires the runtime's
+documented rollup-removal procedure while servers are stopped. It is not a
+safe substitute for scheduling opt-out. To override the operator default via
+a Secret or ConfigMap, use `spec.env[].valueFrom`; an injected explicit `env`
+entry takes precedence over `envFrom`.
+
+Tune `MLFLOW_TRACE_ROLLUPS_MAX_PARTITIONS_PER_RUN` and
+`MLFLOW_TRACE_ROLLUPS_MAX_WORKERS` through `spec.env` with positive integer
+values, alongside `traceRollups.resources`, to fit database capacity. See
+[the trace-rollup sample](config/samples/mlflow_v1_mlflow_trace_rollups.yaml).
+
+On clusters supporting ValidatingAdmissionPolicy, optional warning-only
+guidance for omitted schedule/timezone fields can be installed with:
+
+```sh
+kubectl apply -k config/admission
+```
+
+This policy is separate from the base installation. It reports effective
+timing defaults without persisting them in the CR and cannot inspect a
+Secret-backed URI to exclude SQLite; backend eligibility is determined by
+the operator.
 
 ### Dedicated Artifact Server
 
@@ -639,6 +716,7 @@ See the [config/samples](./config/samples/) directory for complete examples:
 - `mlflow_v1_mlflow.yaml` - OpenShift deployment with local storage, service-ca TLS, and a commented DRA example
 - `mlflow_v1_mlflow_remote_storage.yaml` - PostgreSQL primary/read-replica routing + S3 storage with horizontal scaling and a temporary storage override for proxied artifact serving
 - `mlflow_v1_mlflow_artifacts_server.yaml` - Split tracking and metadata-aware artifact-serving servers using PostgreSQL and S3
+- `mlflow_v1_mlflow_trace_rollups.yaml` - SQL trace rollup timing, resources, and runtime tuning
 - `mlflow_v1_mlflowconfig.yaml` - Namespace-scoped artifact storage override using the upstream `MLflowConfig` CRD
 
 ## Development

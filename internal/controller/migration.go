@@ -109,6 +109,31 @@ func latestMigrationCondition(mlflow *mlflowv1.MLflow) *metav1.Condition {
 	return meta.FindStatusCondition(mlflow.Status.Conditions, migrationConditionType)
 }
 
+func migrationJobForCondition(jobs []batchv1.Job, condition *metav1.Condition) *batchv1.Job {
+	if condition == nil {
+		return nil
+	}
+
+	for i := range jobs {
+		for _, field := range strings.Fields(condition.Message) {
+			if strings.Trim(field, ",;:\"'") == jobs[i].Name {
+				return jobs[i].DeepCopy()
+			}
+		}
+	}
+
+	if condition.ObservedGeneration <= 0 {
+		return nil
+	}
+	generationSuffix := fmt.Sprintf("-g%d", condition.ObservedGeneration)
+	for i := range jobs {
+		if strings.HasSuffix(jobs[i].Name, generationSuffix) {
+			return jobs[i].DeepCopy()
+		}
+	}
+	return nil
+}
+
 func latestTerminalMigrationFailureCondition(mlflow *mlflowv1.MLflow) *metav1.Condition {
 	condition := latestMigrationCondition(mlflow)
 	if condition == nil || condition.Status != metav1.ConditionFalse || condition.Reason != migrationReasonFailed {
@@ -181,11 +206,11 @@ func supportedVersionEarlierThanStatusVersion(mlflow *mlflowv1.MLflow) bool {
 		return false
 	}
 
-	supportedVersion, err := semver.NewVersion(strings.TrimPrefix(SupportedMLflowVersion, "v"))
+	supportedVersion, err := semver.NewVersion(comparableMLflowVersion(SupportedMLflowVersion))
 	if err != nil {
 		return false
 	}
-	statusVersion, err := semver.NewVersion(strings.TrimPrefix(mlflow.Status.Version, "v"))
+	statusVersion, err := semver.NewVersion(comparableMLflowVersion(mlflow.Status.Version))
 	if err != nil {
 		return false
 	}
@@ -232,6 +257,11 @@ func scaledDownObjects(objects []*unstructured.Unstructured, deploymentNames ...
 		if copyObj.GetKind() == "Deployment" && shouldScale {
 			if err := unstructured.SetNestedField(copyObj.Object, int64(0), "spec", "replicas"); err != nil {
 				logf.Log.Error(err, "Failed to set Deployment replicas to zero in rendered object", "name", copyObj.GetName(), "namespace", copyObj.GetNamespace())
+			}
+		}
+		if copyObj.GetKind() == "CronJob" && strings.HasPrefix(copyObj.GetName(), "mlflow-trace-rollups") {
+			if err := unstructured.SetNestedField(copyObj.Object, true, "spec", "suspend"); err != nil {
+				logf.Log.Error(err, "Failed to suspend rendered trace rollup CronJob", "name", copyObj.GetName(), "namespace", copyObj.GetNamespace())
 			}
 		}
 		scaled = append(scaled, copyObj)
@@ -533,7 +563,40 @@ func (r *MLflowReconciler) clearForceMigrateAnnotation(ctx context.Context, mlfl
 	)
 }
 
-func (r *MLflowReconciler) markMigrationSuccessful(ctx context.Context, mlflow *mlflowv1.MLflow) error {
+func (r *MLflowReconciler) successfulMigrationJobForRollout(ctx context.Context, mlflow *mlflowv1.MLflow, namespace string) (*batchv1.Job, error) {
+	currentJob := &batchv1.Job{}
+	err := r.Get(ctx, types.NamespacedName{Name: migrationJobName(mlflow), Namespace: namespace}, currentJob)
+	if err == nil {
+		if isJobSuccessful(currentJob) {
+			return currentJob, nil
+		}
+		return nil, nil
+	}
+	if !errors.IsNotFound(err) {
+		return nil, err
+	}
+
+	if migrationMode(mlflow) != mlflowv1.MLflowMigrateAutomatic ||
+		mlflow.Status.Version != SupportedMLflowVersion ||
+		hasForceMigrateAnnotation(mlflow) {
+		return nil, nil
+	}
+	condition := latestMigrationCondition(mlflow)
+	if condition == nil || condition.Status != metav1.ConditionUnknown {
+		return nil, nil
+	}
+	jobs, err := r.listMigrationJobs(ctx, mlflow, namespace)
+	if err != nil {
+		return nil, err
+	}
+	previousJob := migrationJobForCondition(jobs, condition)
+	if previousJob != nil && isJobSuccessful(previousJob) {
+		return previousJob, nil
+	}
+	return nil, nil
+}
+
+func (r *MLflowReconciler) markMigrationSuccessful(ctx context.Context, mlflow *mlflowv1.MLflow, job *batchv1.Job) error {
 	if err := r.clearForceMigrateAnnotation(ctx, mlflow); err != nil {
 		return err
 	}
@@ -552,13 +615,17 @@ func (r *MLflowReconciler) markMigrationSuccessful(ctx context.Context, mlflow *
 		return nil
 	}
 
+	message := fmt.Sprintf("Migration for generation %d completed successfully", mlflow.Generation)
+	if job != nil && !strings.HasSuffix(job.Name, fmt.Sprintf("-g%d", mlflow.Generation)) {
+		message = fmt.Sprintf("Migration Job %s from an earlier desired generation completed successfully; generation %d rollout is ready", job.Name, mlflow.Generation)
+	}
 	mlflow.Status.Version = SupportedMLflowVersion
 	meta.SetStatusCondition(&mlflow.Status.Conditions, metav1.Condition{
 		Type:               migrationConditionType,
 		Status:             metav1.ConditionTrue,
 		ObservedGeneration: mlflow.Generation,
 		Reason:             migrationReasonSucceeded,
-		Message:            fmt.Sprintf("Migration for generation %d completed successfully", mlflow.Generation),
+		Message:            message,
 	})
 	return r.updateStatus(ctx, mlflow)
 }
@@ -762,6 +829,39 @@ func (r *MLflowReconciler) handleMigration(ctx context.Context, mlflow *mlflowv1
 		)
 	}
 	if !migrationRequested(mlflow) {
+		// An Always migration already in flight remains a database operation even
+		// if the CR is changed back to Automatic. Keep the workloads quiesced until
+		// that generation's Job reaches a terminal state.
+		condition := latestMigrationCondition(mlflow)
+		if condition != nil &&
+			condition.Status == metav1.ConditionUnknown &&
+			condition.ObservedGeneration < mlflow.Generation {
+			jobs, err := r.listMigrationJobs(ctx, mlflow, namespace)
+			if err != nil {
+				return ctrl.Result{}, true, err
+			}
+			previousJob := migrationJobForCondition(jobs, condition)
+			if previousJob != nil && isJobFailed(previousJob) {
+				if err := r.applyMigrationScaleDown(ctx, mlflow, objects, namespace, ResourceName+getResourceSuffix(mlflow.Name), ArtifactsResourceName+getResourceSuffix(mlflow.Name)); err != nil {
+					return ctrl.Result{}, true, err
+				}
+				message := fmt.Sprintf("Migration Job %s from a previous desired generation failed after migration mode changed to Automatic", previousJob.Name)
+				if err := r.recordMigrationFailure(ctx, mlflow, migrationReasonFailed, terminalMigrationMessage(message)); err != nil {
+					return ctrl.Result{}, true, err
+				}
+				return ctrl.Result{}, true, nil
+			}
+			if previousJob != nil && !isJobFinished(previousJob) {
+				if err := r.applyMigrationScaleDown(ctx, mlflow, objects, namespace, ResourceName+getResourceSuffix(mlflow.Name), ArtifactsResourceName+getResourceSuffix(mlflow.Name)); err != nil {
+					return ctrl.Result{}, true, err
+				}
+				message := fmt.Sprintf("Waiting for migration Job %s from a previous desired generation to finish", previousJob.Name)
+				if err := r.recordMigrationProgress(ctx, mlflow, migrationReasonRunning, message); err != nil {
+					return ctrl.Result{}, true, err
+				}
+				return ctrl.Result{RequeueAfter: migrationJobRequeueAfter}, true, nil
+			}
+		}
 		return ctrl.Result{}, false, nil
 	}
 	trigger := describeMigrationTrigger(mlflow)
@@ -788,6 +888,53 @@ func (r *MLflowReconciler) handleMigration(ctx context.Context, mlflow *mlflowv1
 	jobExists := jobErr == nil
 	if jobErr != nil && !jobNotFound {
 		return ctrl.Result{}, true, jobErr
+	}
+	if jobNotFound &&
+		migrationMode(mlflow) == mlflowv1.MLflowMigrateAutomatic &&
+		mlflow.Status.Version == SupportedMLflowVersion &&
+		!hasForceMigrateAnnotation(mlflow) {
+		jobs, err := r.listMigrationJobs(ctx, mlflow, namespace)
+		if err != nil {
+			return ctrl.Result{}, true, err
+		}
+		previousJob := migrationJobForCondition(jobs, currentMigrationCondition)
+		if previousJob != nil && isJobSuccessful(previousJob) {
+			// The previous generation's migration finished after the user
+			// returned to Automatic. Roll out the current desired generation
+			// without launching a duplicate migration Job.
+			return ctrl.Result{}, false, nil
+		}
+		if previousJob != nil && isJobFailed(previousJob) {
+			if err := r.applyMigrationScaleDown(ctx, mlflow, objects, namespace, deploymentName, artifactDeploymentName); err != nil {
+				return ctrl.Result{}, true, err
+			}
+			if err := r.recordMigrationFailure(ctx, mlflow, migrationReasonFailed,
+				terminalMigrationMessage(fmt.Sprintf("Migration Job %s from a previous desired generation failed before the current rollout", previousJob.Name))); err != nil {
+				return ctrl.Result{}, true, err
+			}
+			return ctrl.Result{}, true, nil
+		}
+	}
+
+	if !jobExists || !isJobSuccessful(existingJob) {
+		rollupsQuiesced, err := r.quiesceTraceRollups(ctx, mlflow, namespace)
+		if err != nil {
+			return ctrl.Result{}, true, err
+		}
+		if !rollupsQuiesced {
+			// Waiting must not clear a terminal failure's explicit-retry requirement.
+			if latestTerminalMigrationFailureCondition(mlflow) == nil || hasForceMigrateAnnotation(mlflow) {
+				if err := r.recordMigrationProgress(ctx, mlflow, migrationProgressReason(trigger, migrationReasonScalingDown), "Waiting for SQL trace rollup Jobs to finish before migration"); err != nil {
+					return ctrl.Result{}, true, err
+				}
+			}
+			return ctrl.Result{RequeueAfter: 5 * time.Second}, true, nil
+		}
+		if !isTraceRollupsEnabled(mlflow) {
+			if err := r.cleanupTraceRollups(ctx, mlflow, namespace); err != nil {
+				return ctrl.Result{}, true, err
+			}
+		}
 	}
 
 	if jobExists && isJobFailed(existingJob) && !hasForceMigrateAnnotation(mlflow) {

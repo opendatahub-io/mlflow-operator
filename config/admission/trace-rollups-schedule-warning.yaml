@@ -1,0 +1,48 @@
+# Optional on Kubernetes 1.30+ / OpenShift versions with admissionregistration/v1 VAP.
+# Kept separate from base so older installations do not require this API.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: mlflow-trace-rollups-schedule-warning
+spec:
+  failurePolicy: Ignore
+  matchConstraints:
+    resourceRules:
+    - apiGroups: [mlflow.opendatahub.io]
+      apiVersions: [v1]
+      operations: [CREATE, UPDATE]
+      resources: [mlflows]
+      scope: Cluster
+  matchConditions:
+  - name: sql-backend
+    expression: >-
+      has(object.spec.backendStoreUriFrom) ||
+      (has(object.spec.backendStoreUri) &&
+       (object.spec.backendStoreUri.startsWith('postgresql:') ||
+        object.spec.backendStoreUri.startsWith('postgresql+') ||
+        object.spec.backendStoreUri.startsWith('mysql:') ||
+        object.spec.backendStoreUri.startsWith('mysql+')))
+  - name: scheduling-enabled
+    expression: >-
+      !has(object.spec.traceRollups) || !has(object.spec.traceRollups.enabled) ||
+      object.spec.traceRollups.enabled
+  validations:
+  - expression: >-
+      has(object.spec.traceRollups) && has(object.spec.traceRollups.schedule) &&
+      has(object.spec.traceRollups.timeZone)
+    messageExpression: >-
+      'SQL trace rollup schedule or timezone omitted. Effective cron: ' +
+      ((has(object.spec.traceRollups) && has(object.spec.traceRollups.schedule)) ?
+        object.spec.traceRollups.schedule : '0 2 * * * (nightly at 02:00)') +
+      '; timezone: ' +
+      ((has(object.spec.traceRollups) && has(object.spec.traceRollups.timeZone)) ?
+        object.spec.traceRollups.timeZone : 'Etc/UTC') +
+      '. Set spec.traceRollups.schedule and spec.traceRollups.timeZone explicitly to confirm local timing. Secret-backed SQLite is excluded by the operator.'
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: mlflow-trace-rollups-schedule-warning
+spec:
+  policyName: mlflow-trace-rollups-schedule-warning
+  validationActions: [Warn]

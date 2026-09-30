@@ -22,6 +22,7 @@ import (
 	"encoding/base64"
 	"fmt"
 
+	"github.com/Masterminds/semver/v3"
 	mlflowv1 "github.com/opendatahub-io/mlflow-operator/api/v1"
 	"github.com/opendatahub-io/mlflow-operator/internal/config"
 	consolev1 "github.com/openshift/api/console/v1"
@@ -241,6 +242,28 @@ func (r *MLflowReconciler) reconcileConsoleLink(
 	return nil
 }
 
+// prefixedOTLPMinVersion is the first MLflow version that mounts the OTLP
+// span-ingest router under the configured --static-prefix (upstream #24511).
+// Older runtimes serve OTLP span ingest unprefixed at /v1/traces.
+var prefixedOTLPMinVersion = semver.MustParse("3.16.0")
+
+// supportedMLflowServesPrefixedOTLP reports whether the MLflow runtime this
+// operator manages serves /mlflow/v1/traces natively under the static prefix.
+// The HTTPRoute is only reconciled after the operator-managed migration flow
+// has confirmed the supported runtime is deployed, so the supported version
+// is also the deployed version whenever this decides the route shape.
+// Unparseable or missing version metadata falls back to the legacy rewrite.
+func supportedMLflowServesPrefixedOTLP() bool {
+	if SupportedMLflowVersion == "" {
+		return false
+	}
+	version, err := semver.NewVersion(comparableMLflowVersion(SupportedMLflowVersion))
+	if err != nil {
+		return false
+	}
+	return !version.LessThan(prefixedOTLPMinVersion)
+}
+
 // reconcileHttpRoute creates or updates the HttpRoute for MLflow
 func (r *MLflowReconciler) reconcileHttpRoute(
 	ctx context.Context,
@@ -270,6 +293,59 @@ func (r *MLflowReconciler) reconcileHttpRoute(
 	servicePort := gatewayv1.PortNumber(8443)
 	weight := int32(1)
 
+	backendRefs := []gatewayv1.HTTPBackendRef{
+		{
+			BackendRef: gatewayv1.BackendRef{
+				BackendObjectReference: gatewayv1.BackendObjectReference{
+					Name: gatewayv1.ObjectName(serviceName),
+					Port: &servicePort,
+				},
+				Weight: &weight,
+			},
+		},
+	}
+
+	rules := []gatewayv1.HTTPRouteRule{
+		{
+			Matches: []gatewayv1.HTTPRouteMatch{
+				{
+					Path: &gatewayv1.HTTPPathMatch{
+						Type:  &pathMatchType,
+						Value: &pathPrefix,
+					},
+				},
+			},
+			BackendRefs: backendRefs,
+		},
+	}
+	if !supportedMLflowServesPrefixedOTLP() {
+		// Pre-3.16 runtimes serve OTLP span ingest unprefixed at /v1/traces,
+		// so /mlflow/v1 gateway traffic must be rewritten to /v1 for them.
+		rewriteRule := gatewayv1.HTTPRouteRule{
+			Matches: []gatewayv1.HTTPRouteMatch{
+				{
+					Path: &gatewayv1.HTTPPathMatch{
+						Type:  &pathMatchType,
+						Value: &v1PathPrefix,
+					},
+				},
+			},
+			Filters: []gatewayv1.HTTPRouteFilter{
+				{
+					Type: gatewayv1.HTTPRouteFilterURLRewrite,
+					URLRewrite: &gatewayv1.HTTPURLRewriteFilter{
+						Path: &gatewayv1.HTTPPathModifier{
+							Type:               gatewayv1.PrefixMatchHTTPPathModifier,
+							ReplacePrefixMatch: &replaceV1Prefix,
+						},
+					},
+				},
+			},
+			BackendRefs: backendRefs,
+		}
+		rules = append([]gatewayv1.HTTPRouteRule{rewriteRule}, rules...)
+	}
+
 	gatewayNamespace := "openshift-ingress"
 	httpRoute := &gatewayv1.HTTPRoute{
 		TypeMeta: metav1.TypeMeta{
@@ -292,61 +368,7 @@ func (r *MLflowReconciler) reconcileHttpRoute(
 					},
 				},
 			},
-			Rules: []gatewayv1.HTTPRouteRule{
-				{
-					Matches: []gatewayv1.HTTPRouteMatch{
-						{
-							Path: &gatewayv1.HTTPPathMatch{
-								Type:  &pathMatchType,
-								Value: &v1PathPrefix,
-							},
-						},
-					},
-					Filters: []gatewayv1.HTTPRouteFilter{
-						{
-							Type: gatewayv1.HTTPRouteFilterURLRewrite,
-							URLRewrite: &gatewayv1.HTTPURLRewriteFilter{
-								Path: &gatewayv1.HTTPPathModifier{
-									Type:               gatewayv1.PrefixMatchHTTPPathModifier,
-									ReplacePrefixMatch: &replaceV1Prefix,
-								},
-							},
-						},
-					},
-					BackendRefs: []gatewayv1.HTTPBackendRef{
-						{
-							BackendRef: gatewayv1.BackendRef{
-								BackendObjectReference: gatewayv1.BackendObjectReference{
-									Name: gatewayv1.ObjectName(serviceName),
-									Port: &servicePort,
-								},
-								Weight: &weight,
-							},
-						},
-					},
-				},
-				{
-					Matches: []gatewayv1.HTTPRouteMatch{
-						{
-							Path: &gatewayv1.HTTPPathMatch{
-								Type:  &pathMatchType,
-								Value: &pathPrefix,
-							},
-						},
-					},
-					BackendRefs: []gatewayv1.HTTPBackendRef{
-						{
-							BackendRef: gatewayv1.BackendRef{
-								BackendObjectReference: gatewayv1.BackendObjectReference{
-									Name: gatewayv1.ObjectName(serviceName),
-									Port: &servicePort,
-								},
-								Weight: &weight,
-							},
-						},
-					},
-				},
-			},
+			Rules: rules,
 		},
 	}
 
