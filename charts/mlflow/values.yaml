@@ -403,3 +403,13 @@ caBundle:
   outputPath: /etc/pki/tls/certs/combined/ca-bundle.crt
 
   watchInterval: 30  # Seconds between checks for source file changes
+
+# SQL trace rollup scheduling is opt out for remote SQL tracking stores.
+# Secret-backed SQLite stores are excluded by the operator and guarded at runtime.
+traceRollups:
+  # Internal override: reconciliation resolves Secret-backed SQLite here.
+  sqlBackend: true
+  enabled: true
+  schedule: "0 2 * * *"
+  timeZone: "Etc/UTC"
+  resources: {}

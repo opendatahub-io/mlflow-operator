@@ -176,16 +176,21 @@ func migrationMode(mlflow *mlflowv1.MLflow) mlflowv1.MLflowMigrateMode {
 	return mlflow.Spec.Migration.Mode
 }
 
+// Development scale-test images use PEP 440's .devN suffix rather than SemVer.
+func comparableMLflowVersion(version string) string {
+	return strings.Replace(strings.TrimPrefix(version, "v"), ".dev", "-dev.", 1)
+}
+
 func supportedVersionEarlierThanStatusVersion(mlflow *mlflowv1.MLflow) bool {
 	if mlflow.Status.Version == "" || SupportedMLflowVersion == "" {
 		return false
 	}
 
-	supportedVersion, err := semver.NewVersion(strings.TrimPrefix(SupportedMLflowVersion, "v"))
+	supportedVersion, err := semver.NewVersion(comparableMLflowVersion(SupportedMLflowVersion))
 	if err != nil {
 		return false
 	}
-	statusVersion, err := semver.NewVersion(strings.TrimPrefix(mlflow.Status.Version, "v"))
+	statusVersion, err := semver.NewVersion(comparableMLflowVersion(mlflow.Status.Version))
 	if err != nil {
 		return false
 	}
@@ -232,6 +237,11 @@ func scaledDownObjects(objects []*unstructured.Unstructured, deploymentNames ...
 		if copyObj.GetKind() == "Deployment" && shouldScale {
 			if err := unstructured.SetNestedField(copyObj.Object, int64(0), "spec", "replicas"); err != nil {
 				logf.Log.Error(err, "Failed to set Deployment replicas to zero in rendered object", "name", copyObj.GetName(), "namespace", copyObj.GetNamespace())
+			}
+		}
+		if copyObj.GetKind() == "CronJob" && strings.HasPrefix(copyObj.GetName(), "mlflow-trace-rollups") {
+			if err := unstructured.SetNestedField(copyObj.Object, true, "spec", "suspend"); err != nil {
+				logf.Log.Error(err, "Failed to suspend rendered trace rollup CronJob")
 			}
 		}
 		scaled = append(scaled, copyObj)
@@ -900,6 +910,17 @@ func (r *MLflowReconciler) handleMigration(ctx context.Context, mlflow *mlflowv1
 		// records migration success after the post-migration rollout is ready.
 		log.Info("Migration Job already completed successfully", "job", jobKey.Name, "trigger", trigger.kind)
 		return ctrl.Result{}, false, nil
+	}
+
+	rollupsQuiesced, err := r.quiesceTraceRollups(ctx, mlflow, namespace)
+	if err != nil {
+		return ctrl.Result{}, true, err
+	}
+	if !rollupsQuiesced {
+		if err := r.recordMigrationProgress(ctx, mlflow, migrationProgressReason(trigger, migrationReasonScalingDown), "Waiting for SQL trace rollup Jobs to finish before migration"); err != nil {
+			return ctrl.Result{}, true, err
+		}
+		return ctrl.Result{RequeueAfter: 5 * time.Second}, true, nil
 	}
 
 	// Any path that reaches here either has no finished migration Job yet or is

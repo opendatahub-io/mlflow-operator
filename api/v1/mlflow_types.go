@@ -347,6 +347,11 @@ type MLflowSpec struct {
 	// stays disabled; the CronJob handles execution externally.
 	// +optional
 	TraceArchival *TraceArchivalSpec `json:"traceArchival,omitempty"`
+
+	// TraceRollups schedules SQL trace analytics maintenance. Enabled by default
+	// for remote SQL tracking stores; SQLite deployments never create the job.
+	// +optional
+	TraceRollups *TraceRollupsSpec `json:"traceRollups,omitempty"`
 }
 
 // ArtifactsServerSpec configures the dedicated metadata-aware artifact-serving MLflow deployment.
@@ -423,6 +428,31 @@ type GarbageCollectionSpec struct {
 	OlderThan *string `json:"olderThan,omitempty"`
 
 	// Resources for the garbage collection Job container.
+	// +optional
+	Resources *corev1.ResourceRequirements `json:"resources,omitempty"`
+}
+
+// TraceRollupsSpec configures standalone SQL trace rollup maintenance.
+// Schedule and TimeZone intentionally have no admission defaults, so the optional
+// warning policy can detect omissions. The operator and chart supply the defaults.
+type TraceRollupsSpec struct {
+	// Enabled controls scheduling, not read-side rollup use. Defaults to true.
+	// +optional
+	Enabled *bool `json:"enabled,omitempty"`
+
+	// Schedule is a five-field cron expression. Defaults to "0 2 * * *".
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=256
+	// +optional
+	Schedule *string `json:"schedule,omitempty"`
+
+	// TimeZone is an IANA timezone name. Defaults to "Etc/UTC".
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=128
+	// +optional
+	TimeZone *string `json:"timeZone,omitempty"`
+
+	// Resources configures the rollup CronJob container.
 	// +optional
 	Resources *corev1.ResourceRequirements `json:"resources,omitempty"`
 }

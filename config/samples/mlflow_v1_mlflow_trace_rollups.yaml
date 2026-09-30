@@ -1,0 +1,37 @@
+# OpenShift scale-testing configuration for the local Phase 2 MLflow image.
+# Load the image into every test node, or replace it with an approved published digest.
+# Create mlflow-db-credentials and mlflow-s3-credentials in the operand namespace first.
+apiVersion: mlflow.opendatahub.io/v1
+kind: MLflow
+metadata:
+  name: mlflow
+spec:
+  image:
+    image: localhost/mlflow:openshift-scale-testing-34c75beb
+    imagePullPolicy: IfNotPresent
+  replicas: 2
+  workers: 1
+  backendStoreUriFrom:
+    name: mlflow-db-credentials
+    key: backend-store-uri
+  artifactsDestination: s3://mlflow-scale-testing/artifacts
+  serveArtifacts: true
+  envFrom:
+  - secretRef:
+      name: mlflow-s3-credentials
+  traceRollups:
+    enabled: true
+    schedule: "0 2 * * *"
+    timeZone: "Etc/UTC"
+    resources:
+      requests:
+        cpu: "250m"
+        memory: "512Mi"
+      limits:
+        cpu: "2"
+        memory: "2Gi"
+  env:
+  - name: MLFLOW_TRACE_ROLLUPS_MAX_PARTITIONS_PER_RUN
+    value: "1000"
+  - name: MLFLOW_TRACE_ROLLUPS_MAX_WORKERS
+    value: "4"

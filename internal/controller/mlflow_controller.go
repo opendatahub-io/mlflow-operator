@@ -169,6 +169,16 @@ func (r *MLflowReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		return ctrl.Result{}, err
 	}
 
+	traceRollupsSQL, err := r.traceRollupsSQLBackend(ctx, mlflow, targetNamespace)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if !isTraceRollupsEnabled(mlflow) || !traceRollupsSQL {
+		if err := r.cleanupTraceRollups(ctx, mlflow, targetNamespace); err != nil {
+			return ctrl.Result{}, err
+		}
+	}
+
 	// Clean up GC resources when garbage collection is disabled.
 	if mlflow.Spec.GarbageCollection == nil {
 		gcSuffix := "-gc" + getResourceSuffix(mlflow.Name)
@@ -339,6 +349,7 @@ func (r *MLflowReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	}
 	renderer := NewHelmRenderer(helmChartPath)
 	renderOpts := RenderOptions{
+		TraceRollupsDisabled:          !traceRollupsSQL,
 		PlatformTrustedCABundleExists: platformCABundleExists,
 		// If ConsoleLink is available, we can assume we are on OpenShift
 		IsOpenShift:                      r.ConsoleLinkAvailable,

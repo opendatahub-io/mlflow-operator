@@ -367,6 +367,59 @@ During the migration flow, the operator resolves the final MLflow image, scales 
 The migration Job explicitly disables `MLFLOW_READ_REPLICA_BACKEND_STORE_URI`, so schema changes never target the read replica.
 For ODH/RHOAI MLflow images that ship `mlflow.store.db.migration_gap`, that Job also runs the backend-only RHOAI `3.3 -> 3.4` gap repair before the generic MLflow migration logic.
 
+### SQL trace rollups (scale-testing branch)
+
+This branch targets MLflow `3.16.2.dev0` and the matching local Kubernetes plugin
+feature build. See [SCALE_TESTING.md](SCALE_TESTING.md) for image provenance,
+Operator build instructions, and OpenShift prerequisites. The checked-in runtime
+image defaults are local-only; registry publication or loading the image into
+all test nodes is required before deployment.
+
+Remote PostgreSQL/MySQL tracking stores create `mlflow-trace-rollups` by default.
+The CronJob calls MLflow's Python rollup entrypoint directly, runs nightly at
+02:00 UTC (`0 2 * * *`, `Etc/UTC`), and uses `concurrencyPolicy: Forbid`.
+SQLite, including Secret-backed SQLite resolved by reconciliation, creates no
+rollup CronJob. See the [scale-testing sample](config/samples/mlflow_v1_mlflow_trace_rollups.yaml).
+
+```yaml
+spec:
+  traceRollups:
+    schedule: "30 1 * * *"
+    timeZone: "America/New_York"
+    # enabled: false  # Stop scheduling while retaining existing rollup reads.
+```
+
+The primary backend URI, `env`, `envFrom`, CA trust, placement, security settings,
+and ServiceAccount workload-identity annotations are available to the job. It
+mounts no persistent volume or Kubernetes API token and never uses the read replica.
+Rollup reads and mutation invalidation default to enabled for remote SQL metadata
+servers; server job execution remains disabled. An explicit
+`MLFLOW_SQL_TRACE_ROLLUPS_ENABLED` in `spec.env` overrides the default in both the
+servers and maintenance job. Disabling that MLflow feature after rollups have been
+materialized requires MLflow's documented stop/delete/restart procedure; use
+`traceRollups.enabled: false` to stop scheduling without disabling reads.
+
+Migration reconciliation suspends the rollup CronJob and waits for unfinished
+labeled jobs before changing the schema. Normal rendering resumes scheduling after
+a successful migration. Manual jobs created from its template carry the same
+instance label and are included in that wait. Standalone Helm installs must migrate
+the schema before enabling scheduling and coordinate maintenance during upgrades.
+
+On clusters that support `admissionregistration.k8s.io/v1` ValidatingAdmissionPolicy,
+admins can optionally install the warning-only policy:
+
+```sh
+kubectl apply -k config/admission
+```
+
+It warns when an enabled SQL deployment omits schedule or timezone, including the
+effective cron expression and timezone. These fields deliberately have no CRD
+admission defaults so omission remains detectable. The binding uses `Warn`, never
+`Deny`; the policy is separate from base installation for older clusters. Admission
+cannot inspect Secrets, so Secret-backed SQLite may receive this warning even though
+the Operator excludes its CronJob. Custom schedules/timezones are checked during
+Operator rendering; Kubernetes validates the generated CronJob too.
+
 ### Trace Archival
 
 The operator supports trace archival, which moves older trace span payloads from the SQL tracking store to a configured artifact location while keeping traces readable in the UI and APIs. Archival runs via a CronJob that executes the standalone archival module, following the same pattern as garbage collection.

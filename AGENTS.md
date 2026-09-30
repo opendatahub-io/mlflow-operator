@@ -12,7 +12,7 @@ This project was generated using [Kubebuilder](https://book.kubebuilder.io/) v4.
 
 The MLflow custom resource is **cluster-scoped**, meaning it can be created without specifying a namespace and is accessible across the entire cluster.
 `spec.serviceAccountAnnotations` is applied to every operator-created ServiceAccount (main, garbage collection, and trace archival when those workloads exist) so cloud workload identity (for example AWS IRSA) can be configured without static access keys.
-`spec.env` and `spec.envFrom` are rendered into the MLflow Deployment, garbage collection CronJob, and trace-archival CronJob.
+`spec.env` and `spec.envFrom` are rendered into the MLflow Deployment and garbage collection, trace-archival, and SQL trace-rollup CronJobs.
 
 ### MLflowOperator (components.platform.opendatahub.io/v1alpha1)
 
@@ -240,6 +240,24 @@ Optional read-replica routing is configured with exactly one of `readReplicaBack
 
 PVC mounts are workload-specific. GC mounts configured storage only for local or Secret-backed backend metadata, not inline PostgreSQL with proxied remote artifacts. Its `MLFLOW_TRACKING_URI` includes the active server's static prefix and targets the dedicated artifact Service in split mode so persisted `mlflow-artifacts:/` locations remain deletable. Trace archival mounts configured storage for local archive output or metadata that may be local. A Secret-backed metadata URI with no `spec.storage` is treated as remote and must not make trace-archival rendering require or mount a PVC; when storage is configured, the unknown Secret scheme is conservatively treated as potentially local.
 
+### SQL trace rollup scale testing
+
+This local feature branch targets the Phase 2 MLflow `3.16.2.dev0` image, not the
+released `odh-stable` runtime. `SCALE_TESTING.md` records the coordinated source and
+image references. `spec.traceRollups` and Helm `traceRollups` configure an opt-out
+nightly SQL maintenance CronJob with separate schedule/timeZone fields (defaults
+`0 2 * * *` / `Etc/UTC`). Keep CRD schedule/timeZone fields without admission defaults
+so `config/admission` can warn on omissions; that warning-only policy is optional
+and deliberately excluded from `config/base`. Reconciliation resolves the primary
+backend Secret through the API reader to exclude SQLite. The job uses the primary
+SQL engine directly, not a tracking-store constructor or MLflow jobs backend, and
+mounts no PVC/API token. Keep the chart Python script's runtime SQLite guard for
+standalone Secret-backed installs. Job failures must propagate partition failures
+as a nonzero exit. Server rollup reads/invalidation stay enabled when scheduling
+is disabled. Migration rendering must keep the CronJob suspended until migration
+succeeds, and migration must wait for unfinished jobs labeled by the template.
+The default chaos steady state remains SQLite (no rollup CronJob).
+
 ### Operator-managed database migration
 
 - `spec.migration.mode` controls operator-managed migration behavior:
@@ -418,6 +436,11 @@ The `config/samples/` directory contains example MLflow custom resource configur
    - Override artifact storage with custom bucket and path
    - Example of namespace-specific artifact configuration
    - Requires Secret with S3 credentials in the same namespace
+
+9. **mlflow_v1_mlflow_trace_rollups.yaml** - SQL trace rollup scale testing
+   - Local Phase 2 runtime image; must be published or loaded into test nodes
+   - Secret-backed PostgreSQL and S3 storage
+   - Explicit nightly schedule, UTC timezone, resources, and partition/worker limits
 
 **When to update samples:**
 
