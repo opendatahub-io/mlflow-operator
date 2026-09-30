@@ -23,8 +23,12 @@ import (
 	"io"
 	"net/url"
 	"path/filepath"
+	"regexp"
 	"strings"
+	"time"
+	_ "time/tzdata"
 
+	"github.com/robfig/cron/v3"
 	"helm.sh/helm/v3/pkg/chart"
 	"helm.sh/helm/v3/pkg/chart/loader"
 	"helm.sh/helm/v3/pkg/chartutil"
@@ -52,6 +56,8 @@ const (
 )
 
 var helmLog = logf.Log.WithName("helm")
+
+var traceRollupsTimeZoneComponent = regexp.MustCompile(`^[A-Za-z.\-_0-9+]{1,14}$`)
 
 // CA bundle mount paths - used for mounting platform and custom CA ConfigMaps
 const (
@@ -113,6 +119,13 @@ type HelmRenderer struct {
 
 // RenderOptions contains additional context needed for rendering
 type RenderOptions struct {
+	// TraceRollupsDisabled excludes a Secret-backed SQLite store resolved by reconciliation.
+	TraceRollupsDisabled bool
+	// TraceRollupsRuntimeEnabled is the resolved effective runtime flag. Nil lets
+	// standalone rendering derive the value from API fields and literal env.
+	TraceRollupsRuntimeEnabled *bool
+	// BackendUsesStorage records the reconciler's effective SQLite classification.
+	BackendUsesStorage *bool
 	// PlatformTrustedCABundleExists indicates if the platform CA bundle ConfigMap exists in the target namespace
 	PlatformTrustedCABundleExists bool
 	// IsOpenShift indicates if the cluster is an OpenShift platform (detected via ConsoleLink CRD availability).
@@ -123,6 +136,8 @@ type RenderOptions struct {
 	ServiceMonitorAvailable bool
 	// ReferencedSecretResourceVersions makes Secret rotations change the MLflow pod template.
 	ReferencedSecretResourceVersions map[string]string
+	// ReferencedConfigMapResourceVersions rolls both metadata-connected servers on changes.
+	ReferencedConfigMapResourceVersions map[string]string
 }
 
 // NewHelmRenderer creates a new HelmRenderer
@@ -182,6 +197,9 @@ func (h *HelmRenderer) mlflowToHelmValues(
 	opts RenderOptions,
 	cfg *config.OperatorConfig,
 ) (map[string]interface{}, error) {
+	if err := validateManagedEnv(mlflow); err != nil {
+		return nil, err
+	}
 	values := make(map[string]interface{})
 
 	values["namespace"] = namespace
@@ -203,7 +221,7 @@ func (h *HelmRenderer) mlflowToHelmValues(
 		values["podLabels"] = podLabels
 	}
 
-	if len(mlflow.Spec.PodAnnotations) > 0 || opts.ReferencedSecretResourceVersions != nil {
+	if len(mlflow.Spec.PodAnnotations) > 0 || opts.ReferencedSecretResourceVersions != nil || opts.ReferencedConfigMapResourceVersions != nil {
 		podAnnotations := make(map[string]interface{})
 		for k, v := range mlflow.Spec.PodAnnotations {
 			podAnnotations[k] = v
@@ -214,6 +232,13 @@ func (h *HelmRenderer) mlflowToHelmValues(
 				return nil, fmt.Errorf("marshal referenced Secret resource versions: %w", err)
 			}
 			podAnnotations[secretResourceVersionsAnnotation] = string(secretVersions)
+		}
+		if opts.ReferencedConfigMapResourceVersions != nil {
+			configMapVersions, err := json.Marshal(opts.ReferencedConfigMapResourceVersions)
+			if err != nil {
+				return nil, fmt.Errorf("marshal referenced ConfigMap resource versions: %w", err)
+			}
+			podAnnotations[configMapResourceVersionsAnnotation] = string(configMapVersions)
 		}
 		values["podAnnotations"] = podAnnotations
 	}
@@ -247,7 +272,7 @@ func (h *HelmRenderer) mlflowToHelmValues(
 	//   2. Glob *.crt and *.pem files from each ConfigMap mount path
 	// Mount paths are derived from configMaps in the template via mlflow.caBundleMountPaths
 	var caConfigMaps []map[string]interface{}
-	var caFilePaths []string
+	caFilePaths := make([]string, 0, 1)
 
 	// Always include system CA bundle first
 	caFilePaths = append(caFilePaths, systemCAPath)
@@ -425,6 +450,10 @@ func (h *HelmRenderer) mlflowToHelmValues(
 	// Prefer secret ref over direct value
 	var registryStoreURIFrom map[string]interface{}
 	registryStoreURI := backendStoreURI // Default to backend URI when provided
+	if explicitEnv(mlflow, backendStoreEnvName) {
+		// Let MLflow derive the registry default from the effective backend env.
+		registryStoreURI = ""
+	}
 	if mlflow.Spec.RegistryStoreURIFrom != nil {
 		registryStoreURIFrom = map[string]interface{}{
 			"secretKeyRef": map[string]interface{}{
@@ -437,7 +466,7 @@ func (h *HelmRenderer) mlflowToHelmValues(
 		}
 	} else if mlflow.Spec.RegistryStoreURI != nil {
 		registryStoreURI = *mlflow.Spec.RegistryStoreURI
-	} else if backendStoreURIFrom != nil {
+	} else if backendStoreURIFrom != nil && !explicitEnv(mlflow, backendStoreEnvName) {
 		// Registry isn't set, but backend uses secret ref - use the same secret for registry
 		registryStoreURIFrom = backendStoreURIFrom
 	}
@@ -511,6 +540,10 @@ func (h *HelmRenderer) mlflowToHelmValues(
 	// Add secret references if provided
 	if backendStoreURIFrom != nil {
 		mlflowConfig["backendStoreUriFrom"] = backendStoreURIFrom
+	}
+	if opts.BackendUsesStorage != nil {
+		mlflowConfig["backendResolved"] = true
+		mlflowConfig["backendUsesStorage"] = *opts.BackendUsesStorage
 	}
 	if readReplicaBackendStoreURIFrom != nil {
 		mlflowConfig["readReplicaBackendStoreUriFrom"] = readReplicaBackendStoreURIFrom
@@ -794,7 +827,87 @@ func (h *HelmRenderer) mlflowToHelmValues(
 	}
 	values["traceArchival"] = taValues
 
+	runtimeEnabled := mlflow.Spec.BackendStoreURIFrom != nil ||
+		(mlflow.Spec.BackendStoreURI != nil && isRemoteSQLMetadataStoreURI(*mlflow.Spec.BackendStoreURI))
+	for _, env := range mlflow.Spec.Env {
+		if env.Name == backendStoreEnvName && env.ValueFrom == nil {
+			runtimeEnabled = isRemoteSQLMetadataStoreURI(env.Value)
+		}
+	}
+	if opts.BackendUsesStorage != nil {
+		runtimeEnabled = !*opts.BackendUsesStorage
+	}
+	if opts.TraceRollupsDisabled {
+		runtimeEnabled = false
+	}
+	if spec := mlflow.Spec.TraceRollups; spec != nil && spec.Enabled != nil {
+		runtimeEnabled = *spec.Enabled
+	}
+	if opts.TraceRollupsRuntimeEnabled != nil {
+		runtimeEnabled = *opts.TraceRollupsRuntimeEnabled
+	}
+	schedulingEnabled := !traceRollupsExplicitlyDisabled(mlflow)
+	rollupsScheduled := schedulingEnabled && runtimeEnabled && isTraceRollupsEnabled(mlflow) && !opts.TraceRollupsDisabled
+	rrValues := map[string]interface{}{
+		"enabled":           runtimeEnabled,
+		"schedulingEnabled": schedulingEnabled,
+		"sqlBackend":        !opts.TraceRollupsDisabled,
+		"resourceClaims":    []corev1.PodResourceClaim{},
+	}
+	if opts.BackendUsesStorage != nil {
+		rrValues["backendResolved"] = true
+	}
+	if opts.TraceRollupsRuntimeEnabled != nil {
+		rrValues["runtimeResolved"] = true
+	}
+	if spec := mlflow.Spec.TraceRollups; spec != nil {
+		if len(spec.ResourceClaims) > 0 {
+			rrValues["resourceClaims"] = spec.ResourceClaims
+		}
+		if spec.Schedule != nil {
+			// Reject invalid timing before migration can scale down the servers,
+			// but do not let unused timing prevent opt-out or SQLite rendering.
+			if rollupsScheduled {
+				if len(strings.Fields(*spec.Schedule)) != 5 || strings.Contains(*spec.Schedule, "TZ") {
+					return nil, fmt.Errorf("traceRollups.schedule must be a valid five-field cron expression; use traceRollups.timeZone for its timezone")
+				}
+				if _, err := cron.ParseStandard(*spec.Schedule); err != nil {
+					return nil, fmt.Errorf("traceRollups.schedule must be a valid five-field cron expression: %w", err)
+				}
+			}
+			rrValues["schedule"] = *spec.Schedule
+		}
+		if spec.TimeZone != nil {
+			if rollupsScheduled && !isValidTraceRollupsTimeZone(*spec.TimeZone) {
+				return nil, fmt.Errorf("traceRollups.timeZone must be an IANA timezone name")
+			}
+			rrValues["timeZone"] = *spec.TimeZone
+		}
+		if spec.Resources != nil {
+			resourcesMap, err := runtime.DefaultUnstructuredConverter.ToUnstructured(spec.Resources)
+			if err != nil {
+				return nil, fmt.Errorf("failed to convert traceRollups.resources: %w", err)
+			}
+			rrValues["resources"] = resourcesMap
+		}
+	}
+	values["traceRollups"] = rrValues
+
 	return values, nil
+}
+
+func isValidTraceRollupsTimeZone(zone string) bool {
+	// Match CronJob API validation, including names LoadLocation can normalize.
+	if strings.EqualFold(zone, "Local") {
+		return false
+	}
+	for _, component := range strings.Split(zone, "/") {
+		if component == "." || component == ".." || strings.HasPrefix(component, "-") || !traceRollupsTimeZoneComponent.MatchString(component) {
+			return false
+		}
+	}
+	_, err := time.LoadLocation(zone)
+	return err == nil
 }
 
 func buildMigrationNetworkPolicy(mlflow *mlflowv1.MLflow, namespace string) *networkingv1.NetworkPolicy {

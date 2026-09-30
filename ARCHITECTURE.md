@@ -92,11 +92,13 @@ For OpenShift and ODH deployments, the operator integrates MLflow with the platf
 
 The route model is designed around a public `/mlflow` prefix:
 
-- `/mlflow` forwards to the MLflow service as-is
-- `/mlflow/api` is rewritten to `/api`
-- `/mlflow/v1` is rewritten to `/v1`
+- `/mlflow` forwards to the MLflow service as-is, so the service keeps its
+  normal internal API paths while still fitting behind a stable product-facing prefix
 
-This lets the service keep its normal internal API paths while still fitting behind a stable product-facing prefix.
+The supported MLflow 3.17 runtime serves every tracked API, including OTLP
+span ingest at `/mlflow/v1/traces`, under the configured `--static-prefix`.
+One prefix-preserving rule covers the whole surface, including suffixed
+instances.
 
 When the dedicated artifact server is enabled, the gateway additionally exposes
 `/mlflow-artifacts`. Both metadata-connected servers use the full artifact API root at

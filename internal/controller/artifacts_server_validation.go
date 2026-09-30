@@ -46,12 +46,21 @@ func (r *MLflowReconciler) validateArtifactsServerMetadataStores(
 	mlflow *mlflowv1.MLflow,
 	namespace string,
 ) error {
+	if err := validateManagedEnv(mlflow); err != nil {
+		return err
+	}
 	if !isArtifactsServerEnabled(mlflow) {
 		return nil
 	}
+	backendURI, err := r.effectiveBackendURI(ctx, mlflow, namespace)
+	if err != nil {
+		return fmt.Errorf("resolve effective backend metadata store: %w", err)
+	}
+	if !isRemoteSQLMetadataStoreURI(backendURI) {
+		return fmt.Errorf("effective backend metadata store must be remote PostgreSQL or MySQL when artifactsServer is enabled")
+	}
 
 	references := []metadataStoreReference{
-		{field: "backendStoreUri", uri: mlflow.Spec.BackendStoreURI, selector: mlflow.Spec.BackendStoreURIFrom, required: true},
 		{field: "registryStoreUri", uri: mlflow.Spec.RegistryStoreURI, selector: mlflow.Spec.RegistryStoreURIFrom},
 		{field: "readReplicaBackendStoreUri", uri: mlflow.Spec.ReadReplicaBackendStoreURI, selector: mlflow.Spec.ReadReplicaBackendStoreURIFrom},
 	}

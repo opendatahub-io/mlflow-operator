@@ -133,6 +133,9 @@ func (r *MLflowReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	}
 
 	targetNamespace := cfg.ApplicationsNamespace
+	if err := r.refreshTraceRollupsStatus(ctx, mlflow, targetNamespace); err != nil {
+		return ctrl.Result{}, err
+	}
 	mlflow.Status.Address = buildStatusAddress(mlflow.Name, targetNamespace)
 	if isArtifactsServerEnabled(mlflow) && !r.HTTPRouteAvailable {
 		err := fmt.Errorf("%s", artifactsServerHTTPRouteRequiredMessage)
@@ -167,6 +170,59 @@ func (r *MLflowReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 			log.Error(statusErr, "Failed to update MLflow status after metadata store validation")
 		}
 		return ctrl.Result{}, err
+	}
+
+	// Scheduling opt-out can safely remove an owned maintenance job before
+	// resolving its backend. A missing primary backend still blocks later
+	// migration and workload changes below.
+	if traceRollupsExplicitlyDisabled(mlflow) && !migrationRequested(mlflow) {
+		if err := r.cleanupTraceRollups(ctx, mlflow, targetNamespace); err != nil {
+			return ctrl.Result{}, err
+		}
+	}
+
+	traceRollupsSQL, err := r.traceRollupsSQLBackend(ctx, mlflow, targetNamespace)
+	if err != nil {
+		setObservedURLs(mlflow, targetNamespace, false, cfg)
+		log.Error(err, "Failed to resolve trace rollup backend")
+		meta.SetStatusCondition(&mlflow.Status.Conditions, metav1.Condition{
+			Type:    "Available",
+			Status:  metav1.ConditionFalse,
+			Reason:  "TraceRollupBackendResolutionFailed",
+			Message: err.Error(),
+		})
+		meta.SetStatusCondition(&mlflow.Status.Conditions, metav1.Condition{
+			Type:    "Progressing",
+			Status:  metav1.ConditionFalse,
+			Reason:  "TraceRollupBackendResolutionFailed",
+			Message: err.Error(),
+		})
+		if statusErr := r.updateStatus(ctx, mlflow); statusErr != nil {
+			log.Error(statusErr, "Failed to update MLflow status after trace rollup backend resolution")
+		}
+		return ctrl.Result{}, err
+	}
+	var runtimeEnabled *bool
+	if traceRollupsSQL && !traceRollupsExplicitlyDisabled(mlflow) {
+		effective, err := r.effectiveRollupsRuntime(ctx, mlflow, targetNamespace, traceRollupsSQL)
+		if err != nil {
+			meta.SetStatusCondition(&mlflow.Status.Conditions, metav1.Condition{
+				Type: "Available", Status: metav1.ConditionFalse,
+				Reason: "TraceRollupRuntimeResolutionFailed", Message: err.Error(),
+			})
+			if statusErr := r.updateStatus(ctx, mlflow); statusErr != nil {
+				log.Error(statusErr, "Failed to update MLflow status")
+			}
+			return ctrl.Result{}, err
+		}
+		runtimeEnabled = &effective
+	}
+	// Retain the CronJob during migration so its unfinished Jobs can be drained,
+	// including older Jobs that identify the CronJob only by owner reference.
+	if (!isTraceRollupsEnabled(mlflow) || !traceRollupsSQL || (runtimeEnabled != nil && !*runtimeEnabled)) && !migrationRequested(mlflow) {
+		if err := r.cleanupTraceRollups(ctx, mlflow, targetNamespace); err != nil {
+			return ctrl.Result{}, err
+		}
 	}
 
 	// Clean up GC resources when garbage collection is disabled.
@@ -331,6 +387,10 @@ func (r *MLflowReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		log.Error(err, "Failed to read referenced Secret resource versions")
 		return ctrl.Result{}, err
 	}
+	configMapResourceVersions, err := r.referencedConfigMapResourceVersions(ctx, mlflow, targetNamespace)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
 
 	// Render the Helm chart
 	helmChartPath := r.ChartPath
@@ -338,12 +398,17 @@ func (r *MLflowReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		helmChartPath = chartPath
 	}
 	renderer := NewHelmRenderer(helmChartPath)
+	backendUsesStorage := !traceRollupsSQL
 	renderOpts := RenderOptions{
+		TraceRollupsDisabled:          !traceRollupsSQL,
+		TraceRollupsRuntimeEnabled:    runtimeEnabled,
+		BackendUsesStorage:            &backendUsesStorage,
 		PlatformTrustedCABundleExists: platformCABundleExists,
 		// If ConsoleLink is available, we can assume we are on OpenShift
-		IsOpenShift:                      r.ConsoleLinkAvailable,
-		ServiceMonitorAvailable:          r.ServiceMonitorAvailable,
-		ReferencedSecretResourceVersions: secretResourceVersions,
+		IsOpenShift:                         r.ConsoleLinkAvailable,
+		ServiceMonitorAvailable:             r.ServiceMonitorAvailable,
+		ReferencedSecretResourceVersions:    secretResourceVersions,
+		ReferencedConfigMapResourceVersions: configMapResourceVersions,
 	}
 	objects, err := renderer.RenderChart(mlflow, targetNamespace, renderOpts, cfg)
 	if err != nil {
@@ -482,15 +547,14 @@ func (r *MLflowReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	}
 
 	if allDeploymentsReady {
-		migrationJob := &batchv1.Job{}
-		jobErr := r.Get(ctx, types.NamespacedName{Name: migrationJobName(mlflow), Namespace: targetNamespace}, migrationJob)
+		migrationJob, jobErr := r.successfulMigrationJobForRollout(ctx, mlflow, targetNamespace)
 		switch {
-		case jobErr == nil && isJobSuccessful(migrationJob):
-			if err := r.markMigrationSuccessful(ctx, mlflow); err != nil {
+		case jobErr == nil && migrationJob != nil:
+			if err := r.markMigrationSuccessful(ctx, mlflow, migrationJob); err != nil {
 				log.Error(err, "Failed to finalize migration status after rollout became ready")
 				return ctrl.Result{}, err
 			}
-		case jobErr != nil && !errors.IsNotFound(jobErr):
+		case jobErr != nil:
 			log.Error(jobErr, "Failed to get migration Job")
 			return ctrl.Result{}, jobErr
 		}
@@ -609,6 +673,10 @@ func (r *MLflowReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	builder = builder.Watches(
 		&corev1.Secret{},
 		handler.EnqueueRequestsFromMapFunc(r.secretToMLflowRequests),
+	)
+	builder = builder.Watches(
+		&corev1.ConfigMap{},
+		handler.EnqueueRequestsFromMapFunc(r.referencedConfigMapToMLflowRequests),
 	)
 	if config.GetConfig().EnableMLflowOperatorModuleController {
 		builder = builder.Watches(

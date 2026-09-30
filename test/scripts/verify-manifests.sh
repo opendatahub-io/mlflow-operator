@@ -60,7 +60,8 @@ for chart_dir in charts/*/; do
         echo "Checking chart: $chart_name"
 
         DIRECT_URI_SETS="mlflow.backendStoreUri=sqlite:////mlflow/mlflow.db,mlflow.readReplicaBackendStoreUri=sqlite:////mlflow/mlflow-read.db,mlflow.registryStoreUri=sqlite:////mlflow/mlflow.db"
-        SECRETREF_SETS="mlflow.backendStoreUriFrom.secretKeyRef.name=db-creds,mlflow.backendStoreUriFrom.secretKeyRef.key=backend-uri,mlflow.readReplicaBackendStoreUriFrom.secretKeyRef.name=db-creds,mlflow.readReplicaBackendStoreUriFrom.secretKeyRef.key=read-replica-uri,mlflow.registryStoreUriFrom.secretKeyRef.name=db-creds,mlflow.registryStoreUriFrom.secretKeyRef.key=backend-uri"
+        # Offline Helm cannot classify the Secret-backed URI for rollup scheduling.
+        SECRETREF_SETS="mlflow.backendStoreUriFrom.secretKeyRef.name=db-creds,mlflow.backendStoreUriFrom.secretKeyRef.key=backend-uri,mlflow.readReplicaBackendStoreUriFrom.secretKeyRef.name=db-creds,mlflow.readReplicaBackendStoreUriFrom.secretKeyRef.key=read-replica-uri,mlflow.registryStoreUriFrom.secretKeyRef.name=db-creds,mlflow.registryStoreUriFrom.secretKeyRef.key=backend-uri,traceRollups.schedulingEnabled=false"
         chart_failed=0
 
         # Lint the chart (direct URI path)

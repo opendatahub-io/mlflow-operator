@@ -37,7 +37,7 @@
 {{- if and .Values.artifactsServer.enabled (hasPrefix "file://" .Values.artifactsServer.artifactsDestination) (gt (int .Values.artifactsServer.replicaCount) 1) (ne .Values.storage.accessMode "ReadWriteMany") }}
 {{- fail "multiple file-backed artifact server replicas require storage.accessMode=ReadWriteMany" }}
 {{- end }}
-{{- if and .Values.artifactsServer.enabled (or (hasPrefix "sqlite://" .Values.mlflow.backendStoreUri) (hasPrefix "sqlite+" .Values.mlflow.backendStoreUri) (hasPrefix "sqlite://" (.Values.mlflow.registryStoreUri | default "")) (hasPrefix "sqlite+" (.Values.mlflow.registryStoreUri | default "")) (hasPrefix "sqlite://" (.Values.mlflow.readReplicaBackendStoreUri | default "")) (hasPrefix "sqlite+" (.Values.mlflow.readReplicaBackendStoreUri | default ""))) }}
+{{- if and .Values.artifactsServer.enabled (or (eq (include "mlflow.backendClass" .) "sqlite") (hasPrefix "sqlite://" (.Values.mlflow.registryStoreUri | default "")) (hasPrefix "sqlite+" (.Values.mlflow.registryStoreUri | default "")) (hasPrefix "sqlite://" (.Values.mlflow.readReplicaBackendStoreUri | default "")) (hasPrefix "sqlite+" (.Values.mlflow.readReplicaBackendStoreUri | default ""))) }}
 {{- fail "artifactsServer cannot be enabled with inline SQLite metadata stores" }}
 {{- end }}
 {{- $trackingMountsStorage := eq (include "mlflow.trackingMountsStorage" .) "true" -}}
@@ -176,6 +176,10 @@ spec:
             - --expose-prometheus=/prometheus
             {{- end }}
           env:
+            {{- if ne (include "mlflow.hasRollupsEnvOverride" .) "true" }}
+            - name: MLFLOW_SQL_TRACE_ROLLUPS_ENABLED
+              value: {{ .Values.traceRollups.enabled | quote }}
+            {{- end }}
             - name: MLFLOW_DISABLE_TELEMETRY
               value: "true"
             - name: MLFLOW_SERVER_ENABLE_JOB_EXECUTION
@@ -184,6 +188,7 @@ spec:
             - name: MLFLOW_TRACE_ARCHIVAL_CONFIG
               value: "/etc/mlflow/trace-archival.yaml"
             {{- end }}
+            {{- if ne (include "mlflow.hasBackendEnvOverride" .) "true" }}
             - name: MLFLOW_BACKEND_STORE_URI
               {{- if .Values.mlflow.backendStoreUriFrom }}
               valueFrom:
@@ -191,24 +196,8 @@ spec:
               {{- else }}
               value: {{ .Values.mlflow.backendStoreUri | quote }}
               {{- end }}
-            {{- if or .Values.mlflow.readReplicaBackendStoreUri .Values.mlflow.readReplicaBackendStoreUriFrom }}
-            - name: MLFLOW_READ_REPLICA_BACKEND_STORE_URI
-              {{- if .Values.mlflow.readReplicaBackendStoreUriFrom }}
-              valueFrom:
-                {{- toYaml .Values.mlflow.readReplicaBackendStoreUriFrom | nindent 16 }}
-              {{- else }}
-              value: {{ .Values.mlflow.readReplicaBackendStoreUri | quote }}
-              {{- end }}
             {{- end }}
-            {{- if or .Values.mlflow.registryStoreUri .Values.mlflow.registryStoreUriFrom }}
-            - name: MLFLOW_REGISTRY_STORE_URI
-              {{- if .Values.mlflow.registryStoreUriFrom }}
-              valueFrom:
-                {{- toYaml .Values.mlflow.registryStoreUriFrom | nindent 16 }}
-              {{- else }}
-              value: {{ .Values.mlflow.registryStoreUri | quote }}
-              {{- end }}
-            {{- end }}
+            {{- include "mlflow.metadataStoreEnv" . | nindent 12 }}
             - name: MLFLOW_K8S_AUTH_AUTHORIZATION_MODE
               value: "self_subject_access_review"
             {{- if .Values.mlflow.corsAllowedOrigins }}

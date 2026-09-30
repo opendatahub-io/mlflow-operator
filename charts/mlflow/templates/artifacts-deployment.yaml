@@ -107,8 +107,13 @@ spec:
             - --static-prefix={{ .Values.artifactsServer.staticPrefix }}
             {{- end }}
           env:
+            {{- if ne (include "mlflow.hasRollupsEnvOverride" .) "true" }}
+            - name: MLFLOW_SQL_TRACE_ROLLUPS_ENABLED
+              value: {{ .Values.traceRollups.enabled | quote }}
+            {{- end }}
             - name: MLFLOW_DISABLE_TELEMETRY
               value: "true"
+            {{- if ne (include "mlflow.hasBackendEnvOverride" .) "true" }}
             - name: MLFLOW_BACKEND_STORE_URI
               {{- if .Values.mlflow.backendStoreUriFrom }}
               valueFrom:
@@ -116,24 +121,8 @@ spec:
               {{- else }}
               value: {{ .Values.mlflow.backendStoreUri | quote }}
               {{- end }}
-            {{- if or .Values.mlflow.readReplicaBackendStoreUri .Values.mlflow.readReplicaBackendStoreUriFrom }}
-            - name: MLFLOW_READ_REPLICA_BACKEND_STORE_URI
-              {{- if .Values.mlflow.readReplicaBackendStoreUriFrom }}
-              valueFrom:
-                {{- toYaml .Values.mlflow.readReplicaBackendStoreUriFrom | nindent 16 }}
-              {{- else }}
-              value: {{ .Values.mlflow.readReplicaBackendStoreUri | quote }}
-              {{- end }}
             {{- end }}
-            {{- if or .Values.mlflow.registryStoreUri .Values.mlflow.registryStoreUriFrom }}
-            - name: MLFLOW_REGISTRY_STORE_URI
-              {{- if .Values.mlflow.registryStoreUriFrom }}
-              valueFrom:
-                {{- toYaml .Values.mlflow.registryStoreUriFrom | nindent 16 }}
-              {{- else }}
-              value: {{ .Values.mlflow.registryStoreUri | quote }}
-              {{- end }}
-            {{- end }}
+            {{- include "mlflow.metadataStoreEnv" . | nindent 12 }}
             - name: MLFLOW_K8S_AUTH_AUTHORIZATION_MODE
               value: "self_subject_access_review"
             {{- if .Values.artifactsServer.workspaceLabelSelector }}

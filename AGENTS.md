@@ -12,7 +12,7 @@ This project was generated using [Kubebuilder](https://book.kubebuilder.io/) v4.
 
 The MLflow custom resource is **cluster-scoped**, meaning it can be created without specifying a namespace and is accessible across the entire cluster.
 `spec.serviceAccountAnnotations` is applied to every operator-created ServiceAccount (main, garbage collection, and trace archival when those workloads exist) so cloud workload identity (for example AWS IRSA) can be configured without static access keys.
-`spec.env` and `spec.envFrom` are rendered into the MLflow Deployment, garbage collection CronJob, and trace-archival CronJob.
+`spec.env` and `spec.envFrom` are rendered into the MLflow Deployment and the garbage collection, trace-archival, and SQL trace-rollup CronJobs.
 
 ### MLflowOperator (components.platform.opendatahub.io/v1alpha1)
 
@@ -418,6 +418,8 @@ The `config/samples/` directory contains example MLflow custom resource configur
    - Override artifact storage with custom bucket and path
    - Example of namespace-specific artifact configuration
    - Requires Secret with S3 credentials in the same namespace
+
+9. **mlflow_v1_mlflow_trace_rollups.yaml** - SQL trace rollup maintenance
 
 **When to update samples:**
 

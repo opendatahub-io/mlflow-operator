@@ -1,7 +1,9 @@
 import os
 import sys
+import time
 
 import mlflow.store.db.utils as db_utils
+from sqlalchemy import text
 from mlflow.version import VERSION
 
 try:
@@ -90,6 +92,43 @@ def migrate_store(name, uri):
     print(f"{name} store migrated to revision {final_rev!r}")
 
 
+def with_trace_rollup_migration_lock(uri, operation):
+    """Serialize backend schema changes with scheduled SQL trace rollups."""
+    dialect = uri.split(":", 1)[0].split("+", 1)[0]
+    if dialect not in ("postgresql", "mysql"):
+        return operation()
+
+    engine = db_utils.create_sqlalchemy_engine_with_retry(uri)
+    connection = None
+    acquired = False
+    try:
+        connection = engine.connect()
+        connection.execution_options(isolation_level="AUTOCOMMIT")
+        if dialect == "postgresql":
+            acquire_lock = text("SELECT pg_try_advisory_lock(78203, 1)")
+            release_lock = text("SELECT pg_advisory_unlock(78203, 1)")
+        else:
+            acquire_lock = text("SELECT GET_LOCK('mlflow-operator-trace-rollups-migration', 10)")
+            release_lock = text("SELECT RELEASE_LOCK('mlflow-operator-trace-rollups-migration')")
+
+        while not connection.execute(acquire_lock).scalar():
+            print("Waiting for SQL trace rollups to finish before migrating the backend store")
+            time.sleep(5)
+        acquired = True
+        return operation()
+    finally:
+        try:
+            if acquired:
+                try:
+                    connection.execute(release_lock)
+                finally:
+                    connection.close()
+            elif connection is not None:
+                connection.close()
+        finally:
+            engine.dispose()
+
+
 def main():
     backend_uri = os.environ.get("MLFLOW_BACKEND_STORE_URI", "").strip()
     registry_uri = os.environ.get("MLFLOW_REGISTRY_STORE_URI", "").strip()
@@ -125,7 +164,10 @@ def main():
 
     print(f"Running migration with MLflow {VERSION}")
     for name, uri in stores:
-        migrate_store(name, uri)
+        if name == "backend":
+            with_trace_rollup_migration_lock(uri, lambda: migrate_store(name, uri))
+        else:
+            migrate_store(name, uri)
     return 0
 
 

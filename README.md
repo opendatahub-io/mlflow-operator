@@ -266,7 +266,7 @@ spec:
       value: us-east-1
 ```
 
-`spec.env` and `spec.envFrom` are applied to the MLflow Deployment, the garbage collection CronJob, and the trace-archival CronJob so S3 region, endpoint, and credential configuration stay consistent across those workloads.
+`spec.env` and `spec.envFrom` are applied to the tracking and dedicated artifact Deployments and the garbage collection, trace-archival, and SQL trace-rollup CronJobs so configuration stays consistent across those workloads.
 
 To use cloud-native workload identity instead of static access keys (for example AWS IRSA on ROSA or EKS), set `spec.serviceAccountAnnotations` on the MLflow CR. Those annotations are applied to the main `mlflow-sa` ServiceAccount and, when enabled, to `mlflow-gc-sa` and `mlflow-trace-archival-sa`:
 
@@ -401,6 +401,87 @@ The repository's test deployer creates `ReadWriteOnce` storage whenever either m
 When trace archival is disabled or the CR is deleted, the operator cleans up the CronJob, ConfigMap, and ServiceAccount.
 
 See `config/samples/mlflow_v1_mlflow_trace_archival.yaml` for a complete example.
+
+### SQL Trace Rollups
+
+With a matching MLflow 3.17 runtime, the operator schedules SQL trace analytics
+maintenance for PostgreSQL and MySQL at 02:00 UTC by default. SQLite never
+schedules rollups. The runtime image must include the rollup scheduler entrypoint.
+
+```yaml
+spec:
+  traceRollups:
+    enabled: true
+    schedulingEnabled: true
+    schedule: "0 2 * * *"
+    timeZone: "Etc/UTC"
+```
+
+The fields can be omitted or the schedule and timezone overridden independently.
+Timing is validated only when a CronJob will be scheduled. The CronJob uses the
+server image and backend credentials and invokes the scheduler directly;
+`concurrencyPolicy: Forbid` prevents overlapping scheduled runs. Migration
+suspends scheduling and waits for unfinished attributable Jobs before changing
+the schema. Avoid manual maintenance during migration.
+
+Set `spec.traceRollups.schedulingEnabled: false` to remove scheduled
+maintenance while keeping runtime rollup use enabled. `enabled` controls
+runtime use (default true for remote SQL, false for SQLite); setting it false
+also suppresses the CronJob. An explicit
+`MLFLOW_SQL_TRACE_ROLLUPS_ENABLED` entry in `spec.env` overrides the API
+runtime field; it accepts `true`, `false`, `1`, or `0` (case-insensitive, without
+whitespace). A false effective value suppresses scheduling. Disabling runtime
+use after aggregates exist requires the runtime's rollup-removal procedure
+while servers are stopped; scheduling opt-out keeps existing aggregates readable.
+
+An explicit `MLFLOW_BACKEND_STORE_URI` in `spec.env` takes priority over
+`backendStoreUri` or `backendStoreUriFrom` for both servers, migration, garbage
+collection, archival, and SQL/SQLite eligibility. Secret/ConfigMap references
+remain references in pod specs; the operator resolves them, `envFrom`, and
+earlier env expansion for classification. Missing or invalid effective values
+stop migration and workload updates without exposing credentials. An optional
+missing override follows Kubernetes omission rules; it does not restore the
+dedicated backend field.
+
+Backend and rollup runtime names must be unique in `spec.env`. Effective SQLite
+backends require `spec.storage`, with `ReadWriteMany` as its first access mode
+when using multiple tracking replicas or trace archival.
+
+Standalone Helm resolves literal backend and runtime overrides directly and
+uses `lookup` for direct Secret/ConfigMap key references when connected to a
+cluster. Offline rendering needs resolvable literals or
+`schedulingEnabled: false`. Chart-only rendering cannot classify `envFrom`,
+pod-derived values, or `$(NAME)` expansion for scheduling. The operator
+resolves `envFrom` and earlier-env expansion; pod-derived backend or runtime
+values cannot be classified before pod creation and cause a configuration error.
+
+For development CRs created with the former scheduling-only meaning of
+`traceRollups.enabled: false`, stop the old operator, install the new CRD,
+change those opt-outs to `schedulingEnabled: false` with `enabled: true` or
+omitted, verify the stored CR, then start the new operator. The old CRD may
+prune or reject the new field; account for installer reapplication.
+
+Tune `MLFLOW_TRACE_ROLLUPS_MAX_PARTITIONS_PER_RUN` and
+`MLFLOW_TRACE_ROLLUPS_MAX_WORKERS` through `spec.env` with positive integer
+values, alongside `traceRollups.resources`, to fit database capacity. See
+[the trace-rollup sample](config/samples/mlflow_v1_mlflow_trace_rollups.yaml).
+
+The ODH and RHOAI overlays include a warning-only admission policy for omitted
+schedule/timezone fields. To install it separately on a supported cluster:
+
+```sh
+kubectl apply -k config/admission
+```
+
+The policy reports effective timing defaults without persisting them. It cannot
+inspect referenced Secret or ConfigMap values; the operator determines actual
+eligibility. Installation requires permissions for both admission resource types.
+
+`status.traceRollups.lastScheduleTime` and `lastSuccessfulTime` mirror only the
+current owned CronJob. They clear when it is deleted and persist during
+suspension. Completion does not prove SQL partitions were materialized. For
+missed schedules, inspect CronJob `JobAlreadyActive` Events and Job logs;
+Events can expire. The optional skipped-run CR condition is deferred.
 
 ### Dedicated Artifact Server
 
@@ -639,6 +720,7 @@ See the [config/samples](./config/samples/) directory for complete examples:
 - `mlflow_v1_mlflow.yaml` - OpenShift deployment with local storage, service-ca TLS, and a commented DRA example
 - `mlflow_v1_mlflow_remote_storage.yaml` - PostgreSQL primary/read-replica routing + S3 storage with horizontal scaling and a temporary storage override for proxied artifact serving
 - `mlflow_v1_mlflow_artifacts_server.yaml` - Split tracking and metadata-aware artifact-serving servers using PostgreSQL and S3
+- `mlflow_v1_mlflow_trace_rollups.yaml` - SQL trace rollup timing, resources, and runtime tuning
 - `mlflow_v1_mlflowconfig.yaml` - Namespace-scoped artifact storage override using the upstream `MLflowConfig` CRD
 
 ## Development
@@ -652,7 +734,7 @@ MLflow coverage is split between:
 - Go end-to-end tests in `test/e2e/`, including the `MLflowOperator` handoff lifecycle and the operator-managed upgrade flow
 - Python integration tests in `mlflow-tests/`
 
-Ginkgo e2e covers trace archival CEL validation and operator resource lifecycle/cleanup without waiting for a cron tick or starting a Job against dummy storage. `mlflow-tests` smoke coverage creates several traces, persists them as DB-backed spans via OTLP `/v1/traces` (OpenShift HTTPRoute rewrites `/mlflow/v1`; Kind uses the unprefixed pod path), waits past a short harness-configured retention, runs a live archival Job from the CronJob template on object storage (`s3` / `externals3`), and verifies both archive object creation and post-archive trace readability. Live `file://` archival Jobs are avoided because the default PVC is ReadWriteOnce.
+Ginkgo e2e covers trace archival CEL validation and operator resource lifecycle/cleanup without waiting for a cron tick or starting a Job against dummy storage. `mlflow-tests` smoke coverage creates several traces, persists them as DB-backed spans via OTLP `/v1/traces` (the supported 3.17 gateway preserves `/mlflow/v1`; Kind uses the unprefixed pod path), waits past a short harness-configured retention, runs a live archival Job from the CronJob template on object storage (`s3` / `externals3`), and verifies both archive object creation and post-archive trace readability. Live `file://` archival Jobs are avoided because the default PVC is ReadWriteOnce.
 
 Garbage collection has the same two-layer coverage. Ginkgo verifies that `spec.garbageCollection` creates and removes `mlflow-gc`, its ServiceAccount, and GC RBAC without allowing the CronJob to fire. On PostgreSQL + S3-compatible harness rows, `mlflow-tests` soft-deletes an experiment with a run artifact, runs a one-off Job from the `mlflow-gc` template, and verifies permanent removal of the run, experiment, and backing object. The test also runs in the dedicated split artifact-server S3 matrix to cover artifact-server locations.
 

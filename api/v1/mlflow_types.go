@@ -31,7 +31,7 @@ import (
 // +kubebuilder:validation:XValidation:rule="!has(self.artifactsServer) || !self.artifactsServer.enabled || !has(self.defaultArtifactRoot)",message="defaultArtifactRoot and artifactsServer.enabled are mutually exclusive"
 // +kubebuilder:validation:XValidation:rule="!has(self.artifactsServer) || !self.artifactsServer.enabled || (has(self.artifactsDestination) && size(self.artifactsDestination) > 0)",message="artifactsDestination must be set when artifactsServer is enabled"
 // +kubebuilder:validation:XValidation:rule="!has(self.artifactsServer) || !self.artifactsServer.enabled || !has(self.artifactsDestination) || !self.artifactsDestination.startsWith('file://') || !has(self.artifactsServer.replicas) || self.artifactsServer.replicas <= 1 || (has(self.storage) && size(self.storage.accessModes) > 0 && self.storage.accessModes[0] == 'ReadWriteMany')",message="multiple artifact server replicas with a file-based artifactsDestination require storage with ReadWriteMany as its first access mode"
-// +kubebuilder:validation:XValidation:rule="!has(self.artifactsServer) || !self.artifactsServer.enabled || !has(self.backendStoreUri) || (!self.backendStoreUri.startsWith('sqlite://') && !self.backendStoreUri.startsWith('sqlite+'))",message="artifactsServer cannot be enabled with an inline SQLite backendStoreUri"
+// +kubebuilder:validation:XValidation:rule="!has(self.artifactsServer) || !self.artifactsServer.enabled || (has(self.env) && self.env.exists(e, e.name == 'MLFLOW_BACKEND_STORE_URI')) || !has(self.backendStoreUri) || (!self.backendStoreUri.startsWith('sqlite://') && !self.backendStoreUri.startsWith('sqlite+'))",message="artifactsServer cannot be enabled with an effective SQLite backend"
 // +kubebuilder:validation:XValidation:rule="!has(self.artifactsServer) || !self.artifactsServer.enabled || !has(self.registryStoreUri) || (!self.registryStoreUri.startsWith('sqlite://') && !self.registryStoreUri.startsWith('sqlite+'))",message="artifactsServer cannot be enabled with an inline SQLite registryStoreUri"
 // +kubebuilder:validation:XValidation:rule="!has(self.artifactsServer) || !self.artifactsServer.enabled || !has(self.readReplicaBackendStoreUri) || (!self.readReplicaBackendStoreUri.startsWith('sqlite://') && !self.readReplicaBackendStoreUri.startsWith('sqlite+'))",message="artifactsServer cannot be enabled with an inline SQLite readReplicaBackendStoreUri"
 // +kubebuilder:validation:XValidation:rule="(has(self.backendStoreUri) && size(self.backendStoreUri) > 0) || (has(self.backendStoreUriFrom) && size(self.backendStoreUriFrom.name) > 0 && size(self.backendStoreUriFrom.key) > 0)",message="backendStoreUri or backendStoreUriFrom must be set"
@@ -43,7 +43,7 @@ import (
 // +kubebuilder:validation:XValidation:rule="!has(self.backendStoreUri) || self.backendStoreUri.startsWith('sqlite://') || self.backendStoreUri.startsWith('sqlite+') || self.backendStoreUri.startsWith('postgresql://') || self.backendStoreUri.startsWith('postgresql+') || self.backendStoreUri.startsWith('mysql://') || self.backendStoreUri.startsWith('mysql+')",message="backendStoreUri must use a supported SQL metadata store URI scheme"
 // +kubebuilder:validation:XValidation:rule="!has(self.readReplicaBackendStoreUri) || self.readReplicaBackendStoreUri.startsWith('sqlite://') || self.readReplicaBackendStoreUri.startsWith('sqlite+') || self.readReplicaBackendStoreUri.startsWith('postgresql://') || self.readReplicaBackendStoreUri.startsWith('postgresql+') || self.readReplicaBackendStoreUri.startsWith('mysql://') || self.readReplicaBackendStoreUri.startsWith('mysql+')",message="readReplicaBackendStoreUri must use a supported SQL metadata store URI scheme"
 // +kubebuilder:validation:XValidation:rule="!has(self.registryStoreUri) || self.registryStoreUri.startsWith('sqlite://') || self.registryStoreUri.startsWith('sqlite+') || self.registryStoreUri.startsWith('postgresql://') || self.registryStoreUri.startsWith('postgresql+') || self.registryStoreUri.startsWith('mysql://') || self.registryStoreUri.startsWith('mysql+')",message="registryStoreUri must use a supported SQL metadata store URI scheme"
-// +kubebuilder:validation:XValidation:rule="!has(self.backendStoreUri) || (!self.backendStoreUri.startsWith('sqlite://') && !self.backendStoreUri.startsWith('file://')) || has(self.storage)",message="storage must be configured when using file-based backend store (sqlite:// or file:// prefix)"
+// +kubebuilder:validation:XValidation:rule="!has(self.backendStoreUri) || (has(self.env) && self.env.exists(e, e.name == 'MLFLOW_BACKEND_STORE_URI')) || (!self.backendStoreUri.startsWith('sqlite://') && !self.backendStoreUri.startsWith('file://')) || has(self.storage)",message="storage must be configured when using an effective file-based backend store"
 // +kubebuilder:validation:XValidation:rule="!has(self.readReplicaBackendStoreUri) || !self.readReplicaBackendStoreUri.startsWith('sqlite://') || has(self.storage)",message="storage must be configured when using a file-based read-replica backend store (sqlite:// prefix)"
 // +kubebuilder:validation:XValidation:rule="!has(self.registryStoreUri) || (!self.registryStoreUri.startsWith('sqlite://') && !self.registryStoreUri.startsWith('file://')) || has(self.storage)",message="storage must be configured when using file-based registry store (sqlite:// or file:// prefix)"
 // +kubebuilder:validation:XValidation:rule="!has(self.artifactsDestination) || !self.artifactsDestination.startsWith('file://') || has(self.storage)",message="storage must be configured when artifactsDestination uses file-based storage (file:// prefix)"
@@ -57,8 +57,8 @@ import (
 // +kubebuilder:validation:XValidation:rule="!has(self.traceArchival) || !has(self.traceArchival.enabled) || self.traceArchival.enabled == false || (has(self.traceArchival.schedule) && size(self.traceArchival.schedule) > 0)",message="traceArchival.schedule is required when traceArchival.enabled is true"
 // +kubebuilder:validation:XValidation:rule="!has(self.traceArchival) || !has(self.traceArchival.enabled) || self.traceArchival.enabled == false || (has(self.traceArchival.location) && size(self.traceArchival.location) > 0)",message="traceArchival.location is required when traceArchival.enabled is true"
 // +kubebuilder:validation:XValidation:rule="!has(self.traceArchival) || !has(self.traceArchival.enabled) || self.traceArchival.enabled == false || (has(self.traceArchival.retention) && size(self.traceArchival.retention) > 0)",message="traceArchival.retention is required when traceArchival.enabled is true"
-// +kubebuilder:validation:XValidation:rule="!has(self.replicas) || self.replicas <= 1 || !has(self.storage) || (has(self.artifactsServer) && self.artifactsServer.enabled) || !((has(self.backendStoreUri) && (self.backendStoreUri.startsWith('sqlite://') || self.backendStoreUri.startsWith('sqlite+'))) || has(self.backendStoreUriFrom) || (has(self.registryStoreUri) && (self.registryStoreUri.startsWith('sqlite://') || self.registryStoreUri.startsWith('sqlite+'))) || has(self.registryStoreUriFrom) || (has(self.readReplicaBackendStoreUri) && (self.readReplicaBackendStoreUri.startsWith('sqlite://') || self.readReplicaBackendStoreUri.startsWith('sqlite+'))) || has(self.readReplicaBackendStoreUriFrom) || (has(self.serveArtifacts) && self.serveArtifacts && has(self.artifactsDestination) && self.artifactsDestination.startsWith('file://'))) || (size(self.storage.accessModes) > 0 && self.storage.accessModes[0] == 'ReadWriteMany')",message="multiple tracking replicas that use persistent storage require ReadWriteMany as its first access mode"
-// +kubebuilder:validation:XValidation:rule="!has(self.traceArchival) || !self.traceArchival.enabled || !has(self.storage) || !((has(self.backendStoreUri) && (self.backendStoreUri.startsWith('sqlite://') || self.backendStoreUri.startsWith('sqlite+'))) || has(self.backendStoreUriFrom) || (has(self.registryStoreUri) && (self.registryStoreUri.startsWith('sqlite://') || self.registryStoreUri.startsWith('sqlite+'))) || has(self.registryStoreUriFrom)) || (size(self.storage.accessModes) > 0 && self.storage.accessModes[0] == 'ReadWriteMany')",message="trace archival with persistent metadata storage requires ReadWriteMany as its first access mode"
+// +kubebuilder:validation:XValidation:rule="!has(self.replicas) || self.replicas <= 1 || !has(self.storage) || (has(self.artifactsServer) && self.artifactsServer.enabled) || !(((!has(self.env) || !self.env.exists(e, e.name == 'MLFLOW_BACKEND_STORE_URI')) && ((has(self.backendStoreUri) && (self.backendStoreUri.startsWith('sqlite://') || self.backendStoreUri.startsWith('sqlite+'))) || has(self.backendStoreUriFrom))) || (has(self.registryStoreUri) && (self.registryStoreUri.startsWith('sqlite://') || self.registryStoreUri.startsWith('sqlite+'))) || has(self.registryStoreUriFrom) || (has(self.readReplicaBackendStoreUri) && (self.readReplicaBackendStoreUri.startsWith('sqlite://') || self.readReplicaBackendStoreUri.startsWith('sqlite+'))) || has(self.readReplicaBackendStoreUriFrom) || (has(self.serveArtifacts) && self.serveArtifacts && has(self.artifactsDestination) && self.artifactsDestination.startsWith('file://'))) || (size(self.storage.accessModes) > 0 && self.storage.accessModes[0] == 'ReadWriteMany')",message="multiple tracking replicas that use persistent storage require ReadWriteMany as its first access mode"
+// +kubebuilder:validation:XValidation:rule="!has(self.traceArchival) || !self.traceArchival.enabled || !has(self.storage) || !(((!has(self.env) || !self.env.exists(e, e.name == 'MLFLOW_BACKEND_STORE_URI')) && ((has(self.backendStoreUri) && (self.backendStoreUri.startsWith('sqlite://') || self.backendStoreUri.startsWith('sqlite+'))) || has(self.backendStoreUriFrom))) || (has(self.registryStoreUri) && (self.registryStoreUri.startsWith('sqlite://') || self.registryStoreUri.startsWith('sqlite+'))) || has(self.registryStoreUriFrom)) || (size(self.storage.accessModes) > 0 && self.storage.accessModes[0] == 'ReadWriteMany')",message="trace archival with persistent metadata storage requires ReadWriteMany as its first access mode"
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.storage) || (has(self.storage) && ((!has(oldSelf.storage.accessModes) && (!has(self.storage.accessModes) || self.storage.accessModes == ['ReadWriteOnce'])) || (has(oldSelf.storage.accessModes) && has(self.storage.accessModes) && self.storage.accessModes == oldSelf.storage.accessModes)))",message="storage and its accessModes are immutable once configured; an omitted legacy access mode may only be set to ReadWriteOnce"
 type MLflowSpec struct {
 	// Image specifies the MLflow container image.
@@ -347,6 +347,13 @@ type MLflowSpec struct {
 	// stays disabled; the CronJob handles execution externally.
 	// +optional
 	TraceArchival *TraceArchivalSpec `json:"traceArchival,omitempty"`
+
+	// TraceRollups controls SQL trace analytics use and maintenance. Runtime use
+	// defaults on for remote SQL; SQLite deployments never create the job.
+	// When omitted, schedule defaults to "0 2 * * *" and timeZone to "Etc/UTC"
+	// (nightly at 02:00 UTC). These timing defaults are not persisted in the CR.
+	// +optional
+	TraceRollups *TraceRollupsSpec `json:"traceRollups,omitempty"`
 }
 
 // ArtifactsServerSpec configures the dedicated metadata-aware artifact-serving MLflow deployment.
@@ -427,6 +434,51 @@ type GarbageCollectionSpec struct {
 	Resources *corev1.ResourceRequirements `json:"resources,omitempty"`
 }
 
+// TraceRollupsSpec configures standalone SQL trace rollup maintenance.
+// The effective timing defaults are "0 2 * * *" and "Etc/UTC" (nightly at 02:00 UTC).
+// Schedule and TimeZone intentionally have no admission defaults, so the optional
+// warning policy can detect omissions. The operator and chart supply the defaults.
+// +kubebuilder:validation:XValidation:rule="!has(self.resourceClaims) || self.resourceClaims.all(c, ((has(c.resourceClaimName) && size(c.resourceClaimName) > 0) != (has(c.resourceClaimTemplateName) && size(c.resourceClaimTemplateName) > 0)))",message="each traceRollups.resourceClaims entry must set exactly one non-empty value: resourceClaimName or resourceClaimTemplateName"
+type TraceRollupsSpec struct {
+	// Enabled controls server-side SQL rollup use. Defaults to true for remote
+	// SQL and false for SQLite. An explicit MLFLOW_SQL_TRACE_ROLLUPS_ENABLED
+	// entry in Env takes priority over this setting.
+	// +optional
+	Enabled *bool `json:"enabled,omitempty"`
+
+	// SchedulingEnabled controls CronJob maintenance independently of runtime
+	// use. Defaults to true; no job is scheduled for SQLite or disabled runtime.
+	// +optional
+	SchedulingEnabled *bool `json:"schedulingEnabled,omitempty"`
+
+	// Schedule is a five-field cron expression. Defaults to "0 2 * * *".
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=256
+	// +optional
+	Schedule *string `json:"schedule,omitempty"`
+
+	// TimeZone is an IANA timezone name. Defaults to "Etc/UTC".
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=128
+	// +optional
+	TimeZone *string `json:"timeZone,omitempty"`
+
+	// Resources configures the rollup CronJob container.
+	// +optional
+	Resources *corev1.ResourceRequirements `json:"resources,omitempty"`
+
+	// ResourceClaims defines the Dynamic Resource Allocation claims available to
+	// the rollup CronJob pod. Container claim references must be configured
+	// separately in Resources.Claims.
+	// +patchMergeKey=name
+	// +patchStrategy=merge,retainKeys
+	// +listType=map
+	// +listMapKey=name
+	// +featureGate=DynamicResourceAllocation
+	// +optional
+	ResourceClaims []corev1.PodResourceClaim `json:"resourceClaims,omitempty" patchStrategy:"merge,retainKeys" patchMergeKey:"name"`
+}
+
 // TraceArchivalSpec configures trace archival via a CronJob that runs the
 // standalone archival module. The archival config is also mounted into the
 // MLflow server so the UI can surface archival status.
@@ -501,7 +553,9 @@ type MLflowMigrationConfig struct {
 	// version detection indicates it is needed. Always forces the
 	// operator-managed migration flow for each new desired generation, meaning
 	// each new revision of the MLflow resource after the desired state changes,
-	// before the MLflow Deployment is scaled back up.
+	// before the MLflow Deployment is scaled back up. Changing from Always to
+	// Automatic does not cancel a migration Job that has already started; the
+	// operator waits for that Job and its post-migration rollout to finish.
 	// +kubebuilder:default=Automatic
 	// +kubebuilder:validation:Enum=Automatic;Always
 	// +optional
@@ -539,6 +593,10 @@ type MLflowAddressStatus struct {
 
 // MLflowStatus defines the observed state of MLflow.
 type MLflowStatus struct {
+	// TraceRollups mirrors the current owned CronJob's observed schedule times.
+	// It is absent when the CronJob has no timestamps or does not exist.
+	// +optional
+	TraceRollups *TraceRollupsStatus `json:"traceRollups,omitempty"`
 	// conditions represent the current state of the MLflow resource.
 	// Each condition has a unique type and reflects the status of a specific aspect of the resource.
 	//
@@ -573,6 +631,15 @@ type MLflowStatus struct {
 	// +optional
 	// +kubebuilder:validation:MaxLength=64
 	Version string `json:"version,omitempty"`
+}
+
+// TraceRollupsStatus reports scheduler observations from the owned CronJob.
+// A successful Job does not by itself prove that SQL partitions were materialized.
+type TraceRollupsStatus struct {
+	// +optional
+	LastScheduleTime *metav1.Time `json:"lastScheduleTime,omitempty"`
+	// +optional
+	LastSuccessfulTime *metav1.Time `json:"lastSuccessfulTime,omitempty"`
 }
 
 // +kubebuilder:object:root=true

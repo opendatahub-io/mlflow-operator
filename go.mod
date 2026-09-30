@@ -11,6 +11,7 @@ require (
 	github.com/openshift/api v0.0.0-20260317165824-54a3998d81eb
 	github.com/openshift/controller-runtime-common v0.0.0-20260428152732-64ee174f5e2e
 	github.com/prometheus-operator/prometheus-operator/pkg/apis/monitoring v0.89.0
+	github.com/robfig/cron/v3 v3.0.1
 	github.com/spf13/viper v1.21.0
 	gopkg.in/yaml.v3 v3.0.1
 	helm.sh/helm/v3 v3.19.2

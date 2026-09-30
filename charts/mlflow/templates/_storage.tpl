@@ -1,6 +1,6 @@
 {{/* Workload-specific persistent storage predicates. */}}
 {{- define "mlflow.backendUsesStorage" -}}
-{{- if or .Values.mlflow.backendStoreUriFrom (hasPrefix "sqlite://" .Values.mlflow.backendStoreUri) (hasPrefix "sqlite+" .Values.mlflow.backendStoreUri) -}}true{{- else -}}false{{- end -}}
+{{- if or (eq (include "mlflow.backendClass" .) "sqlite") (eq (include "mlflow.backendClass" .) "unknown") -}}true{{- else -}}false{{- end -}}
 {{- end -}}
 
 {{- define "mlflow.registryUsesStorage" -}}

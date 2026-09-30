@@ -271,7 +271,7 @@ func TestRenderChart_TraceArchival(t *testing.T) {
 				if command[0] != "python3.12" {
 					t.Errorf("CronJob command[0] = %s, want python3.12", command[0])
 				}
-				assertCronJobEnvValue(t, cronJob, "_MLFLOW_SERVER_FILE_STORE", testBackendStoreURI)
+				assertCronJobEnvValue(t, cronJob, "_MLFLOW_SERVER_FILE_STORE", "$(MLFLOW_BACKEND_STORE_URI)")
 				assertCronJobEnvValue(t, cronJob, "MLFLOW_BACKEND_STORE_URI", testBackendStoreURI)
 
 				cm := findObject(objs, "ConfigMap", "mlflow-trace-archival-config")
@@ -351,13 +351,7 @@ func TestRenderChart_TraceArchival(t *testing.T) {
 				if !cronJobHasStorageVolume(t, cronJob) {
 					t.Error("trace archival CronJob does not mount Secret-backed metadata storage")
 				}
-				assertCronJobEnvSecretRef(
-					t,
-					cronJob,
-					"_MLFLOW_SERVER_FILE_STORE",
-					"mlflow-db-credentials",
-					"backend-store-uri",
-				)
+				assertCronJobEnvValue(t, cronJob, "_MLFLOW_SERVER_FILE_STORE", "$(MLFLOW_BACKEND_STORE_URI)")
 				assertCronJobEnvSecretRef(
 					t,
 					cronJob,
@@ -664,7 +658,11 @@ func TestRenderChart_TraceArchival(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			objs, err := renderer.RenderChart(tt.mlflow, tt.namespace, RenderOptions{}, nil)
+			opts := RenderOptions{}
+			if tt.mlflow.Spec.BackendStoreURIFrom != nil {
+				opts.TraceRollupsRuntimeEnabled = ptr(false)
+			}
+			objs, err := renderer.RenderChart(tt.mlflow, tt.namespace, opts, nil)
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("RenderChart() error = %v, wantErr %v", err, tt.wantErr)
 			}

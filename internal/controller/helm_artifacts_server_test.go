@@ -444,7 +444,7 @@ func TestRenderChartArtifactsServerUsesSecretBackedMetadata(t *testing.T) {
 		},
 	}
 
-	objects, err := renderer.RenderChart(mlflow, "test-ns", RenderOptions{}, &config.OperatorConfig{
+	objects, err := renderer.RenderChart(mlflow, "test-ns", RenderOptions{BackendUsesStorage: ptr(false)}, &config.OperatorConfig{
 		MLflowURL:           "https://gateway.example.com",
 		MLflowURLConfigured: true,
 	})

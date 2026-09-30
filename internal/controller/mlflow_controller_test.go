@@ -87,6 +87,40 @@ func rewriteArtifactRoutePath(rules []gatewayv1.HTTPRouteRule, requestPath strin
 	return replacement + strings.TrimPrefix(requestPath, bestMatch)
 }
 
+var _ = Describe("Effective SQLite backend validation", func() {
+	It("rejects literal and referenced SQLite overrides before bootstrap or workload mutation", func() {
+		ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{GenerateName: "sqlite-override-"}}
+		Expect(k8sClient.Create(ctx, ns)).To(Succeed())
+		DeferCleanup(func() { Expect(k8sClient.Delete(ctx, ns)).To(Succeed()) })
+		secret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "backend", Namespace: ns.Name},
+			Data: map[string][]byte{"uri": []byte("sqlite:////mlflow/mlflow.db")}}
+		Expect(k8sClient.Create(ctx, secret)).To(Succeed())
+		for _, override := range []corev1.EnvVar{
+			{Name: backendStoreEnvName, Value: "sqlite:////mlflow/mlflow.db"},
+			{Name: backendStoreEnvName, ValueFrom: &corev1.EnvVarSource{SecretKeyRef: metadataStoreSecretSelector("backend", "uri", false)}},
+		} {
+			instance := &mlflowv1.MLflow{ObjectMeta: metav1.ObjectMeta{Name: "mlflow"}, Spec: mlflowv1.MLflowSpec{
+				BackendStoreURI: ptr("postgresql://unused/db"), DefaultArtifactRoot: ptr("s3://bucket/artifacts"),
+				Env: []corev1.EnvVar{override},
+			}}
+			Expect(k8sClient.Create(ctx, instance)).To(Succeed())
+			DeferCleanup(func() { Expect(client.IgnoreNotFound(k8sClient.Delete(ctx, instance))).To(Succeed()) })
+			r := &MLflowReconciler{Client: k8sClient, APIReader: k8sClient, Scheme: k8sClient.Scheme(), Namespace: ns.Name, ChartPath: "../../charts/mlflow"}
+			_, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(instance)})
+			Expect(err).To(MatchError(ContainSubstring("spec.storage")))
+			Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(instance), instance)).To(Succeed())
+			Expect(meta.FindStatusCondition(instance.Status.Conditions, "Available").Reason).To(Equal("TraceRollupBackendResolutionFailed"))
+			Expect(k8sClient.Delete(ctx, instance)).To(Succeed())
+		}
+		jobs := &batchv1.JobList{}
+		Expect(k8sClient.List(ctx, jobs, client.InNamespace(ns.Name))).To(Succeed())
+		Expect(jobs.Items).To(BeEmpty(), "invalid backend must not start migration")
+		deployments := &appsv1.DeploymentList{}
+		Expect(k8sClient.List(ctx, deployments, client.InNamespace(ns.Name))).To(Succeed())
+		Expect(deployments.Items).To(BeEmpty(), "invalid backend must not render workloads")
+	})
+})
+
 var _ = Describe("MLflow Controller", func() {
 	pgStoreURI := "postgresql://user:pass@host:5432/db"
 
@@ -236,7 +270,7 @@ var _ = Describe("MLflow Controller", func() {
 			}
 			_, reconcileErr := controllerReconciler.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
 			Expect(reconcileErr).To(MatchError(ContainSubstring(
-				"spec.backendStoreUri must resolve to a remote PostgreSQL or MySQL URI",
+				"effective backend metadata store must be remote PostgreSQL or MySQL",
 			)))
 
 			unchangedTracking := &appsv1.Deployment{}
@@ -387,8 +421,106 @@ var _ = Describe("MLflow Controller", func() {
 			Expect(errors.IsNotFound(err)).To(BeTrue())
 		})
 
-		It("should create an HTTPRoute with v1 rewrite when available", func() {
-			By("Reconciling the created resource with HTTPRoute enabled")
+		It("should reconcile an explicitly disabled trace rollup schedule without resolving rollup-only credentials", func() {
+			By("Pointing the runtime flag at a missing Secret and disabling rollup scheduling")
+			Expect(k8sClient.Get(ctx, typeNamespacedName, mlflow)).To(Succeed())
+			mlflow.Spec.BackendStoreURI = &pgStoreURI
+			mlflow.Spec.BackendStoreURIFrom = nil
+			mlflow.Spec.Env = []corev1.EnvVar{
+				{Name: backendStoreEnvName, Value: pgStoreURI},
+				{Name: rollupsRuntimeEnvName, ValueFrom: &corev1.EnvVarSource{SecretKeyRef: metadataStoreSecretSelector("missing-rollup-runtime", "enabled", false)}},
+			}
+			mlflow.Spec.TraceRollups = &mlflowv1.TraceRollupsSpec{SchedulingEnabled: ptr(false)}
+			Expect(k8sClient.Update(ctx, mlflow)).To(Succeed())
+
+			By("Pre-creating an owned rollup CronJob to verify disable-path cleanup")
+			rollupCronJob := &batchv1.CronJob{ObjectMeta: metav1.ObjectMeta{
+				Name:      "mlflow-trace-rollups",
+				Namespace: "opendatahub",
+				OwnerReferences: []metav1.OwnerReference{{APIVersion: mlflowv1.GroupVersion.String(), Kind: "MLflow",
+					Name: mlflow.Name, UID: mlflow.UID, Controller: ptr(true)}},
+			}, Spec: batchv1.CronJobSpec{
+				Schedule: "0 2 * * *",
+				JobTemplate: batchv1.JobTemplateSpec{Spec: batchv1.JobSpec{
+					Template: corev1.PodTemplateSpec{Spec: corev1.PodSpec{
+						RestartPolicy: corev1.RestartPolicyNever,
+						Containers:    []corev1.Container{{Name: "mlflow-trace-rollups", Image: "placeholder:image"}},
+					}},
+				}},
+			}}
+			Expect(k8sClient.Create(ctx, rollupCronJob)).To(Succeed())
+
+			controllerReconciler := &MLflowReconciler{
+				Client:               k8sClient,
+				APIReader:            k8sClient,
+				Scheme:               k8sClient.Scheme(),
+				Namespace:            "opendatahub",
+				ChartPath:            "../../charts/mlflow",
+				ConsoleLinkAvailable: false,
+				HTTPRouteAvailable:   false,
+				GCRBACWatchCache:     mustNewGCRBACWatchCache(),
+			}
+			_, reconcileErr := controllerReconciler.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
+			Expect(reconcileErr).NotTo(HaveOccurred())
+
+			err := k8sClient.Get(ctx, types.NamespacedName{
+				Name:      "mlflow-trace-rollups",
+				Namespace: "opendatahub",
+			}, &batchv1.CronJob{})
+			Expect(errors.IsNotFound(err)).To(BeTrue())
+
+			By("Keeping the runtime flag reference in replacement server pods")
+			deployment := &appsv1.Deployment{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: "mlflow", Namespace: "opendatahub"}, deployment)).To(Succeed())
+			Expect(deployment.Spec.Template.Spec.Containers[0].Env).To(ContainElement(corev1.EnvVar{
+				Name: rollupsRuntimeEnvName, ValueFrom: &corev1.EnvVarSource{SecretKeyRef: metadataStoreSecretSelector("missing-rollup-runtime", "enabled", false)},
+			}))
+
+		})
+
+		It("should fail reconciliation with status conditions when the trace rollup backend Secret is missing", func() {
+			By("Pointing the backend at a missing Secret with rollup scheduling not disabled")
+			Expect(k8sClient.Get(ctx, typeNamespacedName, mlflow)).To(Succeed())
+			mlflow.Spec.BackendStoreURI = nil
+			mlflow.Spec.BackendStoreURIFrom = metadataStoreSecretSelector("missing-rollup-backend", "uri", false)
+			Expect(k8sClient.Update(ctx, mlflow)).To(Succeed())
+
+			controllerReconciler := &MLflowReconciler{
+				Client:               k8sClient,
+				APIReader:            k8sClient,
+				Scheme:               k8sClient.Scheme(),
+				Namespace:            "opendatahub",
+				ChartPath:            "../../charts/mlflow",
+				ConsoleLinkAvailable: false,
+				HTTPRouteAvailable:   false,
+				GCRBACWatchCache:     mustNewGCRBACWatchCache(),
+			}
+			_, reconcileErr := controllerReconciler.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
+			Expect(reconcileErr).To(MatchError(ContainSubstring("read referenced Secret")))
+
+			Expect(k8sClient.Get(ctx, typeNamespacedName, mlflow)).To(Succeed())
+			available := meta.FindStatusCondition(mlflow.Status.Conditions, "Available")
+			Expect(available).NotTo(BeNil())
+			Expect(available.Status).To(Equal(metav1.ConditionFalse))
+			Expect(available.Reason).To(Equal("TraceRollupBackendResolutionFailed"))
+			progressing := meta.FindStatusCondition(mlflow.Status.Conditions, "Progressing")
+			Expect(progressing).NotTo(BeNil())
+			Expect(progressing.Status).To(Equal(metav1.ConditionFalse))
+			Expect(progressing.Reason).To(Equal("TraceRollupBackendResolutionFailed"))
+		})
+
+		It("should create an HTTPRoute preserving the prefix for the supported runtime", func() {
+			By("Reconciling the created resource with HTTPRoute enabled and the pinned 3.17 runtime")
+
+			previousVersion := SupportedMLflowVersion
+			SupportedMLflowVersion = "v3.17.0"
+			DeferCleanup(func() { SupportedMLflowVersion = previousVersion })
+
+			// Keep status.version aligned with the pinned supported version so
+			// reconciliation proceeds past the migration gate.
+			Expect(k8sClient.Get(ctx, typeNamespacedName, mlflow)).To(Succeed())
+			mlflow.Status.Version = SupportedMLflowVersion
+			Expect(k8sClient.Status().Update(ctx, mlflow)).To(Succeed())
 
 			controllerReconciler := &MLflowReconciler{
 				Client:               k8sClient,
@@ -411,35 +543,49 @@ var _ = Describe("MLflow Controller", func() {
 				Namespace: controllerReconciler.Namespace,
 			}, httpRoute)).To(Succeed())
 
-			Expect(httpRoute.Spec.Rules).To(HaveLen(2))
+			// The singleton route already matches MLflow's /mlflow static prefix.
+			Expect(httpRoute.Spec.Rules).To(HaveLen(1))
 
-			v1Rule := httpRoute.Spec.Rules[0]
-			Expect(v1Rule.Matches).To(HaveLen(1))
-			Expect(v1Rule.Matches[0].Path).NotTo(BeNil())
-			Expect(v1Rule.Matches[0].Path.Value).NotTo(BeNil())
-			Expect(*v1Rule.Matches[0].Path.Value).To(Equal("/" + ResourceName + "/v1"))
-
-			Expect(v1Rule.Filters).To(HaveLen(1))
-			Expect(v1Rule.Filters[0].Type).To(Equal(gatewayv1.HTTPRouteFilterURLRewrite))
-			Expect(v1Rule.Filters[0].URLRewrite).NotTo(BeNil())
-			Expect(v1Rule.Filters[0].URLRewrite.Path).NotTo(BeNil())
-			Expect(v1Rule.Filters[0].URLRewrite.Path.Type).To(Equal(gatewayv1.PrefixMatchHTTPPathModifier))
-			Expect(v1Rule.Filters[0].URLRewrite.Path.ReplacePrefixMatch).NotTo(BeNil())
-			Expect(*v1Rule.Filters[0].URLRewrite.Path.ReplacePrefixMatch).To(Equal("/v1"))
-
-			Expect(v1Rule.BackendRefs).To(HaveLen(1))
-			v1Backend := v1Rule.BackendRefs[0]
-			Expect(v1Backend.BackendRef.BackendObjectReference.Name).To(Equal(gatewayv1.ObjectName(ResourceName)))
-			Expect(v1Backend.BackendRef.Port).NotTo(BeNil())
-			Expect(int(*v1Backend.BackendRef.Port)).To(Equal(8443))
-			Expect(v1Backend.BackendRef.Weight).NotTo(BeNil())
-			Expect(*v1Backend.BackendRef.Weight).To(Equal(int32(1)))
-
-			rootRule := httpRoute.Spec.Rules[1]
+			rootRule := httpRoute.Spec.Rules[0]
 			Expect(rootRule.Matches).To(HaveLen(1))
 			Expect(rootRule.Matches[0].Path).NotTo(BeNil())
 			Expect(rootRule.Matches[0].Path.Value).NotTo(BeNil())
 			Expect(*rootRule.Matches[0].Path.Value).To(Equal("/" + ResourceName))
+			Expect(rootRule.Filters).To(BeEmpty())
+
+			Expect(rootRule.BackendRefs).To(HaveLen(1))
+			rootBackend := rootRule.BackendRefs[0]
+			Expect(rootBackend.BackendRef.BackendObjectReference.Name).To(Equal(gatewayv1.ObjectName(ResourceName)))
+			Expect(rootBackend.BackendRef.Port).NotTo(BeNil())
+			Expect(int(*rootBackend.BackendRef.Port)).To(Equal(8443))
+			Expect(rootBackend.BackendRef.Weight).NotTo(BeNil())
+			Expect(*rootBackend.BackendRef.Weight).To(Equal(int32(1)))
+		})
+
+		It("should rewrite a suffixed HTTPRoute prefix to the tracking static prefix", func() {
+			controllerReconciler := &MLflowReconciler{
+				Client:             k8sClient,
+				Scheme:             k8sClient.Scheme(),
+				HTTPRouteAvailable: true,
+			}
+			instance := &mlflowv1.MLflow{ObjectMeta: metav1.ObjectMeta{Name: "dev", UID: types.UID("dev-uid")}}
+			Expect(controllerReconciler.reconcileHttpRoute(ctx, instance, "opendatahub", &config.OperatorConfig{
+				GatewayName: "data-science-gateway",
+			})).To(Succeed())
+
+			httpRoute := &gatewayv1.HTTPRoute{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: ResourceName + "-dev", Namespace: "opendatahub"}, httpRoute)).To(Succeed())
+			Expect(httpRoute.Spec.Rules).To(HaveLen(1))
+			rule := httpRoute.Spec.Rules[0]
+			Expect(rule.Matches).To(HaveLen(1))
+			Expect(rule.Matches[0].Path).NotTo(BeNil())
+			Expect(*rule.Matches[0].Path.Value).To(Equal("/" + ResourceName + "-dev"))
+			Expect(rule.Filters).To(HaveLen(1))
+			Expect(rule.Filters[0].Type).To(Equal(gatewayv1.HTTPRouteFilterURLRewrite))
+			Expect(rule.Filters[0].URLRewrite).NotTo(BeNil())
+			Expect(rule.Filters[0].URLRewrite.Path).NotTo(BeNil())
+			Expect(rule.Filters[0].URLRewrite.Path.Type).To(Equal(gatewayv1.PrefixMatchHTTPPathModifier))
+			Expect(*rule.Filters[0].URLRewrite.Path.ReplacePrefixMatch).To(Equal(StaticPrefix))
 		})
 
 		It("should reconcile an enabled dedicated artifact server and evaluate its readiness", func() {
@@ -1111,7 +1257,11 @@ var _ = Describe("MLflow Controller", func() {
 					Spec:       spec,
 				})
 				Expect(errors.IsInvalid(err)).To(BeTrue())
-				Expect(err.Error()).To(ContainSubstring("artifactsServer cannot be enabled with an inline SQLite"))
+				if storeField == "backendStoreUri" {
+					Expect(err.Error()).To(ContainSubstring("artifactsServer cannot be enabled with an effective SQLite backend"))
+				} else {
+					Expect(err.Error()).To(ContainSubstring("artifactsServer cannot be enabled with an inline SQLite"))
+				}
 			},
 			Entry("backend store", "backendStoreUri"),
 			Entry("registry store", "registryStoreUri"),

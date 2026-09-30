@@ -105,6 +105,13 @@ jobs:
       source_repository: ${{ steps.configure.outputs.source_repository }}
       source_ref: ${{ steps.configure.outputs.source_ref }}
     steps:
+      - name: Checkout operator repository for runtime wrapper tests
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: ${{ inputs.mlflow_repository && format('{0}/mlflow-operator', github.repository_owner) || github.repository }}
+          path: operator-source
+          persist-credentials: false
+
       - name: Resolve MLflow source build settings
         id: configure
         env:
@@ -189,6 +196,15 @@ jobs:
             docker build -f "$DOCKERFILE" -t "$MLFLOW_RUNTIME_IMAGE" mlflow-upstream
           fi
           docker save -o "runtime-image/${MLFLOW_RUNTIME_ARTIFACT}.tar" "$MLFLOW_RUNTIME_IMAGE"
+
+      - name: Test SQL trace rollup wrapper against built MLflow runtime
+        run: >-
+          docker run --rm
+          --entrypoint python3.12
+          -v "$GITHUB_WORKSPACE/operator-source:/operator:ro"
+          -w /operator
+          "$MLFLOW_RUNTIME_IMAGE"
+          -B -m unittest test/scripts/test_trace_rollups_script.py
 
       - name: Upload MLflow image artifact
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0

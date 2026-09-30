@@ -140,6 +140,165 @@ var _ = Describe("Migration reconcile", func() {
 		Expect(progressing.Reason).To(Equal("ReconcileComplete"))
 	})
 
+	It("finishes an Always migration after mode changes to Automatic", func() {
+		ctx := context.Background()
+		namespace := "migration-mode-change"
+		Expect(k8sClient.Create(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: namespace}})).To(Succeed())
+		DeferCleanup(func() {
+			_ = k8sClient.Delete(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: namespace}})
+			_ = k8sClient.Delete(ctx, &mlflowv1.MLflow{ObjectMeta: metav1.ObjectMeta{Name: resourceName}})
+		})
+
+		mlflow := newMLflow()
+		mlflow.Spec.Migration = &mlflowv1.MLflowMigrationConfig{Mode: mlflowv1.MLflowMigrateAlways}
+		Expect(k8sClient.Create(ctx, mlflow)).To(Succeed())
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: resourceName}, mlflow)).To(Succeed())
+		mlflow.Status.Version = SupportedMLflowVersion
+		Expect(k8sClient.Status().Update(ctx, mlflow)).To(Succeed())
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: resourceName}, mlflow)).To(Succeed())
+
+		reconciler := newReconciler(namespace)
+		request := reconcile.Request{NamespacedName: types.NamespacedName{Name: resourceName}}
+		_, err := reconciler.Reconcile(ctx, request)
+		Expect(err).NotTo(HaveOccurred())
+
+		oldGeneration := mlflow.Generation
+		jobKey := types.NamespacedName{Name: migrationJobName(mlflow), Namespace: namespace}
+		job := &batchv1.Job{}
+		Expect(k8sClient.Get(ctx, jobKey, job)).To(Succeed())
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: resourceName}, mlflow)).To(Succeed())
+		migrationCondition := apimeta.FindStatusCondition(mlflow.Status.Conditions, migrationConditionType)
+		Expect(migrationCondition).NotTo(BeNil())
+		Expect(migrationCondition.Status).To(Equal(metav1.ConditionUnknown))
+		Expect(migrationCondition.ObservedGeneration).To(Equal(oldGeneration))
+		Expect(migrationCondition.Reason).To(Equal("MigrationRunning"))
+
+		before := mlflow.DeepCopy()
+		mlflow.Spec.Migration.Mode = mlflowv1.MLflowMigrateAutomatic
+		Expect(k8sClient.Patch(ctx, mlflow, client.MergeFrom(before))).To(Succeed())
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: resourceName}, mlflow)).To(Succeed())
+		newGeneration := mlflow.Generation
+		Expect(newGeneration).To(BeNumerically(">", oldGeneration))
+
+		_, err = reconciler.Reconcile(ctx, request)
+		Expect(err).NotTo(HaveOccurred())
+		deploymentKey := types.NamespacedName{Name: ResourceName, Namespace: namespace}
+		deployment := &appsv1.Deployment{}
+		Expect(k8sClient.Get(ctx, deploymentKey, deployment)).To(Succeed())
+		Expect(deployment.Spec.Replicas).NotTo(BeNil())
+		Expect(*deployment.Spec.Replicas).To(BeZero())
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: resourceName}, mlflow)).To(Succeed())
+		migrationCondition = apimeta.FindStatusCondition(mlflow.Status.Conditions, migrationConditionType)
+		Expect(migrationCondition).NotTo(BeNil())
+		Expect(migrationCondition.Status).To(Equal(metav1.ConditionUnknown))
+		Expect(migrationCondition.ObservedGeneration).To(Equal(newGeneration))
+		Expect(migrationCondition.Reason).To(Equal("MigrationRunning"))
+		Expect(migrationCondition.Message).To(ContainSubstring(job.Name))
+		Expect(migrationCondition.Message).To(ContainSubstring("previous desired generation"))
+
+		now := metav1.Now()
+		job.Status.Succeeded = 1
+		job.Status.StartTime = &now
+		job.Status.CompletionTime = &now
+		job.Status.Conditions = []batchv1.JobCondition{
+			{Type: batchv1.JobSuccessCriteriaMet, Status: corev1.ConditionTrue},
+			{Type: batchv1.JobComplete, Status: corev1.ConditionTrue},
+		}
+		Expect(k8sClient.Status().Update(ctx, job)).To(Succeed())
+
+		_, err = reconciler.Reconcile(ctx, request)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(k8sClient.Get(ctx, deploymentKey, deployment)).To(Succeed())
+		Expect(deployment.Spec.Replicas).NotTo(BeNil())
+		Expect(*deployment.Spec.Replicas).To(Equal(int32(1)))
+
+		deployment.Status.Replicas = 1
+		deployment.Status.ReadyReplicas = 1
+		Expect(k8sClient.Status().Update(ctx, deployment)).To(Succeed())
+		_, err = reconciler.Reconcile(ctx, request)
+		Expect(err).NotTo(HaveOccurred())
+
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: resourceName}, mlflow)).To(Succeed())
+		migrationCondition = apimeta.FindStatusCondition(mlflow.Status.Conditions, migrationConditionType)
+		Expect(migrationCondition).NotTo(BeNil())
+		Expect(migrationCondition.Status).To(Equal(metav1.ConditionTrue))
+		Expect(migrationCondition.ObservedGeneration).To(Equal(newGeneration))
+		Expect(migrationCondition.Reason).To(Equal("MigrationSucceeded"))
+		Expect(migrationCondition.Message).To(ContainSubstring(job.Name))
+	})
+
+	It("records success when an old-generation Job completes before Automatic mode is reconciled", func() {
+		ctx := context.Background()
+		namespace := "migration-mode-change-complete"
+		Expect(k8sClient.Create(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: namespace}})).To(Succeed())
+		DeferCleanup(func() {
+			_ = k8sClient.Delete(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: namespace}})
+			_ = k8sClient.Delete(ctx, &mlflowv1.MLflow{ObjectMeta: metav1.ObjectMeta{Name: resourceName}})
+		})
+
+		mlflow := newMLflow()
+		mlflow.Spec.Migration = &mlflowv1.MLflowMigrationConfig{Mode: mlflowv1.MLflowMigrateAlways}
+		Expect(k8sClient.Create(ctx, mlflow)).To(Succeed())
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: resourceName}, mlflow)).To(Succeed())
+		mlflow.Status.Version = SupportedMLflowVersion
+		Expect(k8sClient.Status().Update(ctx, mlflow)).To(Succeed())
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: resourceName}, mlflow)).To(Succeed())
+
+		reconciler := newReconciler(namespace)
+		request := reconcile.Request{NamespacedName: types.NamespacedName{Name: resourceName}}
+		_, err := reconciler.Reconcile(ctx, request)
+		Expect(err).NotTo(HaveOccurred())
+		oldGeneration := mlflow.Generation
+		jobKey := types.NamespacedName{Name: migrationJobName(mlflow), Namespace: namespace}
+		job := &batchv1.Job{}
+		Expect(k8sClient.Get(ctx, jobKey, job)).To(Succeed())
+
+		before := mlflow.DeepCopy()
+		mlflow.Spec.Migration.Mode = mlflowv1.MLflowMigrateAutomatic
+		Expect(k8sClient.Patch(ctx, mlflow, client.MergeFrom(before))).To(Succeed())
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: resourceName}, mlflow)).To(Succeed())
+		newGeneration := mlflow.Generation
+		Expect(newGeneration).To(BeNumerically(">", oldGeneration))
+
+		now := metav1.Now()
+		job.Status.Succeeded = 1
+		job.Status.StartTime = &now
+		job.Status.CompletionTime = &now
+		job.Status.Conditions = []batchv1.JobCondition{
+			{Type: batchv1.JobSuccessCriteriaMet, Status: corev1.ConditionTrue},
+			{Type: batchv1.JobComplete, Status: corev1.ConditionTrue},
+		}
+		Expect(k8sClient.Status().Update(ctx, job)).To(Succeed())
+
+		_, err = reconciler.Reconcile(ctx, request)
+		Expect(err).NotTo(HaveOccurred())
+		deploymentKey := types.NamespacedName{Name: ResourceName, Namespace: namespace}
+		deployment := &appsv1.Deployment{}
+		Expect(k8sClient.Get(ctx, deploymentKey, deployment)).To(Succeed())
+		Expect(deployment.Spec.Replicas).NotTo(BeNil())
+		Expect(*deployment.Spec.Replicas).To(Equal(int32(1)))
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: resourceName}, mlflow)).To(Succeed())
+		migrationCondition := apimeta.FindStatusCondition(mlflow.Status.Conditions, migrationConditionType)
+		Expect(migrationCondition).NotTo(BeNil())
+		Expect(migrationCondition.Status).To(Equal(metav1.ConditionUnknown))
+		Expect(migrationCondition.ObservedGeneration).To(Equal(oldGeneration))
+		Expect(migrationCondition.Reason).To(Equal("MigrationRunning"))
+
+		deployment.Status.Replicas = 1
+		deployment.Status.ReadyReplicas = 1
+		Expect(k8sClient.Status().Update(ctx, deployment)).To(Succeed())
+		_, err = reconciler.Reconcile(ctx, request)
+		Expect(err).NotTo(HaveOccurred())
+
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: resourceName}, mlflow)).To(Succeed())
+		migrationCondition = apimeta.FindStatusCondition(mlflow.Status.Conditions, migrationConditionType)
+		Expect(migrationCondition).NotTo(BeNil())
+		Expect(migrationCondition.Status).To(Equal(metav1.ConditionTrue))
+		Expect(migrationCondition.ObservedGeneration).To(Equal(newGeneration))
+		Expect(migrationCondition.Reason).To(Equal("MigrationSucceeded"))
+		Expect(migrationCondition.Message).To(ContainSubstring(job.Name))
+	})
+
 	It("clears the force-migrate annotation after the forced migration rollout is ready", func() {
 		ctx := context.Background()
 		namespace := "migration-force"

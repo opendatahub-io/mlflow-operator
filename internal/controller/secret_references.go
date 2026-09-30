@@ -33,6 +33,59 @@ import (
 )
 
 const secretResourceVersionsAnnotation = "mlflow.opendatahub.io/secret-resource-versions"
+const configMapResourceVersionsAnnotation = "mlflow.opendatahub.io/configmap-resource-versions"
+
+func referencedDeploymentConfigMapNames(mlflow *mlflowv1.MLflow) map[string]bool {
+	names := map[string]bool{}
+	for _, env := range mlflow.Spec.Env {
+		if env.ValueFrom != nil && env.ValueFrom.ConfigMapKeyRef != nil && env.ValueFrom.ConfigMapKeyRef.Name != "" {
+			names[env.ValueFrom.ConfigMapKeyRef.Name] = true
+		}
+	}
+	for _, from := range mlflow.Spec.EnvFrom {
+		if from.ConfigMapRef != nil && from.ConfigMapRef.Name != "" {
+			names[from.ConfigMapRef.Name] = true
+		}
+	}
+	return names
+}
+
+func (r *MLflowReconciler) referencedConfigMapToMLflowRequests(ctx context.Context, obj client.Object) []reconcile.Request {
+	if obj.GetNamespace() != r.Namespace {
+		return nil
+	}
+	mlflows := &mlflowv1.MLflowList{}
+	if err := r.List(ctx, mlflows); err != nil {
+		logf.FromContext(ctx).Error(err, "Failed to list MLflow instances for referenced ConfigMap watch")
+		return nil
+	}
+	requests := make([]reconcile.Request, 0)
+	for _, mlflow := range mlflows.Items {
+		if referencedDeploymentConfigMapNames(&mlflow)[obj.GetName()] {
+			requests = append(requests, reconcile.Request{NamespacedName: types.NamespacedName{Name: mlflow.Name, Namespace: mlflow.Namespace}})
+		}
+	}
+	return requests
+}
+
+func (r *MLflowReconciler) referencedConfigMapResourceVersions(ctx context.Context, mlflow *mlflowv1.MLflow, namespace string) (map[string]string, error) {
+	versions := map[string]string{}
+	for name := range referencedDeploymentConfigMapNames(mlflow) {
+		if errs := validation.IsDNS1123Subdomain(name); len(errs) > 0 {
+			return nil, fmt.Errorf("invalid referenced ConfigMap name %q: %s", name, strings.Join(errs, ", "))
+		}
+		cm := &corev1.ConfigMap{}
+		err := r.Get(ctx, types.NamespacedName{Namespace: namespace, Name: name}, cm)
+		if errors.IsNotFound(err) {
+			continue
+		}
+		if err != nil {
+			return nil, fmt.Errorf("get referenced ConfigMap %q: %w", name, err)
+		}
+		versions[name] = cm.ResourceVersion
+	}
+	return versions, nil
+}
 
 // referencedDeploymentSecretNames returns the local Secrets consumed by the MLflow server pod.
 // Keep this in sync with the Deployment chart; CronJob-only references intentionally do not roll

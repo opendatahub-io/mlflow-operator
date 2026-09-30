@@ -89,15 +89,7 @@ spec:
                 - name: MLFLOW_K8S_WORKSPACE_LABEL_SELECTOR
                   value: {{ .Values.mlflow.workspaceLabelSelector | quote }}
                 {{- end }}
-                # The standalone archival job bypasses mlflow server CLI init, so provide
-                # the internal worker env name that _get_tracking_store() reads directly.
-                - name: _MLFLOW_SERVER_FILE_STORE
-                  {{- if .Values.mlflow.backendStoreUriFrom }}
-                  valueFrom:
-                    {{- toYaml .Values.mlflow.backendStoreUriFrom | nindent 20 }}
-                  {{- else }}
-                  value: {{ .Values.mlflow.backendStoreUri | quote }}
-                  {{- end }}
+                {{- if ne (include "mlflow.hasBackendEnvOverride" .) "true" }}
                 - name: MLFLOW_BACKEND_STORE_URI
                   {{- if .Values.mlflow.backendStoreUriFrom }}
                   valueFrom:
@@ -105,8 +97,11 @@ spec:
                   {{- else }}
                   value: {{ .Values.mlflow.backendStoreUri | quote }}
                   {{- end }}
+                {{- end }}
+                {{- include "mlflow.metadataStoreEnv" . | nindent 16 }}
                 {{- include "mlflow.caBundleEnv" . | nindent 16 }}
                 {{- range .Values.env }}
+                {{- if ne .name "_MLFLOW_SERVER_FILE_STORE" }}
                 - name: {{ .name }}
                   {{- if .valueFrom }}
                   valueFrom:
@@ -115,6 +110,11 @@ spec:
                   value: {{ .value | quote }}
                   {{- end }}
                 {{- end }}
+                {{- end }}
+                # The worker reads this internal name directly. Expand it after
+                # the effective backend env, without copying a credential URI.
+                - name: _MLFLOW_SERVER_FILE_STORE
+                  value: $(MLFLOW_BACKEND_STORE_URI)
               {{- if .Values.envFrom }}
               envFrom:
                 {{- toYaml .Values.envFrom | nindent 16 }}

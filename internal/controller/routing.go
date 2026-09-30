@@ -261,14 +261,48 @@ func (r *MLflowReconciler) reconcileHttpRoute(
 	suffix := getResourceSuffix(mlflow.Name)
 	httpRouteName := ResourceName + suffix
 	pathPrefix := "/" + ResourceName + suffix
-	v1PathPrefix := pathPrefix + "/v1"
-	replaceV1Prefix := "/v1"
 	serviceName := ResourceName + suffix
 
 	// Create HttpRoute object
 	pathMatchType := gatewayv1.PathMatchPathPrefix
 	servicePort := gatewayv1.PortNumber(8443)
 	weight := int32(1)
+
+	backendRefs := []gatewayv1.HTTPBackendRef{
+		{
+			BackendRef: gatewayv1.BackendRef{
+				BackendObjectReference: gatewayv1.BackendObjectReference{
+					Name: gatewayv1.ObjectName(serviceName),
+					Port: &servicePort,
+				},
+				Weight: &weight,
+			},
+		},
+	}
+
+	rules := []gatewayv1.HTTPRouteRule{
+		{
+			Matches: []gatewayv1.HTTPRouteMatch{
+				{
+					Path: &gatewayv1.HTTPPathMatch{
+						Type:  &pathMatchType,
+						Value: &pathPrefix,
+					},
+				},
+			},
+			BackendRefs: backendRefs,
+		},
+	}
+	if suffix != "" {
+		replacementPath := StaticPrefix
+		rules[0].Filters = []gatewayv1.HTTPRouteFilter{{
+			Type: gatewayv1.HTTPRouteFilterURLRewrite,
+			URLRewrite: &gatewayv1.HTTPURLRewriteFilter{Path: &gatewayv1.HTTPPathModifier{
+				Type:               gatewayv1.PrefixMatchHTTPPathModifier,
+				ReplacePrefixMatch: &replacementPath,
+			}},
+		}}
+	}
 
 	gatewayNamespace := "openshift-ingress"
 	httpRoute := &gatewayv1.HTTPRoute{
@@ -292,61 +326,7 @@ func (r *MLflowReconciler) reconcileHttpRoute(
 					},
 				},
 			},
-			Rules: []gatewayv1.HTTPRouteRule{
-				{
-					Matches: []gatewayv1.HTTPRouteMatch{
-						{
-							Path: &gatewayv1.HTTPPathMatch{
-								Type:  &pathMatchType,
-								Value: &v1PathPrefix,
-							},
-						},
-					},
-					Filters: []gatewayv1.HTTPRouteFilter{
-						{
-							Type: gatewayv1.HTTPRouteFilterURLRewrite,
-							URLRewrite: &gatewayv1.HTTPURLRewriteFilter{
-								Path: &gatewayv1.HTTPPathModifier{
-									Type:               gatewayv1.PrefixMatchHTTPPathModifier,
-									ReplacePrefixMatch: &replaceV1Prefix,
-								},
-							},
-						},
-					},
-					BackendRefs: []gatewayv1.HTTPBackendRef{
-						{
-							BackendRef: gatewayv1.BackendRef{
-								BackendObjectReference: gatewayv1.BackendObjectReference{
-									Name: gatewayv1.ObjectName(serviceName),
-									Port: &servicePort,
-								},
-								Weight: &weight,
-							},
-						},
-					},
-				},
-				{
-					Matches: []gatewayv1.HTTPRouteMatch{
-						{
-							Path: &gatewayv1.HTTPPathMatch{
-								Type:  &pathMatchType,
-								Value: &pathPrefix,
-							},
-						},
-					},
-					BackendRefs: []gatewayv1.HTTPBackendRef{
-						{
-							BackendRef: gatewayv1.BackendRef{
-								BackendObjectReference: gatewayv1.BackendObjectReference{
-									Name: gatewayv1.ObjectName(serviceName),
-									Port: &servicePort,
-								},
-								Weight: &weight,
-							},
-						},
-					},
-				},
-			},
+			Rules: rules,
 		},
 	}
 

@@ -258,7 +258,7 @@ func TestBuildMigrationJobFromDeployment(t *testing.T) {
 				}},
 			},
 		},
-	}, "test-ns", RenderOptions{PlatformTrustedCABundleExists: true}, nil)
+	}, "test-ns", RenderOptions{PlatformTrustedCABundleExists: true, BackendUsesStorage: ptr(false)}, nil)
 	g.Expect(err).NotTo(gomega.HaveOccurred())
 
 	deployment, err := renderedDeployment(objs, "mlflow", "test-ns")
@@ -466,6 +466,22 @@ func TestMigrationScriptValidatesSupportedVersion(t *testing.T) {
 	}
 	if !strings.Contains(migrationPythonScript, "migration image reports MLflow") {
 		t.Fatal("migrationPythonScript does not fail clearly when the MLflow image version does not match")
+	}
+}
+
+func TestMigrationScriptCoordinatesBackendMigrationWithTraceRollups(t *testing.T) {
+	t.Parallel()
+
+	for _, snippet := range []string{
+		"def with_trace_rollup_migration_lock(uri, operation):",
+		"SELECT pg_try_advisory_lock(78203, 1)",
+		"SELECT GET_LOCK('mlflow-operator-trace-rollups-migration', 10)",
+		"if name == \"backend\":",
+		"with_trace_rollup_migration_lock(uri, lambda: migrate_store(name, uri))",
+	} {
+		if !strings.Contains(migrationPythonScript, snippet) {
+			t.Fatalf("migrationPythonScript is missing rollup coordination %q", snippet)
+		}
 	}
 }
 

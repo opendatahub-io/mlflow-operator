@@ -81,9 +81,9 @@ func TestValidateArtifactsServerMetadataStores(t *testing.T) {
 		}
 	})
 
-	t.Run("requires an explicit primary store", func(t *testing.T) {
+	t.Run("rejects the legacy implicit SQLite primary store", func(t *testing.T) {
 		err := (&MLflowReconciler{}).validateArtifactsServerMetadataStores(ctx, artifactsServerMLflow(), "opendatahub")
-		if err == nil || !strings.Contains(err.Error(), "spec.backendStoreUri or spec.backendStoreUriFrom must be set") {
+		if err == nil || !strings.Contains(err.Error(), "effective backend metadata store must be remote") {
 			t.Fatalf("validateArtifactsServerMetadataStores() error = %v, want missing backend rejection", err)
 		}
 	})
@@ -93,7 +93,7 @@ func TestValidateArtifactsServerMetadataStores(t *testing.T) {
 		mlflow.Spec.BackendStoreURI = ptr("s3://bucket/not-a-metadata-store")
 
 		err := (&MLflowReconciler{}).validateArtifactsServerMetadataStores(ctx, mlflow, "opendatahub")
-		if err == nil || !strings.Contains(err.Error(), "must resolve to a remote PostgreSQL or MySQL URI") {
+		if err == nil || !strings.Contains(err.Error(), "effective backend metadata store must be remote") {
 			t.Fatalf("validateArtifactsServerMetadataStores() error = %v, want unsupported store rejection", err)
 		}
 	})
@@ -110,7 +110,7 @@ func TestValidateArtifactsServerMetadataStores(t *testing.T) {
 		}
 	})
 
-	t.Run("resolves each shared Secret only once", func(t *testing.T) {
+	t.Run("validates the effective backend and remaining shared Secret references", func(t *testing.T) {
 		secret := &corev1.Secret{
 			ObjectMeta: metav1.ObjectMeta{Name: "database-uris", Namespace: "opendatahub"},
 			Data: map[string][]byte{
@@ -129,8 +129,8 @@ func TestValidateArtifactsServerMetadataStores(t *testing.T) {
 		if err != nil {
 			t.Fatalf("validateArtifactsServerMetadataStores() error = %v", err)
 		}
-		if reader.gets != 1 {
-			t.Fatalf("Secret Get calls = %d, want 1", reader.gets)
+		if reader.gets != 2 {
+			t.Fatalf("Secret Get calls = %d, want 2", reader.gets)
 		}
 	})
 
@@ -173,7 +173,11 @@ func TestValidateArtifactsServerMetadataStores(t *testing.T) {
 
 			err := (&MLflowReconciler{APIReader: secretReader(t, secret)}).
 				validateArtifactsServerMetadataStores(ctx, mlflow, "opendatahub")
-			if err == nil || !strings.Contains(err.Error(), "spec."+test.field+" must resolve to a remote PostgreSQL or MySQL URI") {
+			want := "spec." + test.field + " must resolve to a remote PostgreSQL or MySQL URI"
+			if test.field == "backendStoreUri" {
+				want = "effective backend metadata store must be remote"
+			}
+			if err == nil || !strings.Contains(err.Error(), want) {
 				t.Fatalf("validateArtifactsServerMetadataStores() error = %v, want %s rejection", err, test.field)
 			}
 			if strings.Contains(err.Error(), "do-not-log") {
@@ -193,7 +197,7 @@ func TestValidateArtifactsServerMetadataStoreSecretFailures(t *testing.T) {
 
 		err := (&MLflowReconciler{APIReader: secretReader(t, secret)}).
 			validateArtifactsServerMetadataStores(ctx, mlflow, "opendatahub")
-		if err == nil || !strings.Contains(err.Error(), "key \"uri\" not found") {
+		if err == nil || !strings.Contains(err.Error(), "effective backend Secret reference is absent or empty") {
 			t.Fatalf("validateArtifactsServerMetadataStores() error = %v, want missing key", err)
 		}
 	})

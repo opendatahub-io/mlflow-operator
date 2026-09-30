@@ -54,6 +54,45 @@ func TestReferencedDeploymentSecretNames(t *testing.T) {
 	}
 }
 
+func TestReferencedConfigMapRefreshAndAnnotation(t *testing.T) {
+	scheme := secretReferenceTestScheme(t)
+	instance := &mlflowv1.MLflow{ObjectMeta: metav1.ObjectMeta{Name: "mlflow"}, Spec: mlflowv1.MLflowSpec{
+		BackendStoreURI: ptr("postgresql://db/mlflow"),
+		Env:             []corev1.EnvVar{{Name: rollupsRuntimeEnvName, ValueFrom: &corev1.EnvVarSource{ConfigMapKeyRef: &corev1.ConfigMapKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: "runtime-settings"}, Key: "enabled"}}}},
+		EnvFrom:         []corev1.EnvFromSource{{ConfigMapRef: &corev1.ConfigMapEnvSource{LocalObjectReference: corev1.LocalObjectReference{Name: "shared-settings"}}}},
+	}}
+	cm := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: "runtime-settings", Namespace: "applications", ResourceVersion: "7"}, Data: map[string]string{"enabled": "true"}}
+	cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(instance, cm).Build()
+	r := &MLflowReconciler{Client: cl, Namespace: "applications"}
+	for _, name := range []string{"runtime-settings", "shared-settings"} {
+		if !referencedDeploymentConfigMapNames(instance)[name] {
+			t.Fatalf("missing ConfigMap reference %s", name)
+		}
+		requests := r.referencedConfigMapToMLflowRequests(context.Background(), &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "applications"}})
+		if len(requests) != 1 || requests[0].Name != "mlflow" {
+			t.Fatalf("ConfigMap %s requests = %+v", name, requests)
+		}
+	}
+	if requests := r.referencedConfigMapToMLflowRequests(context.Background(), &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: "unrelated", Namespace: "applications"}}); len(requests) != 0 {
+		t.Fatalf("unrelated ConfigMap requests = %+v", requests)
+	}
+	versions, err := r.referencedConfigMapResourceVersions(context.Background(), instance, "applications")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(versions) != 1 || versions["runtime-settings"] != "7" {
+		t.Fatalf("ConfigMap versions = %+v", versions)
+	}
+	values, err := (&HelmRenderer{}).mlflowToHelmValues(instance, "applications", RenderOptions{ReferencedConfigMapResourceVersions: versions}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	annotations := values["podAnnotations"].(map[string]interface{})
+	if annotations[configMapResourceVersionsAnnotation] != `{"runtime-settings":"7"}` {
+		t.Fatalf("ConfigMap annotation = %+v", annotations)
+	}
+}
+
 func TestSecretToMLflowRequestsFiltersUnreferencedSecrets(t *testing.T) {
 	scheme := secretReferenceTestScheme(t)
 	referenced := &mlflowv1.MLflow{ObjectMeta: metav1.ObjectMeta{Name: "referenced"}, Spec: mlflowv1.MLflowSpec{
