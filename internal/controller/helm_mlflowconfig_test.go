@@ -56,7 +56,7 @@ func TestMlflowToHelmValues_MLflowConfig(t *testing.T) {
 			wantArtifactsDestination: defaultArtifactsDest,
 			wantDefaultArtifactRoot:  "", // Empty - let MLflow use its intelligent defaults
 			wantServeArtifacts:       false,
-			wantWorkers:              1,
+			wantWorkers:              8,
 			wantBackendSecretRef:     false,
 			wantRegistrySecretRef:    false,
 		},
@@ -71,7 +71,7 @@ func TestMlflowToHelmValues_MLflowConfig(t *testing.T) {
 			wantArtifactsDestination: defaultArtifactsDest,
 			wantDefaultArtifactRoot:  "", // Empty - let MLflow use its intelligent defaults
 			wantServeArtifacts:       false,
-			wantWorkers:              1,
+			wantWorkers:              8,
 			wantBackendSecretRef:     false,
 			wantRegistrySecretRef:    false,
 		},
@@ -90,7 +90,7 @@ func TestMlflowToHelmValues_MLflowConfig(t *testing.T) {
 			wantArtifactsDestination: "s3://bucket/artifacts",
 			wantDefaultArtifactRoot:  "", // Empty - let MLflow use its intelligent defaults
 			wantServeArtifacts:       false,
-			wantWorkers:              1,
+			wantWorkers:              8,
 			wantBackendSecretRef:     false,
 			wantRegistrySecretRef:    false,
 		},
@@ -109,7 +109,7 @@ func TestMlflowToHelmValues_MLflowConfig(t *testing.T) {
 			wantArtifactsDestination: defaultArtifactsDest,
 			wantDefaultArtifactRoot:  "",
 			wantServeArtifacts:       false,
-			wantWorkers:              1,
+			wantWorkers:              8,
 		},
 		{
 			name: "registry defaults to backend when omitted",
@@ -126,7 +126,7 @@ func TestMlflowToHelmValues_MLflowConfig(t *testing.T) {
 			wantArtifactsDestination: "s3://bucket/artifacts",
 			wantDefaultArtifactRoot:  "", // Empty - let MLflow use its intelligent defaults
 			wantServeArtifacts:       false,
-			wantWorkers:              1,
+			wantWorkers:              8,
 			wantBackendSecretRef:     false,
 			wantRegistrySecretRef:    false,
 		},
@@ -174,7 +174,7 @@ func TestMlflowToHelmValues_MLflowConfig(t *testing.T) {
 			wantArtifactsDestination: defaultArtifactsDest,
 			wantDefaultArtifactRoot:  "", // Empty - let MLflow use its intelligent defaults
 			wantServeArtifacts:       false,
-			wantWorkers:              1,
+			wantWorkers:              8,
 			wantBackendSecretRef:     true,
 			wantReadReplicaSecretRef: true,
 			wantRegistrySecretRef:    true,
@@ -196,7 +196,7 @@ func TestMlflowToHelmValues_MLflowConfig(t *testing.T) {
 			wantArtifactsDestination: defaultArtifactsDest,
 			wantDefaultArtifactRoot:  "", // Empty - let MLflow use its intelligent defaults
 			wantServeArtifacts:       false,
-			wantWorkers:              1,
+			wantWorkers:              8,
 			wantBackendSecretRef:     true,
 			wantRegistrySecretRef:    true, // Should inherit backend secret ref
 		},
@@ -219,7 +219,7 @@ func TestMlflowToHelmValues_MLflowConfig(t *testing.T) {
 			wantArtifactsDestination: defaultArtifactsDest,
 			wantDefaultArtifactRoot:  "",
 			wantServeArtifacts:       false,
-			wantWorkers:              1,
+			wantWorkers:              8,
 			wantReadReplicaSecretRef: true,
 		},
 		{
@@ -237,7 +237,7 @@ func TestMlflowToHelmValues_MLflowConfig(t *testing.T) {
 			wantArtifactsDestination: "s3://bucket/artifacts",
 			wantDefaultArtifactRoot:  "s3://bucket/custom-root", // Custom value overrides default
 			wantServeArtifacts:       false,                     // Default is now false
-			wantWorkers:              1,
+			wantWorkers:              8,
 			wantBackendSecretRef:     false,
 			wantRegistrySecretRef:    false,
 		},

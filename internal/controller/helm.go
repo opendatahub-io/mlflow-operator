@@ -314,7 +314,7 @@ func (h *HelmRenderer) mlflowToHelmValues(
 	if artifactsServerEnabled && mlflow.Spec.ArtifactsServer.Replicas != nil {
 		artifactsReplicas = *mlflow.Spec.ArtifactsServer.Replicas
 	}
-	artifactsWorkers := int32(1)
+	artifactsWorkers := int32(8)
 	if artifactsServerEnabled && mlflow.Spec.ArtifactsServer.Workers != nil {
 		artifactsWorkers = *mlflow.Spec.ArtifactsServer.Workers
 	}
@@ -475,7 +475,7 @@ func (h *HelmRenderer) mlflowToHelmValues(
 		}
 	}
 
-	workers := int32(1)
+	workers := int32(8)
 	if mlflow.Spec.Workers != nil {
 		workers = *mlflow.Spec.Workers
 	}

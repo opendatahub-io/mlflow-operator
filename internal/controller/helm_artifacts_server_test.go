@@ -327,7 +327,7 @@ func TestRenderChartArtifactsServerInheritsResources(t *testing.T) {
 	if artifacts.Spec.Replicas == nil || *artifacts.Spec.Replicas != 1 {
 		t.Fatalf("artifact replicas = %v, want default 1", artifacts.Spec.Replicas)
 	}
-	if args := artifacts.Spec.Template.Spec.Containers[0].Args; !slices.Contains(args, "--workers=1") {
+	if args := artifacts.Spec.Template.Spec.Containers[0].Args; !slices.Contains(args, "--workers=8") {
 		t.Errorf("artifact args missing default worker count: %v", args)
 	}
 }
