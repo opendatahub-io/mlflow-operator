@@ -228,8 +228,8 @@ type MLflowSpec struct {
 
 	// Workers is the number of uvicorn worker processes for the MLflow server.
 	// Note: This is different from pod replicas. Each pod will run this many worker processes.
-	// Defaults to 1. For high-traffic deployments, consider increasing pod replicas instead.
-	// +kubebuilder:default=1
+	// Defaults to 8. For high-traffic deployments, consider increasing pod replicas instead.
+	// +kubebuilder:default=8
 	// +kubebuilder:validation:Minimum=1
 	// +optional
 	Workers *int32 `json:"workers,omitempty"`
@@ -365,7 +365,7 @@ type ArtifactsServerSpec struct {
 	Replicas *int32 `json:"replicas,omitempty"`
 
 	// Workers is the number of uvicorn worker processes in each artifact-serving server pod.
-	// +kubebuilder:default=1
+	// +kubebuilder:default=8
 	// +kubebuilder:validation:Minimum=1
 	// +optional
 	Workers *int32 `json:"workers,omitempty"`

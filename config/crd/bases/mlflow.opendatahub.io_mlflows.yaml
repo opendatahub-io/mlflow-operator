@@ -1124,7 +1124,7 @@ spec:
                         type: object
                     type: object
                   workers:
-                    default: 1
+                    default: 8
                     description: Workers is the number of uvicorn worker processes
                       in each artifact-serving server pod.
                     format: int32
@@ -2998,11 +2998,11 @@ spec:
                     type: string
                 type: object
               workers:
-                default: 1
+                default: 8
                 description: |-
                   Workers is the number of uvicorn worker processes for the MLflow server.
                   Note: This is different from pod replicas. Each pod will run this many worker processes.
-                  Defaults to 1. For high-traffic deployments, consider increasing pod replicas instead.
+                  Defaults to 8. For high-traffic deployments, consider increasing pod replicas instead.
                 format: int32
                 minimum: 1
                 type: integer

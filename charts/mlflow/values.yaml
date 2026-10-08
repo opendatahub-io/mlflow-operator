@@ -155,10 +155,10 @@ mlflow:
   # When disabled, artifactsDestination is ignored and clients must have direct access to artifact storage.
   # REQUIRED when using file-based artifact storage (defaultArtifactRoot starting with "file://").
   serveArtifacts: true
-  # Number of gunicorn worker processes for the MLflow server
+  # Number of uvicorn worker processes for the MLflow server
   # Note: This is different from pod replicas. Each pod will run this many worker processes.
-  # Defaults to 1. For high-traffic deployments, consider increasing pod replicas instead.
-  workers: 1
+  # Defaults to 8. For high-traffic deployments, consider increasing pod replicas instead.
+  workers: 8
   # Port for MLflow server
   port: 8443
   # Allowed hosts (will be generated based on routes/services)
@@ -202,7 +202,7 @@ artifactsServer:
   # Optional label selector applied to the Kubernetes workspace provider.
   workspaceLabelSelector: ""
   # Number of uvicorn workers in each MLflow artifacts-server pod.
-  workers: 1
+  workers: 8
   port: 8443
   # Accept Gateway Host headers by default, matching operator-managed deployments.
   # Standalone production installs should restrict this to their external hostnames.
