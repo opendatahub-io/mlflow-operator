@@ -491,7 +491,7 @@ jobs:
             --type=merge \
             -p '{"spec":{"image":{"image":"${{ env.MLFLOW_RUNTIME_IMAGE }}","imagePullPolicy":"IfNotPresent"}}}'
           kubectl wait \
-            --for="jsonpath={.status.version}=3.15.2" \
+            --for="jsonpath={.status.version}=3.17.0" \
             mlflow/mlflow \
             --namespace "${{ env.NAMESPACE }}" \
             --timeout=300s
