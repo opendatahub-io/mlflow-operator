@@ -700,3 +700,22 @@ def test_mlflow_delete_failure_stops_before_next_backend(tmp_path: Path) -> None
         if "deploy.py" in line
     ]
     assert len(deploys) == 1, "the next backend must not start after MLflow CR deletion fails"
+
+
+def test_write_harness_error_junit_replace_overwrites_existing(tmp_path: Path) -> None:
+    output = tmp_path / "xunit_report_file.xml"
+    output.write_text("<testsuites><testsuite name='old'/></testsuites>", encoding="utf-8")
+
+    wrote = write_harness_error_junit(
+        str(output),
+        test_name="test_deploy",
+        message="deploy.py failed",
+        body="snapshot included",
+        replace=True,
+    )
+
+    assert wrote is True
+    root = parse(output).getroot()
+    case = root.find("testsuite").find("testcase")
+    assert case.get("name") == "test_deploy"
+    assert "snapshot included" in (case.find("error").text or "")

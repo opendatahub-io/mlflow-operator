@@ -37,13 +37,15 @@ def write_harness_error_junit(
     message: str,
     body: str | None = None,
     hostname: str | None = None,
+    replace: bool = False,
 ) -> bool:
     """Write a single-error JUnit document.
 
     Returns False when ``output`` already exists so a later pytest report is
-    never overwritten.
+    never overwritten, unless ``replace`` is true (used to refresh a harness
+    report we just wrote, after a failure snapshot is collected).
     """
-    if os.path.isfile(output) and os.path.getsize(output) > 0:
+    if not replace and os.path.isfile(output) and os.path.getsize(output) > 0:
         return False
 
     parent = os.path.dirname(output)
@@ -103,6 +105,11 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=None,
         help="error element text; defaults to --message",
     )
+    parser.add_argument(
+        "--replace",
+        action="store_true",
+        help="overwrite an existing JUnit file (harness snapshot refresh only)",
+    )
     return parser.parse_args(argv)
 
 
@@ -115,13 +122,14 @@ def main(argv: list[str] | None = None) -> int:
         test_name=args.name,
         message=args.message,
         body=args.body,
+        replace=args.replace,
     )
     if not wrote:
         print(
             f"WARN: not overwriting existing JUnit report at {args.output}",
             flush=True,
         )
-        return 0
+        return 2
     print(f"Wrote harness JUnit error report: {args.output}", flush=True)
     return 0
 
