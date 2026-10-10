@@ -347,6 +347,11 @@ type MLflowSpec struct {
 	// stays disabled; the CronJob handles execution externally.
 	// +optional
 	TraceArchival *TraceArchivalSpec `json:"traceArchival,omitempty"`
+
+	// TraceRollups schedules SQL trace analytics maintenance. Enabled by default
+	// for remote SQL tracking stores; SQLite deployments never create the job.
+	// +optional
+	TraceRollups *TraceRollupsSpec `json:"traceRollups,omitempty"`
 }
 
 // ArtifactsServerSpec configures the dedicated metadata-aware artifact-serving MLflow deployment.
@@ -427,6 +432,46 @@ type GarbageCollectionSpec struct {
 	Resources *corev1.ResourceRequirements `json:"resources,omitempty"`
 }
 
+// TraceRollupsSpec configures standalone SQL trace rollup maintenance.
+// Schedule and TimeZone intentionally have no admission defaults, so the optional
+// warning policy can detect omissions. The operator and chart supply the defaults.
+// +kubebuilder:validation:XValidation:rule="!has(self.resourceClaims) || self.resourceClaims.all(c, ((has(c.resourceClaimName) && size(c.resourceClaimName) > 0) != (has(c.resourceClaimTemplateName) && size(c.resourceClaimTemplateName) > 0)))",message="each traceRollups.resourceClaims entry must set exactly one non-empty value: resourceClaimName or resourceClaimTemplateName"
+type TraceRollupsSpec struct {
+	// Enabled controls CronJob scheduling. Defaults to true.
+	// Disabling scheduling leaves server-side SQL rollup use enabled so existing
+	// materialized rollups remain readable and metadata-connected servers can restart.
+	// An explicit MLFLOW_SQL_TRACE_ROLLUPS_ENABLED entry in Env overrides that default.
+	// +optional
+	Enabled *bool `json:"enabled,omitempty"`
+
+	// Schedule is a five-field cron expression. Defaults to "0 2 * * *".
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=256
+	// +optional
+	Schedule *string `json:"schedule,omitempty"`
+
+	// TimeZone is an IANA timezone name. Defaults to "Etc/UTC".
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=128
+	// +optional
+	TimeZone *string `json:"timeZone,omitempty"`
+
+	// Resources configures the rollup CronJob container.
+	// +optional
+	Resources *corev1.ResourceRequirements `json:"resources,omitempty"`
+
+	// ResourceClaims defines the Dynamic Resource Allocation claims available to
+	// the rollup CronJob pod. Container claim references must be configured
+	// separately in Resources.Claims.
+	// +patchMergeKey=name
+	// +patchStrategy=merge,retainKeys
+	// +listType=map
+	// +listMapKey=name
+	// +featureGate=DynamicResourceAllocation
+	// +optional
+	ResourceClaims []corev1.PodResourceClaim `json:"resourceClaims,omitempty" patchStrategy:"merge,retainKeys" patchMergeKey:"name"`
+}
+
 // TraceArchivalSpec configures trace archival via a CronJob that runs the
 // standalone archival module. The archival config is also mounted into the
 // MLflow server so the UI can surface archival status.
@@ -501,7 +546,9 @@ type MLflowMigrationConfig struct {
 	// version detection indicates it is needed. Always forces the
 	// operator-managed migration flow for each new desired generation, meaning
 	// each new revision of the MLflow resource after the desired state changes,
-	// before the MLflow Deployment is scaled back up.
+	// before the MLflow Deployment is scaled back up. Changing from Always to
+	// Automatic does not cancel a migration Job that has already started; the
+	// operator waits for that Job and its post-migration rollout to finish.
 	// +kubebuilder:default=Automatic
 	// +kubebuilder:validation:Enum=Automatic;Always
 	// +optional

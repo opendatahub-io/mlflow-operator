@@ -12,7 +12,7 @@ This project was generated using [Kubebuilder](https://book.kubebuilder.io/) v4.
 
 The MLflow custom resource is **cluster-scoped**, meaning it can be created without specifying a namespace and is accessible across the entire cluster.
 `spec.serviceAccountAnnotations` is applied to every operator-created ServiceAccount (main, garbage collection, and trace archival when those workloads exist) so cloud workload identity (for example AWS IRSA) can be configured without static access keys.
-`spec.env` and `spec.envFrom` are rendered into the MLflow Deployment, garbage collection CronJob, and trace-archival CronJob.
+`spec.env` and `spec.envFrom` are rendered into the tracking and artifact Deployments and the garbage collection, trace-archival, and SQL trace-rollup CronJobs.
 
 ### MLflowOperator (components.platform.opendatahub.io/v1alpha1)
 
@@ -258,6 +258,38 @@ PVC mounts are workload-specific. GC mounts configured storage only for local or
 - When backend and registry store URIs differ, the migration Job must handle them independently and only advance `status.version` after both succeed
 - Migration Jobs must explicitly neutralize `MLFLOW_READ_REPLICA_BACKEND_STORE_URI`; schema initialization and upgrades always target the primary backend and registry stores
 
+### SQL trace rollups
+
+`spec.traceRollups` schedules primary-database maintenance by default for
+PostgreSQL/MySQL; SQLite is excluded. The effective defaults are `0 2 * * *`
+and `Etc/UTC`, with no admission defaults on timing fields. Validate timing
+only when the CronJob will render, before migration mutates workloads. The
+optional warning-only policy is installed separately with
+`kubectl apply -k config/admission`.
+
+Scheduling opt-out removes the CronJob while retaining the default SQL rollup
+flag in both metadata-connected servers. Secret-backed opt-out skips Secret
+resolution, preserving cleanup if credentials are unavailable, subject to
+other prerequisites such as split-server metadata validation. Explicit
+`spec.env` entries (including `valueFrom`) override the injected flag without
+duplicates; the Python wrapper honors explicit false before creating an
+engine. `envFrom` does not override an explicit injected `env` entry.
+
+During operator migration, suspend scheduling and wait for rollup Jobs with
+the instance label or the owned CronJob UID. Retain a disabling CronJob until
+its Jobs finish so older unlabeled Jobs can still be identified, then remove
+it even if the migration later fails. Only terminal Complete/Failed Job
+conditions release this wait. A labeled Job
+manually created from the template is also included; an unlabeled manual Job
+from an older template cannot be reliably attributed. Standalone Helm does
+not orchestrate migrations.
+
+The runtime must contain `run_sql_trace_rollup_scheduler`, and its version
+must match operator metadata. Development `.devN` versions are normalized
+for both routing and downgrade comparisons. Keep image defaults independent
+of personal development images. See the README and
+`config/samples/mlflow_v1_mlflow_trace_rollups.yaml` for portable configuration.
+
 ## Testing
 
 ### Unit Tests
@@ -418,6 +450,11 @@ The `config/samples/` directory contains example MLflow custom resource configur
    - Override artifact storage with custom bucket and path
    - Example of namespace-specific artifact configuration
    - Requires Secret with S3 credentials in the same namespace
+
+9. **mlflow_v1_mlflow_trace_rollups.yaml** - SQL trace rollup maintenance
+   - Secret-backed PostgreSQL primary and remote artifact storage
+   - Nightly timing, resource settings, and positive runtime tuning values
+   - Requires an operator/runtime pairing with the SQL rollup entrypoint
 
 **When to update samples:**
 

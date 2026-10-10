@@ -58,7 +58,7 @@ metadata:
 spec:
   serveArtifacts: true
   artifactsDestination: s3://mlflow-artifacts/test
-  backendStoreUri: postgresql://user:pass@db:5432/mlflow
+  backendStoreUri: postgresql://mlflow:mysecretpassword@postgres-service:5432/mydatabase
 `
 
 var _ = Describe("Manager", Ordered, func() {
@@ -79,6 +79,17 @@ var _ = Describe("Manager", Ordered, func() {
 			"pod-security.kubernetes.io/enforce=restricted")
 		_, err = utils.Run(cmd)
 		Expect(err).NotTo(HaveOccurred(), "Failed to label namespace with restricted policy")
+
+		By("provisioning PostgreSQL for migration-backed e2e cases")
+		cmd = exec.Command("kubectl", "apply", "-n", namespace, "-k", ".github/test-infra/postgres/base")
+		_, err = utils.Run(cmd)
+		Expect(err).NotTo(HaveOccurred(), "Failed to provision PostgreSQL for e2e tests")
+
+		By("waiting for PostgreSQL to become available")
+		cmd = exec.Command("kubectl", "rollout", "status", "deployment/postgres-deployment",
+			"-n", namespace, "--timeout=2m")
+		_, err = utils.Run(cmd)
+		Expect(err).NotTo(HaveOccurred(), "PostgreSQL did not become ready for e2e tests")
 
 		By("creating the monitoring namespace for metrics access")
 		cmd = exec.Command("kubectl", "get", "namespace", metricsTestNamespace)
@@ -1372,6 +1383,215 @@ data:
 			}, 2*time.Minute, time.Second).Should(Succeed())
 
 			By("cleaning up")
+			cmd = exec.Command("kubectl", "delete", "mlflow", "mlflow")
+			_, err = utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred())
+
+			Eventually(func(g Gomega) {
+				output, getErr := kubectlOutput(
+					"get", "mlflow", "mlflow",
+					"--ignore-not-found",
+					"-o", "jsonpath={.metadata.name}",
+				)
+				g.Expect(getErr).NotTo(HaveOccurred())
+				g.Expect(output).To(BeEmpty())
+			}, 30*time.Second, time.Second).Should(Succeed())
+		})
+
+		It("should create, update, and clean up the SQL trace rollup CronJob", func() {
+			const rollupsCronJobName = "mlflow-trace-rollups"
+
+			By("waiting for the controller-manager pod to be running")
+			controllerPodName = waitForControllerPodName()
+
+			applyKindMLflowTLSSecret()
+
+			By("creating MLflow with trace rollups and default schedule/timeZone")
+			rollupsYAML := dummyRemoteStoreSpec + `
+  traceRollups:
+    enabled: true
+`
+			rollupsFile, err := writeTempManifest("mlflow-rollups-", rollupsYAML)
+			Expect(err).NotTo(HaveOccurred(), "Failed to write trace rollups manifest")
+			defer cleanupTempManifest(rollupsFile)
+
+			cmd := exec.Command("kubectl", "apply", "-f", rollupsFile)
+			_, err = utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred(), "Failed to create MLflow with trace rollups")
+			DeferCleanup(func() {
+				deleteCmd := exec.Command("kubectl", "delete", "mlflow", "mlflow", "--ignore-not-found=true")
+				_, _ = utils.Run(deleteCmd)
+			})
+
+			By("verifying the rollup CronJob defaults and operator contract")
+			Eventually(func(g Gomega) {
+				schedule, getErr := kubectlOutput(
+					"get", "cronjob", rollupsCronJobName, "-n", namespace,
+					"-o", "jsonpath={.spec.schedule}",
+				)
+				g.Expect(getErr).NotTo(HaveOccurred())
+				g.Expect(schedule).To(Equal("0 2 * * *"))
+
+				timeZone, zoneErr := kubectlOutput(
+					"get", "cronjob", rollupsCronJobName, "-n", namespace,
+					"-o", "jsonpath={.spec.timeZone}",
+				)
+				g.Expect(zoneErr).NotTo(HaveOccurred())
+				g.Expect(timeZone).To(Equal("Etc/UTC"))
+
+				policy, policyErr := kubectlOutput(
+					"get", "cronjob", rollupsCronJobName, "-n", namespace,
+					"-o", "jsonpath={.spec.concurrencyPolicy}",
+				)
+				g.Expect(policyErr).NotTo(HaveOccurred())
+				g.Expect(policy).To(Equal("Forbid"))
+
+				command, commandErr := kubectlOutput(
+					"get", "cronjob", rollupsCronJobName, "-n", namespace,
+					"-o", "jsonpath={.spec.jobTemplate.spec.template.spec.containers[0].command}",
+				)
+				g.Expect(commandErr).NotTo(HaveOccurred())
+				g.Expect(command).To(ContainSubstring("python3.12"))
+				g.Expect(command).To(ContainSubstring("run_sql_trace_rollup_scheduler"))
+
+				automount, automountErr := kubectlOutput(
+					"get", "cronjob", rollupsCronJobName, "-n", namespace,
+					"-o", "jsonpath={.spec.jobTemplate.spec.template.spec.automountServiceAccountToken}",
+				)
+				g.Expect(automountErr).NotTo(HaveOccurred())
+				g.Expect(automount).To(Equal("false"))
+
+				pvc, pvcErr := kubectlOutput(
+					"get", "cronjob", rollupsCronJobName, "-n", namespace,
+					"-o", "jsonpath={.spec.jobTemplate.spec.template.spec.volumes[*].persistentVolumeClaim}",
+				)
+				g.Expect(pvcErr).NotTo(HaveOccurred())
+				g.Expect(pvc).To(BeEmpty(), "rollup job must not mount a PVC")
+
+				backend, backendErr := kubectlOutput(
+					"get", "cronjob", rollupsCronJobName, "-n", namespace,
+					"-o", "jsonpath={.spec.jobTemplate.spec.template.spec.containers[0]"+
+						".env[?(@.name=='MLFLOW_BACKEND_STORE_URI')].value}",
+				)
+				g.Expect(backendErr).NotTo(HaveOccurred())
+				g.Expect(backend).To(ContainSubstring("postgresql://"))
+			}, 2*time.Minute, time.Second).Should(Succeed())
+
+			By("updating the rollup schedule and timezone explicitly")
+			cmd = exec.Command(
+				"kubectl", "patch", "mlflow", "mlflow", "--type=merge",
+				"-p", `{"spec":{"traceRollups":{"schedule":"30 1 * * *","timeZone":"America/New_York"}}}`,
+			)
+			_, err = utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred(), "Failed to update trace rollup schedule")
+
+			Eventually(func(g Gomega) {
+				schedule, getErr := kubectlOutput(
+					"get", "cronjob", rollupsCronJobName, "-n", namespace,
+					"-o", "jsonpath={.spec.schedule}",
+				)
+				g.Expect(getErr).NotTo(HaveOccurred())
+				g.Expect(schedule).To(Equal("30 1 * * *"))
+
+				timeZone, zoneErr := kubectlOutput(
+					"get", "cronjob", rollupsCronJobName, "-n", namespace,
+					"-o", "jsonpath={.spec.timeZone}",
+				)
+				g.Expect(zoneErr).NotTo(HaveOccurred())
+				g.Expect(timeZone).To(Equal("America/New_York"))
+			}, 2*time.Minute, time.Second).Should(Succeed())
+
+			By("disabling trace rollups and waiting for CronJob cleanup")
+			cmd = exec.Command(
+				"kubectl", "patch", "mlflow", "mlflow", "--type=merge",
+				"-p", `{"spec":{"traceRollups":{"enabled":false}}}`,
+			)
+			_, err = utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred(), "Failed to disable trace rollups")
+
+			Eventually(func(g Gomega) {
+				output, getErr := kubectlOutput(
+					"get", "cronjob", rollupsCronJobName, "-n", namespace,
+					"--ignore-not-found", "-o", "jsonpath={.metadata.name}",
+				)
+				g.Expect(getErr).NotTo(HaveOccurred())
+				g.Expect(output).To(BeEmpty(), "rollup CronJob should be deleted after rollups are disabled")
+			}, 2*time.Minute, time.Second).Should(Succeed())
+
+			By("cleaning up")
+			cmd = exec.Command("kubectl", "delete", "mlflow", "mlflow")
+			_, err = utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred())
+
+			Eventually(func(g Gomega) {
+				output, getErr := kubectlOutput(
+					"get", "mlflow", "mlflow",
+					"--ignore-not-found",
+					"-o", "jsonpath={.metadata.name}",
+				)
+				g.Expect(getErr).NotTo(HaveOccurred())
+				g.Expect(output).To(BeEmpty())
+			}, 30*time.Second, time.Second).Should(Succeed())
+		})
+
+		It("should exclude SQLite backends from SQL trace rollups", func() {
+			const rollupsCronJobName = "mlflow-trace-rollups"
+
+			By("waiting for the controller-manager pod to be running")
+			controllerPodName = waitForControllerPodName()
+
+			applyKindMLflowTLSSecret()
+
+			By("creating a SQLite-backed MLflow with trace rollups enabled")
+			sqliteRollupsYAML := `apiVersion: mlflow.opendatahub.io/v1
+kind: MLflow
+metadata:
+  name: mlflow
+spec:
+  storage:
+    accessModes:
+      - ReadWriteOnce
+    resources:
+      requests:
+        storage: 1Gi
+  backendStoreUri: "sqlite:////mlflow/mlflow.db"
+  artifactsDestination: "file:///mlflow/artifacts"
+  serveArtifacts: true
+  traceRollups:
+    enabled: true
+`
+			sqliteFile, err := writeTempManifest("mlflow-rollups-sqlite-", sqliteRollupsYAML)
+			Expect(err).NotTo(HaveOccurred(), "Failed to write SQLite rollups manifest")
+			defer cleanupTempManifest(sqliteFile)
+
+			cmd := exec.Command("kubectl", "apply", "-f", sqliteFile)
+			_, err = utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred(), "Failed to create SQLite-backed MLflow")
+			DeferCleanup(func() {
+				deleteCmd := exec.Command("kubectl", "delete", "mlflow", "mlflow", "--ignore-not-found=true")
+				_, _ = utils.Run(deleteCmd)
+			})
+
+			By("verifying the MLflow Deployment is reconciled but no rollup CronJob exists")
+			Eventually(func(g Gomega) {
+				deployment, getErr := kubectlOutput(
+					"get", "deployment", "mlflow", "-n", namespace,
+					"-o", "jsonpath={.metadata.name}",
+				)
+				g.Expect(getErr).NotTo(HaveOccurred())
+				g.Expect(deployment).To(Equal("mlflow"))
+			}, 2*time.Minute, time.Second).Should(Succeed())
+
+			Consistently(func(g Gomega) {
+				output, getErr := kubectlOutput(
+					"get", "cronjob", rollupsCronJobName, "-n", namespace,
+					"--ignore-not-found", "-o", "jsonpath={.metadata.name}",
+				)
+				g.Expect(getErr).NotTo(HaveOccurred())
+				g.Expect(output).To(BeEmpty(), "SQLite backends must not produce a rollup CronJob")
+			}, 15*time.Second, 2*time.Second).Should(Succeed())
+
+			By("deleting the MLflow CR")
 			cmd = exec.Command("kubectl", "delete", "mlflow", "mlflow")
 			_, err = utils.Run(cmd)
 			Expect(err).NotTo(HaveOccurred())

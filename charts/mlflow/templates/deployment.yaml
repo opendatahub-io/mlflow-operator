@@ -176,6 +176,10 @@ spec:
             - --expose-prometheus=/prometheus
             {{- end }}
           env:
+            {{- if and (eq (include "mlflow.traceRollupsSQLBackend" .) "true") (ne (include "mlflow.hasRollupsEnvOverride" .) "true") }}
+            - name: MLFLOW_SQL_TRACE_ROLLUPS_ENABLED
+              value: "true"
+            {{- end }}
             - name: MLFLOW_DISABLE_TELEMETRY
               value: "true"
             - name: MLFLOW_SERVER_ENABLE_JOB_EXECUTION
