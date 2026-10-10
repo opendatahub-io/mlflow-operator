@@ -9,6 +9,9 @@ name: MLflow Runtime Integration Tests
 # forwards that mode. Keep the remaining env vars, action versions, and script calls in sync.
 
 env:
+  # TEMPORARY: restore master before merge after the ODH MLflow 3.17 rebase.
+  # Non-master selections also align the CI-only operator/test image versions.
+  MLFLOW_ODH_SOURCE_REF: db-optimization/mlflow-openshift-scale-testing
   NAMESPACE: opendatahub
   INTEGRATION_CLUSTER_NAME: mlflow
   PYTEST_ARGS: "-v --tb=short --strict-markers --disable-warnings"
@@ -104,6 +107,7 @@ jobs:
     outputs:
       source_repository: ${{ steps.configure.outputs.source_repository }}
       source_ref: ${{ steps.configure.outputs.source_ref }}
+      version_override: ${{ steps.runtime-version.outputs.version }}
     steps:
       - name: Checkout operator repository for runtime wrapper tests
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -120,6 +124,7 @@ jobs:
           MLFLOW_REPOSITORY: ${{ inputs.mlflow_repository }}
           MLFLOW_REF: ${{ inputs.mlflow_ref }}
         run: |
+          temporary_runtime=false
           if [[ -n "$MLFLOW_REPOSITORY" && -n "$MLFLOW_REF" ]]; then
             SOURCE_REPOSITORY="$MLFLOW_REPOSITORY"
             SOURCE_REF="$MLFLOW_REF"
@@ -131,14 +136,20 @@ jobs:
             fi
 
             if [[ "$REPOSITORY_OWNER" == "opendatahub-io" && "$TARGET_REF" == "main" ]]; then
-              SOURCE_REF="master"
+              SOURCE_REF="$MLFLOW_ODH_SOURCE_REF"
+              if [[ "$SOURCE_REF" != "master" ]]; then
+                temporary_runtime=true
+              fi
             else
               SOURCE_REF="$TARGET_REF"
             fi
           fi
 
-          echo "source_repository=$SOURCE_REPOSITORY" >> "$GITHUB_OUTPUT"
-          echo "source_ref=$SOURCE_REF" >> "$GITHUB_OUTPUT"
+          {
+            echo "source_repository=$SOURCE_REPOSITORY"
+            echo "source_ref=$SOURCE_REF"
+            echo "temporary_runtime=$temporary_runtime"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Checkout MLflow source
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -197,6 +208,18 @@ jobs:
           fi
           docker save -o "runtime-image/${MLFLOW_RUNTIME_ARTIFACT}.tar" "$MLFLOW_RUNTIME_IMAGE"
 
+      - name: Read temporary CI runtime version
+        id: runtime-version
+        if: steps.configure.outputs.temporary_runtime == 'true'
+        run: |
+          version=$(docker run --rm --entrypoint python3.12 "$MLFLOW_RUNTIME_IMAGE" \
+            -c 'from mlflow.version import VERSION; print(VERSION)')
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+[a-zA-Z0-9.+-]*$ ]]; then
+            echo "Invalid MLflow runtime version: $version" >&2
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
       - name: Test SQL trace rollup wrapper against built MLflow runtime
         run: >-
           docker run --rm
@@ -215,6 +238,7 @@ jobs:
           if-no-files-found: error
 
   build-mlflow-operator-image:
+    needs: build-mlflow-runtime-image
     permissions:
       contents: read
     runs-on: ubuntu-latest
@@ -257,6 +281,7 @@ jobs:
 
       - name: Build MLflow operator image archive
         env:
+          SUPPORTED_MLFLOW_VERSION_OVERRIDE: ${{ needs.build-mlflow-runtime-image.outputs.version_override }}
           DOCKERFILE: ${{ steps.dockerfile.outputs.path }}
           PUBLIC_BASE_IMAGE: ${{ steps.public-base-image.outputs.base_image }}
           PUBLIC_SOURCE: ${{ steps.public-base-image.outputs.source }}
@@ -266,9 +291,11 @@ jobs:
             echo "Overriding BASE_IMAGE with $PUBLIC_BASE_IMAGE"
             echo "Source: $PUBLIC_SOURCE (canonical fallback)"
             docker build --build-arg "BASE_IMAGE=$PUBLIC_BASE_IMAGE" \
+              --build-arg "SUPPORTED_MLFLOW_VERSION_OVERRIDE=$SUPPORTED_MLFLOW_VERSION_OVERRIDE" \
               -f "$DOCKERFILE" -t "$OPERATOR_RUNTIME_IMAGE" .
           else
-            docker build -f "$DOCKERFILE" -t "$OPERATOR_RUNTIME_IMAGE" .
+            docker build --build-arg "SUPPORTED_MLFLOW_VERSION_OVERRIDE=$SUPPORTED_MLFLOW_VERSION_OVERRIDE" \
+              -f "$DOCKERFILE" -t "$OPERATOR_RUNTIME_IMAGE" .
           fi
           docker save -o "operator-image/${OPERATOR_RUNTIME_ARTIFACT}.tar" "$OPERATOR_RUNTIME_IMAGE"
 
@@ -281,6 +308,7 @@ jobs:
           if-no-files-found: error
 
   build-mlflow-tests-image:
+    needs: build-mlflow-runtime-image
     permissions:
       contents: read
     runs-on: ubuntu-latest
@@ -293,7 +321,13 @@ jobs:
           persist-credentials: false
 
       - name: Build MLflow tests image archive
+        env:
+          MLFLOW_VERSION_OVERRIDE: ${{ needs.build-mlflow-runtime-image.outputs.version_override }}
         run: |
+          # This checkout is only an image-build context; shipped defaults stay unchanged.
+          if [[ -n "$MLFLOW_VERSION_OVERRIDE" ]]; then
+            sed -i -E "s/^(    version: ).*/\1v${MLFLOW_VERSION_OVERRIDE}/" config/component_metadata.yaml
+          fi
           mkdir -p test-image
           docker build -f mlflow-tests/images/Dockerfile.konflux -t "$MLFLOW_TESTS_RUNTIME_IMAGE" .
           docker save -o "test-image/${MLFLOW_TESTS_RUNTIME_ARTIFACT}.tar" "$MLFLOW_TESTS_RUNTIME_IMAGE"

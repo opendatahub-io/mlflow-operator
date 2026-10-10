@@ -725,6 +725,14 @@ For API and code-generation changes, use `make generate` and `make manifests`. T
 
 ## Testing
 
+The integration workflow temporarily selects ODH's
+`db-optimization/mlflow-openshift-scale-testing` runtime branch through
+`MLFLOW_ODH_SOURCE_REF`. CI reads the built runtime version and aligns only
+its operator and test images; checked-in release defaults stay unchanged.
+Before merging, restore that setting to `master` after the MLflow 3.17 rebase
+and normal release-version alignment. This also disables the temporary CI
+version overrides. Explicit reusable-workflow inputs retain precedence.
+
 MLflow coverage is split between:
 
 - Go end-to-end tests in `test/e2e/`, including the `MLflowOperator` handoff lifecycle and the operator-managed upgrade flow
