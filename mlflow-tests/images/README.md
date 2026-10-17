@@ -18,11 +18,16 @@ then exercising experiment, model, and artifact operations as users with varying
 
 On generic Kubernetes, the harness port-forwards the MLflow service to `localhost:8443` so the test
 client can reach it from your machine. On OpenShift, it instead uses the MLflow CR `status.url`
-gateway address by default. Set `FORCE_PORT_FORWARD=true` if you need the old localhost path on
-OpenShift as well.
+gateway address by default when reusing an installed operator. When the harness deploys
+the operator itself without Gateway validation, it defaults to port-forwarding because
+the standalone overlay has no real Gateway URL. Explicit `FORCE_PORT_FORWARD=true` or
+`false` overrides this selection.
 
 ```bash
 cd mlflow-tests
+
+# Reuse the operator already installed by RHOAI or ODH for these examples
+export SKIP_OPERATOR=true
 
 # Full run: deploys MLflow, runs tests, cleans up
 bash images/test-run.sh
@@ -144,15 +149,25 @@ checks, and garbage-collection checks. Otherwise, these clients follow
 
 ### Operator / OpenShift
 
+The harness deploys the operator from the test image's manifests by default on both
+Kubernetes and OpenShift. Set `SKIP_OPERATOR=true` when using an operator already
+installed by RHOAI or ODH, regardless of its OLM version. Set `SKIP_DEPLOYMENT=true`
+to reuse the existing MLflow instance as well. Direct split-server suites refresh
+harness-owned operator configuration between backends so persisted artifact URLs
+match the active port-forward. Explicit `SKIP_OPERATOR=true` always preserves the
+installed operator.
+
+CSV-based manifest injection has been retired. `DEPLOY_MLFLOW_OPERATOR=false` is
+accepted for compatibility with existing environments; other nonempty values fail
+with migration guidance and a harness JUnit report. Remove `MLFLOW_OPERATOR_OWNER`,
+`MLFLOW_OPERATOR_REPO`, and `MLFLOW_OPERATOR_BRANCH` from old configurations; these
+manifest-download settings are no longer used.
+
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `DEPLOY_MLFLOW_OPERATOR` | `false` | Set to `true` on OpenShift/OLM clusters to patch the CSV instead of deploying via kustomize. |
-| `MLFLOW_OPERATOR_OWNER` | `opendatahub-io` | GitHub owner for CSV manifest download. |
-| `MLFLOW_OPERATOR_REPO` | `mlflow-operator` | GitHub repo name for CSV manifest download. |
-| `MLFLOW_OPERATOR_BRANCH` | `main` | Branch to pull manifests from for CSV patching. |
 | `INFRASTRUCTURE_PLATFORM` | _(auto)_ | Infrastructure overlay: `base` or `openshift`. When unset, the harness inspects `route.openshift.io` and selects `openshift` only if route resources are actually present; otherwise it uses `base`. |
-| `FORCE_PORT_FORWARD` | `false` | Force the harness to port-forward the MLflow service to `localhost:8443` even on OpenShift, instead of using the MLflow CR `status.url`. |
-| `ARTIFACTS_SERVER` | `false` | Enable the dedicated artifact Deployment. Requires PostgreSQL backend/registry stores, one or more `file`, `s3`, or `externals3` backends, and the `HTTPRoute` CRD. Generic Kubernetes normally uses a direct Service port-forward on `localhost:8444`; its split S3 GC row persists the in-cluster artifact Service DNS name and uses the Service TLS port instead. |
+| `FORCE_PORT_FORWARD` | _(auto)_ | On OpenShift, defaults to `true` when deploying the operator without Gateway validation, and `false` when reusing an installed operator or MLflow instance. Explicit `true` selects localhost port-forwarding; explicit `false` selects `status.url`. Gateway validation requires public routing. |
+| `ARTIFACTS_SERVER` | `false` | Enable the dedicated artifact Deployment. Requires PostgreSQL backend/registry stores, one or more `file`, `s3`, or `externals3` backends, and the `HTTPRoute` CRD. Direct access uses an artifact Service port-forward on `localhost:8444`; Both `s3` and `externals3` runs persist the artifact Service DNS name on port 8443 so in-cluster GC can reach it, with tracking forwarded on port 8442. |
 | `ARTIFACTS_SERVER_GATEWAY` | `false` | Also require live OpenShift Gateway acceptance and run tracking-relative rewrite assertions. |
 
 ### Skip / control flags

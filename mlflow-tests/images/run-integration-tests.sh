@@ -71,20 +71,21 @@ if [ -n "${PYTEST_MARK_EXPRESSION:-}" ]; then
 fi
 
 docker_args=(--rm --network host)
+hostname_backends="$(printf '%s\n' "$ARTIFACT_BACKENDS" | tr ',' '\n' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//' | paste -sd, -)"
 # MLflow signs SeaweedFS URLs with its in-cluster service endpoint. test-run.sh
 # port-forwards that service to the runner, so make the exact signed-URL host
 # resolve to the runner loopback from this host-networked test container.
-if [[ ",${ARTIFACT_BACKENDS}," == *,s3,* ]]; then
+if [[ ",${hostname_backends}," == *,s3,* ]]; then
   docker_args+=(
     --add-host "minio-service.${NAMESPACE}.svc.cluster.local:127.0.0.1"
   )
 fi
-# The split S3 GC row persists the artifact Service DNS name so the GC Job can
+# Split s3/externals3 runs persist the artifact Service DNS name so the GC Job can
 # use it in-cluster. Map that same name to the host-side port-forward for the
 # host-networked external test container.
 if [ "${ARTIFACTS_SERVER:-false}" = "true" ] && \
    [ "${ARTIFACTS_SERVER_GATEWAY:-false}" != "true" ] && \
-   [[ ",${ARTIFACT_BACKENDS}," == *,s3,* ]]; then
+   [[ ",${hostname_backends}," == *,s3,* || ",${hostname_backends}," == *,externals3,* ]]; then
   docker_args+=(
     --add-host "mlflow-artifacts.${NAMESPACE}.svc:127.0.0.1"
   )
@@ -123,7 +124,6 @@ set +e
 docker run "${docker_args[@]}" \
   -v "$HOME/.kube:/mlflow/.kube:ro,z" \
   -v "$(cd "$results_dir" && pwd):/mlflow/results:z" \
-  -e DEPLOY_MLFLOW_OPERATOR=false \
   -e NAMESPACE="$NAMESPACE" \
   -e MLFLOW_OPERATOR_IMAGE="$OPERATOR_RUNTIME_IMAGE" \
   -e MLFLOW_IMAGE="$MLFLOW_RUNTIME_IMAGE" \

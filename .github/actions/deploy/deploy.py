@@ -288,29 +288,35 @@ class MLflowDeployer:
             base_params_env, "MLFLOW_OPERATOR_IMAGE", self.args.mlflow_operator_image,
             f"Setting operator image to {self.args.mlflow_operator_image}",
         )
-        if self.args.mlflow_url:
-            # The Kind overlay re-bakes this into the operator Deployment. Updating
-            # the ConfigMap alone leaves MLFLOW_URL at the config/base placeholder.
-            self._set_env_file_value(
-                base_params_env, "mlflow-url", self.args.mlflow_url,
-                f"Setting external MLflow URL to {self.args.mlflow_url}",
+        original_params = base_params_env.read_bytes() if self.args.mlflow_url else None
+        try:
+            if self.args.mlflow_url:
+                # The Kind overlay re-bakes this into the operator Deployment. Updating
+                # the ConfigMap alone leaves MLFLOW_URL at the config/base placeholder.
+                self._set_env_file_value(
+                    base_params_env, "mlflow-url", self.args.mlflow_url,
+                    f"Setting external MLflow URL to {self.args.mlflow_url}",
+                )
+
+            # Generate TLS certificates before building with kustomize
+            self.generate_tls_certificates()
+
+            # Use the kind overlay with proper environment setup
+            kind_overlay = self.ci_test_infra_path("overlays", "kind")
+
+            quoted_repo_root = shlex.quote(str(self.repo_root))
+            quoted_namespace = shlex.quote(self.args.namespace)
+            quoted_kind_overlay = shlex.quote(str(kind_overlay))
+            cmd = (
+                f"cd {quoted_repo_root} && "
+                f"export NAMESPACE={quoted_namespace} && "
+                f"kustomize build {quoted_kind_overlay} | envsubst | kubectl apply -f -"
             )
-
-        # Generate TLS certificates before building with kustomize
-        self.generate_tls_certificates()
-
-        # Use the kind overlay with proper environment setup
-        kind_overlay = self.ci_test_infra_path("overlays", "kind")
-
-        quoted_repo_root = shlex.quote(str(self.repo_root))
-        quoted_namespace = shlex.quote(self.args.namespace)
-        quoted_kind_overlay = shlex.quote(str(kind_overlay))
-        cmd = (
-            f"cd {quoted_repo_root} && "
-            f"export NAMESPACE={quoted_namespace} && "
-            f"kustomize build {quoted_kind_overlay} | envsubst | kubectl apply -f -"
-        )
-        self.run_command(cmd, "Deploying MLflow operator")
+            self.run_command(cmd, "Deploying MLflow operator")
+        finally:
+            # Direct-access URLs must not leak into subsequent Gateway deployments.
+            if original_params is not None:
+                base_params_env.write_bytes(original_params)
 
         # Wait for operator to be ready (now in the correct namespace)
         print("⏳ Waiting for MLflow operator to be ready...")
