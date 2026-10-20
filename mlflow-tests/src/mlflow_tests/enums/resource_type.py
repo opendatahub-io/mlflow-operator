@@ -19,6 +19,9 @@ class ResourceType(Enum):
     # MCP Server Registry resources
     MCP_SERVERS = "mcpservers"
 
+    # Skill Registry resources
+    SKILLS = "skills"
+
     # MLflow Gateway resources (for model serving and inference)
     GATEWAY_SECRETS = "gatewaysecrets"
     GATEWAY_ENDPOINTS = "gatewayendpoints"
