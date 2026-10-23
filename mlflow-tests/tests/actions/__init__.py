@@ -28,6 +28,15 @@ from .mcp_actions import (
     action_update_mcp_access_endpoint,
     action_delete_mcp_access_endpoint,
 )
+from .skill_actions import (
+    action_create_skill_shell,
+    action_get_skill,
+    action_search_skills,
+    action_update_skill,
+    action_delete_skill,
+    action_register_local_skill,
+    action_read_skill_artifact,
+)
 from .artifact_actions import (
     action_start_run,
     action_end_run,
@@ -77,6 +86,13 @@ __all__ = [
     "action_search_mcp_access_endpoints",
     "action_update_mcp_access_endpoint",
     "action_delete_mcp_access_endpoint",
+    "action_create_skill_shell",
+    "action_get_skill",
+    "action_search_skills",
+    "action_update_skill",
+    "action_delete_skill",
+    "action_register_local_skill",
+    "action_read_skill_artifact",
     "action_start_run",
     "action_end_run",
     "action_create_temp_artifact",

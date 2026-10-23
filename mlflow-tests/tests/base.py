@@ -87,7 +87,10 @@ class TestBase:
     def init_clients(self, setup_clients):
         """Initialize instance attributes from session-scoped clients."""
         self.admin_client, self.k8_manager, self.user_manager, self.workspaces = setup_clients
-        self.test_context = TestContext(workspaces=self.workspaces)
+        self.test_context = TestContext(
+            workspaces=self.workspaces,
+            admin_client=self.admin_client,
+        )
 
     @pytest.fixture(autouse=True)
     def init_experiments_and_runs(self, create_experiments_and_runs):
@@ -293,6 +296,50 @@ class TestBase:
                             cleanup_errors.append(error_msg)
                 except Exception as e:
                     error_msg = f"Failed to delete MCP server {server_name} in workspace {workspace}: {e}"
+                    logger.warning(error_msg)
+                    cleanup_errors.append(error_msg)
+
+        # Cleanup Skills with workspace awareness
+        if self.test_context.skills_to_delete:
+            logger.info(f"Cleaning up {len(self.test_context.skills_to_delete)} Skills")
+            for (organization, skill_name), workspace in self.test_context.skills_to_delete.items():
+                try:
+                    if not self._switch_workspace(workspace, cleanup_errors):
+                        continue
+
+                    try:
+                        skill = self.admin_client.get_skill(
+                            name=skill_name,
+                            organization=organization,
+                        )
+                        if skill:
+                            self.admin_client.delete_skill(
+                                name=skill_name,
+                                organization=organization,
+                            )
+                            logger.info(
+                                f"Deleted Skill {skill_name} in workspace {workspace}"
+                            )
+                    except Exception as get_error:
+                        if (
+                            "RESOURCE_DOES_NOT_EXIST" in str(get_error)
+                            or "does not exist" in str(get_error).lower()
+                        ):
+                            logger.debug(
+                                f"Skill {skill_name} already deleted or not found"
+                            )
+                        else:
+                            error_msg = (
+                                f"Failed to check Skill {skill_name} "
+                                f"in workspace {workspace}: {get_error}"
+                            )
+                            logger.warning(error_msg)
+                            cleanup_errors.append(error_msg)
+                except Exception as e:
+                    error_msg = (
+                        f"Failed to delete Skill {skill_name} "
+                        f"in workspace {workspace}: {e}"
+                    )
                     logger.warning(error_msg)
                     cleanup_errors.append(error_msg)
 
@@ -543,6 +590,10 @@ class TestBase:
             logger.debug("No test steps to execute")
             return
 
+        # Keep validators that need privileged verification in sync with the
+        # freshly authenticated admin client.
+        self.test_context.admin_client = self.admin_client
+
         # Handle both single TestStep and list of TestSteps
         test_steps = test_data.test_steps if isinstance(test_data.test_steps, list) else [test_data.test_steps]
         logger.info(f"Executing {len(test_steps)} test step(s)")
@@ -637,6 +688,8 @@ class TestBase:
                 "validate_authentication_denied",
                 "validate_authentication_denied_or_resource_not_found",
                 "validate_mcp_access_endpoint_deleted",
+                "validate_skill_artifact_registration_unavailable",
+                "validate_skill_deleted",
             }
         ):
 

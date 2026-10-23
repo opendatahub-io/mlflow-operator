@@ -25,6 +25,17 @@ from .mcp_validations import (
     validate_mcp_access_endpoint_search_excludes_other_workspace,
     validate_mcp_access_endpoint_updated,
 )
+from .skill_validations import (
+    validate_skill_created,
+    validate_skill_artifact_read,
+    validate_skill_artifact_registered,
+    validate_skill_artifact_registration_unavailable,
+    validate_skill_deleted,
+    validate_skill_retrieved,
+    validate_skill_search_includes_active_skill,
+    validate_skill_search_excludes_other_workspace,
+    validate_skill_updated,
+)
 from .artifact_validations import (
     validate_artifact_logged,
     validate_artifact_downloaded,
@@ -74,6 +85,15 @@ __all__ = [
     "validate_mcp_access_endpoint_retrieved",
     "validate_mcp_access_endpoint_search_excludes_other_workspace",
     "validate_mcp_access_endpoint_updated",
+    "validate_skill_created",
+    "validate_skill_retrieved",
+    "validate_skill_artifact_read",
+    "validate_skill_artifact_registered",
+    "validate_skill_artifact_registration_unavailable",
+    "validate_skill_deleted",
+    "validate_skill_search_includes_active_skill",
+    "validate_skill_search_excludes_other_workspace",
+    "validate_skill_updated",
     "validate_artifact_logged",
     "validate_artifact_downloaded",
     "validate_model_logged",
