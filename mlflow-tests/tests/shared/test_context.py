@@ -27,6 +27,7 @@ class TestContext:
         active_model_name: Currently active registered model name
         models_to_delete: Map of model_name -> workspace for cleanup
         active_user: Currently active user
+        admin_client: MLflow client authenticated with administrator credentials
         user_client: MLflow client authenticated with current user credentials
         users_to_delete: List of users to delete (users are global, not workspace-scoped)
         resource_map: Shared resource map from fixtures
@@ -41,6 +42,7 @@ class TestContext:
         model: Created or loaded model object
         model_uri: URI of logged model
         active_trace: Retrieved MLflow trace object
+        active_skill_description: Skill description returned by the last retrieval
         artifact_location: Artifact storage URI from run info
         expected_artifact_bucket: Expected S3 bucket name for custom artifact location
         expected_artifact_path: Expected relative path within bucket for custom artifacts
@@ -61,11 +63,21 @@ class TestContext:
     active_mcp_server_name: Optional[str] = None
     mcp_servers_to_delete: dict[str, str] = field(default_factory=dict)
     active_mcp_server_version: Optional[str] = None
+    active_skill_name: Optional[str] = None
+    active_skill_organization: Optional[str] = None
+    active_skill_version: Optional[int] = None
+    active_skill_source: Optional[Any] = None
+    active_skill_description: Optional[str] = None
+    active_skill_artifact_content: Optional[str] = None
+    expected_skill_artifact_content: Optional[str] = None
+    skills_to_delete: dict[tuple[str, str], str] = field(default_factory=dict)
+    skill_search_results: Optional[list[Any]] = None
     active_mcp_access_endpoint_id: Optional[str] = None
     active_mcp_access_endpoint: Optional[Any] = None
     mcp_server_search_results: Optional[list] = None
     mcp_access_endpoint_search_results: Optional[list] = None
     active_user: Optional[UserInfo] = None
+    admin_client: Optional[MlflowClient] = None
     user_client: Optional[MlflowClient] = None
     users_to_delete: list[UserInfo] = field(default_factory=list)
     resource_map: dict[ResourceType, dict[str, dict[str, dict[str, str]]]] = field(default_factory=dict)
@@ -177,6 +189,32 @@ class TestContext:
         self.mcp_servers_to_delete[server_name.strip()] = workspace.strip()
         logger.info(f"Added MCP server {server_name} in workspace '{workspace}' to cleanup list (total: {len(self.mcp_servers_to_delete)})")
 
+    def add_skill_for_cleanup(
+        self, name: str, workspace: str, organization: str = ""
+    ) -> None:
+        """Add a Skill parent to the cleanup list with workspace context.
+
+        Args:
+            name: Skill name.
+            workspace: Workspace where the Skill exists.
+            organization: Optional Skill organization.
+
+        Raises:
+            ValueError: If name or workspace is empty.
+        """
+        if not name or not name.strip():
+            logger.error("Attempted to add Skill for cleanup with empty name")
+            raise ValueError("name cannot be empty")
+        if not workspace or not workspace.strip():
+            logger.error("Attempted to add Skill for cleanup with empty workspace")
+            raise ValueError("workspace cannot be empty")
+
+        identity = (organization.strip(), name.strip())
+        self.skills_to_delete[identity] = workspace.strip()
+        logger.info(
+            f"Added Skill {identity} in workspace '{workspace}' to cleanup list"
+        )
+
     def add_user_for_cleanup(self, user_info: UserInfo) -> None:
         """Add a user to the cleanup list.
 
@@ -270,4 +308,3 @@ class TestContext:
         if not name or not name.strip():
             raise ValueError("namespace name cannot be empty")
         self.namespaces_to_delete.add(name.strip())
-

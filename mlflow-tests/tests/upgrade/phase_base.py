@@ -6,6 +6,7 @@ import mlflow
 import pytest
 
 from ..base import TestBase
+from .actions import cleanup_upgrade_skills
 from .utils import get_upgrade_test_workspace
 
 
@@ -21,6 +22,11 @@ class UpgradePhaseBase(TestBase):
         self.test_context.workspaces = [UPGRADE_TEST_WORKSPACE]
         self.test_context.active_workspace = UPGRADE_TEST_WORKSPACE
         mlflow.set_workspace(self.test_context.active_workspace)
+
+    @pytest.fixture(autouse=True)
+    def cleanup_upgrade_scenario_skills(self, configure_upgrade_admin_context):
+        yield
+        cleanup_upgrade_skills(self.test_context, self.admin_client)
 
     def reset_upgrade_state(self) -> None:
         """Reset the mutable upgrade state before running an upgrade scenario."""

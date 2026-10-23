@@ -154,3 +154,17 @@ PROMPTS_STATE = {
         },
     ],
 }
+
+# The Skill Registry did not exist in 3.10, so nothing is seeded before the upgrade. The
+# post-upgrade phase creates this state on the migrated database and removes it again.
+SKILL_REGISTRY_STATE = {
+    "name_prefix": "upgrade-skill",
+    "description": "Skill registered after upgrading a pre-registry deployment",
+    "skill_tags": {"upgrade-tag-key": "upgrade-tag-value"},
+    "version_tags": {"upgrade-version-tag-key": "upgrade-version-tag-value"},
+    "alias": "production",
+    "versions": [
+        {"body": "# Upgrade test Skill\n\nVersion 1 instructions.\n"},
+        {"body": "# Upgrade test Skill\n\nVersion 2 instructions.\n"},
+    ],
+}

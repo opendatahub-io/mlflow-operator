@@ -197,3 +197,67 @@ def validate_upgrade_mcp_servers(test_context: TestContext) -> None:
         f"Access endpoint for MCP server '{case['name']}' transport_type mismatch: "
         f"expected '{endpoint_payload['transport_type']}', got '{endpoint.transport_type}'"
     )
+
+
+def validate_upgrade_skill_registry(test_context: TestContext) -> None:
+    """Validate that the Skill Registry works on the migrated database."""
+    case = _require_case_payload(test_context, "skill_registry")
+    observed = test_context.upgrade_observed_state
+    registered = observed.get("registered_skill_versions")
+    # The Skill name is unique per run, so registration must create versions 1..N in order.
+    # Checking the numbers directly keeps a registration that reuses a version from passing.
+    expected_versions = list(range(1, len(case["versions"]) + 1))
+    observed_versions = [entry["version"] for entry in registered or []]
+    assert observed_versions == expected_versions, (
+        f"Expected registered Skill versions {expected_versions}, got {observed_versions}"
+    )
+    first, last = registered[0], registered[-1]
+    for entry in registered:
+        assert entry["digest"], f"Skill version {entry['version']} was registered without a digest"
+
+    skill = observed["skill"]
+    assert skill["description"] == case["description"], (
+        f"Skill description mismatch: expected '{case['description']}', got '{skill['description']}'"
+    )
+    for key, value in case["skill_tags"].items():
+        assert skill["tags"].get(key) == value, (
+            f"Skill tag '{key}' mismatch: expected '{value}', got '{skill['tags'].get(key)}'"
+        )
+    assert skill["aliases"] == {case["alias"]: first["version"]}, (
+        f"Skill aliases mismatch: expected {{'{case['alias']}': {first['version']}}}, got {skill['aliases']}"
+    )
+    assert skill["latest_version"] == last["version"], (
+        f"Skill latest_version mismatch: expected {last['version']}, got {skill['latest_version']}"
+    )
+    assert observed["latest_skill_version"] == last["version"], (
+        f"Latest Skill version mismatch: expected {last['version']}, got {observed['latest_skill_version']}"
+    )
+
+    by_alias = observed["skill_version_by_alias"]
+    assert by_alias["version"] == first["version"], (
+        f"Alias '{case['alias']}' resolved to version {by_alias['version']}, expected {first['version']}"
+    )
+    assert by_alias["digest"] == first["digest"], (
+        f"Alias '{case['alias']}' digest mismatch: expected '{first['digest']}', got '{by_alias['digest']}'"
+    )
+    for key, value in case["version_tags"].items():
+        assert by_alias["tags"].get(key) == value, (
+            f"Skill version tag '{key}' mismatch: expected '{value}', got '{by_alias['tags'].get(key)}'"
+        )
+
+    assert observed["skill_found_in_search"], "Registered Skill was not returned by search_skills"
+    assert observed["pulled_skill_markdown"] == first["skill_markdown"], (
+        f"Pulled SKILL.md for alias '{case['alias']}' does not match the content registered as version "
+        f"{first['version']}"
+    )
+    assert observed["pulled_skill_digest"] == first["digest"], (
+        f"Pulled content digest mismatch: expected '{first['digest']}', got '{observed['pulled_skill_digest']}'"
+    )
+
+
+def validate_upgrade_skill_deleted(test_context: TestContext) -> None:
+    """Validate that the hard-deleted upgrade Skill can no longer be read."""
+    exists = test_context.upgrade_observed_state.get("skill_exists_after_delete")
+    assert exists is False, (
+        f"Expected the upgrade Skill to be gone after delete_skill, observed exists={exists}"
+    )
