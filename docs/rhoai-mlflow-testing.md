@@ -66,6 +66,15 @@ markers:
 - `pre-upgrade -> -m pre_upgrade`
 - `post-upgrade -> -m post_upgrade`
 
+When testing an installed RHOAI/ODH operator, set `SKIP_OPERATOR=true` in the
+container environment. This works independently of the OLM version and preserves
+gateway readiness checks. Harness-deployed operators on OpenShift default to
+port-forwarding unless Gateway validation is requested or `FORCE_PORT_FORWARD`
+is explicitly set. CSV-based
+manifest injection has been retired; legacy `DEPLOY_MLFLOW_OPERATOR=false`
+settings remain accepted, while requests to enable injection fail with a config
+JUnit report. See the [harness configuration](../mlflow-tests/images/README.md).
+
 That same component definition also carries the RHOAI upgrade-phase overrides
 used by Jenkins shift-left upgrade runs:
 

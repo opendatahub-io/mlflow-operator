@@ -125,6 +125,9 @@ def test_kind_operator_deployment_applies_mlflow_url_override(tmp_path: Path) ->
         mlflow_url="https://localhost:8444",
     )
     deployer.repo_root = tmp_path
+    params = tmp_path / "overlays/kind/params.env"
+    params.parent.mkdir(parents=True)
+    params.write_text("mlflow-url=https://configured-gateway.example\n")
     updates = []
     deployer.ci_test_infra_path = lambda *parts: tmp_path.joinpath(*parts)
     deployer._set_env_file_value = (
