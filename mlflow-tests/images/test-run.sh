@@ -181,17 +181,20 @@ JUNIT_SUITE_NAME="mlflow-e2e"
 for ((i=0; i<${#PYTEST_ARGS[@]}; i++)); do
     arg="${PYTEST_ARGS[$i]}"
     mark_expr=""
-    if [[ "$arg" == *junit_suite_name=* ]]; then
-        JUNIT_SUITE_NAME="${arg#*junit_suite_name=}"
-        JUNIT_SUITE_NAME="${JUNIT_SUITE_NAME%% *}"
-    elif [ "$arg" = "-o" ]; then
-        next_index=$((i + 1))
-        if [ "$next_index" -lt "${#PYTEST_ARGS[@]}" ]; then
-            next_opt="${PYTEST_ARGS[$next_index]}"
-            if [[ "$next_opt" == junit_suite_name=* ]]; then
-                JUNIT_SUITE_NAME="${next_opt#junit_suite_name=}"
+    next_opt=""
+    case "$arg" in
+        -o|--override-ini)
+            next_index=$((i + 1))
+            if [ "$next_index" -lt "${#PYTEST_ARGS[@]}" ]; then
+                next_opt="${PYTEST_ARGS[$next_index]}"
             fi
-        fi
+            ;;
+        -ojunit_suite_name=*) next_opt="${arg#-o}" ;;
+        -o=junit_suite_name=*) next_opt="${arg#-o=}" ;;
+        --override-ini=junit_suite_name=*) next_opt="${arg#--override-ini=}" ;;
+    esac
+    if [[ "$next_opt" == junit_suite_name=* ]]; then
+        JUNIT_SUITE_NAME="${next_opt#junit_suite_name=}"
     fi
     if [[ "$arg" == -m=* ]]; then
         mark_expr="${arg#-m=}"
@@ -841,28 +844,30 @@ wait_for_mlflow_server_info() {
     local body_file="${debug_dir}/server-info-last-body.txt"
     local err_file="${debug_dir}/server-info-last-stderr.txt"
     local http_code=""
+    local curl_rc=0
     local err_preview body_preview
     mkdir -p "$debug_dir"
 
     echo "  Waiting for MLflow server-info endpoint at $api_url..."
     while true; do
+        curl_rc=0
         http_code="$(curl -skS --connect-timeout 5 --max-time 5 \
             -H "Authorization: Bearer ${kube_token}" \
-            -o "$body_file" -w "%{http_code}" "$api_url" 2>"$err_file" || true)"
+            -o "$body_file" -w "%{http_code}" "$api_url" 2>"$err_file")" || curl_rc=$?
         [ -n "$http_code" ] || http_code="000"
-        if [ "$http_code" = "200" ]; then
+        if [ "$curl_rc" -eq 0 ] && [ "$http_code" = "200" ]; then
             echo "  MLflow server-info endpoint is reachable (HTTP 200)"
             return 0
         fi
         retry=$((retry + 1))
         err_preview="$(tr '\n' ' ' < "$err_file" 2>/dev/null | head -c 180 || true)"
         body_preview="$(tr '\n' ' ' < "$body_file" 2>/dev/null | head -c 180 || true)"
-        echo "  Attempt $retry/$max_retries HTTP=${http_code} err=${err_preview:-none} body=${body_preview:-<empty>}"
+        echo "  Attempt $retry/$max_retries HTTP=${http_code} curl_exit=${curl_rc} err=${err_preview:-none} body=${body_preview:-<empty>}"
         if [ "$retry" -ge "$max_retries" ]; then
             echo "ERROR: MLflow server-info endpoint did not become reachable within timeout" >&2
             collect_debug_logs "server-info readiness failure"
             fail_suite "test_wait_for_mlflow_server_info" \
-                "MLflow server-info endpoint did not become reachable within timeout (url: ${api_url}, last_http=${http_code})"
+                "MLflow server-info endpoint did not become reachable within timeout (url: ${api_url}, last_http=${http_code}, last_curl_exit=${curl_rc})"
             return 1
         fi
         sleep 5

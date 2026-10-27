@@ -11,13 +11,17 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import socket
 from datetime import datetime, timezone
 from xml.etree.ElementTree import Element, ElementTree, SubElement
 
-
 DEFAULT_SUITE_NAME = "mlflow-e2e"
 DEFAULT_CLASSNAME = "tests.harness.TestHarnessSetup"
+# XML 1.0 permits tab, LF, CR, and these Unicode ranges (excluding surrogates).
+INVALID_XML_CHARS = re.compile(
+    r"[^\x09\x0A\x0D\x20-\uD7FF\uE000-\uFFFD\U00010000-\U0010FFFF]"
+)
 
 
 def harness_junit_path(results_dir: str, storage_type: str | None = None) -> str:
@@ -77,6 +81,11 @@ def write_harness_error_junit(
     )
     error = SubElement(testcase, "error", {"message": message})
     error.text = body if body is not None else message
+    for element in testsuites.iter():
+        for key, value in element.attrib.items():
+            element.set(key, INVALID_XML_CHARS.sub("\ufffd", value))
+        if element.text is not None:
+            element.text = INVALID_XML_CHARS.sub("\ufffd", element.text)
     ElementTree(testsuites).write(output, encoding="utf-8", xml_declaration=True)
     return True
 
