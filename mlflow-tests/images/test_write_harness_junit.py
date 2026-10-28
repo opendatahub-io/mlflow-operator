@@ -440,6 +440,24 @@ def test_artifacts_server_readiness_failure_writes_harness_junit(
         ({"CURL_STATUS": "200", "CURL_EXIT": "28", "UV_PYTEST_EXIT": "0"}, 1, True),
         ({"CURL_STATUS": "503", "UV_PYTEST_EXIT": "0"}, 1, True),
         ({"CURL_FAIL_ONCE": "true", "UV_PYTEST_EXIT": "0"}, 0, True),
+        (
+            {
+                "ARTIFACT_BACKENDS": "file,s3",
+                "UV_DEPLOY_FAIL_S3": "true",
+                "UV_PYTEST_EXIT": "0",
+            },
+            1,
+            True,
+        ),
+        (
+            {
+                "ARTIFACT_BACKENDS": "file,externals3",
+                "UV_DEPLOY_FAIL_S3": "true",
+                "UV_PYTEST_EXIT": "0",
+            },
+            1,
+            True,
+        ),
         ({"UV_DEPLOY_EXIT": "1"}, 1, True),
         ({"HARNESS_SIGNAL": "INT"}, 130, True),
         ({"HARNESS_SIGNAL": "TERM"}, 143, True),
@@ -488,6 +506,8 @@ def test_artifacts_server_readiness_failure_writes_harness_junit(
         "http-200-transfer-timeout",
         "http-503-successful-transfer",
         "successful-retry-after-transfer-timeout",
+        "s3-failure-after-file-success",
+        "external-s3-failure-after-file-success",
         "partial-deploy-failure",
         "interrupt",
         "terminate",
@@ -546,7 +566,7 @@ def test_last_suite_deletes_cluster_scoped_mlflow_cr(
                     shift
                 fi
             done
-            [ -z "$output_file" ] || printf '{}' > "$output_file"
+            [ -z "$output_file" ] || printf 'file storage response' > "$output_file"
             printf '%s' "${CURL_STATUS:-200}"
             if [ "${CURL_FAIL_ONCE:-false}" = true ] && [ ! -f "$TEST_RESULTS_DIR/curl-retried" ]; then
                 touch "$TEST_RESULTS_DIR/curl-retried"
@@ -563,8 +583,20 @@ def test_last_suite_deletes_cluster_scoped_mlflow_cr(
             """\
             #!/bin/sh
             case "$*" in
-                *deploy.py*) exit "${UV_DEPLOY_EXIT:-0}" ;;
+                *deploy.py*)
+                    if [ "${UV_DEPLOY_FAIL_S3:-false}" = true ]; then
+                        case "$*" in
+                            *"--artifact-storage s3"*|*"--artifact-storage externals3"*) exit 7 ;;
+                        esac
+                    fi
+                    exit "${UV_DEPLOY_EXIT:-0}"
+                    ;;
                 *pytest*)
+                    for arg in "$@"; do
+                        case "$arg" in
+                            --junit-xml=*) printf '<testsuites><testsuite name="pytest-original"/></testsuites>' > "${arg#*=}" ;;
+                        esac
+                    done
                     touch "$TEST_RESULTS_DIR/pytest-started"
                     if [ -n "${HARNESS_SIGNAL:-}" ]; then
                         trap 'echo child-stopped >> "$UV_LOG"; exit 0' TERM
@@ -604,9 +636,17 @@ def test_last_suite_deletes_cluster_scoped_mlflow_cr(
             "ARTIFACT_BACKENDS": "s3",
             "workspaces": "test-workspace",
             "UV_LOG": str(uv_log),
+            "AWS_ACCESS_KEY_ID": "test-key",
+            "AWS_SECRET_ACCESS_KEY": "test-secret",
+            "BUCKET": "test-bucket",
         }
     )
     env.update(overrides)
+    if "UV_DEPLOY_FAIL_S3" in overrides:
+        shared_debug = results_dir / "debug"
+        shared_debug.mkdir(parents=True)
+        (shared_debug / "server-info-last-body.txt").write_text("stale shared response")
+        (shared_debug / "failure-snapshot.txt").write_text("stale shared snapshot")
 
     result = subprocess.run(
         [bash, str(Path(__file__).with_name("test-run.sh"))],
@@ -633,11 +673,30 @@ def test_last_suite_deletes_cluster_scoped_mlflow_cr(
         assert (results_dir / "pytest-started").exists()
         assert "HTTP=200 curl_exit=28" in result.stdout
         assert "MLflow server-info endpoint is reachable (HTTP 200)" in result.stdout
+    if "UV_DEPLOY_FAIL_S3" in overrides:
+        storage = overrides["ARTIFACT_BACKENDS"].split(",")[-1]
+        current_debug = results_dir / "debug" / storage
+        assert (
+            results_dir / "debug/file/server-info-last-body.txt"
+        ).read_text() == "file storage response"
+        assert (current_debug / "namespaces.txt").exists()
+        snapshot = (current_debug / "failure-snapshot.txt").read_text()
+        case = (
+            parse(results_dir / f"xunit_report_{storage}.xml")
+            .getroot()
+            .find("./testsuite/testcase")
+        )
+        assert case.get("name") == "test_deploy"
+        for text in (snapshot, case.find("error").text):
+            assert "file storage response" not in text
+            assert "stale shared" not in text
+        assert (results_dir / "xunit_report_file.xml").exists()
     log_text = kubectl_log.read_text(encoding="utf-8") if kubectl_log.exists() else ""
     deletes = _mlflow_delete_commands(log_text)
     if expect_delete:
-        assert len(deletes) == 1, (
-            "expected exactly one MLflow CR deletion, kubectl log:\n"
+        expected_deletes = 2 if "UV_DEPLOY_FAIL_S3" in overrides else 1
+        assert len(deletes) == expected_deletes, (
+            f"expected {expected_deletes} MLflow CR deletions, kubectl log:\n"
             f"{log_text}\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
         )
         assert "--wait" in deletes[0]
@@ -645,7 +704,10 @@ def test_last_suite_deletes_cluster_scoped_mlflow_cr(
         assert "Deleting cluster-scoped MLflow CR mlflow" in result.stdout
         if expected_returncode != 0:
             log_lines = log_text.splitlines()
-            assert log_lines.index(deletes[0]) > next(
+            last_delete_index = max(
+                i for i, line in enumerate(log_lines) if line == deletes[-1]
+            )
+            assert last_delete_index > next(
                 i for i, line in enumerate(log_lines) if line == "get namespaces"
             ), "failure diagnostics must be collected before deleting the MLflow CR"
         if "HARNESS_SIGNAL" in overrides:
@@ -815,3 +877,4 @@ def test_bootstrap_report_preserves_suite_name(
     assert result.returncode == 1, result.stdout + result.stderr
     suite = parse(results_dir / "xunit_report.xml").getroot().find("testsuite")
     assert suite.get("name") == expected
+    assert (results_dir / "debug/bootstrap/failure-snapshot.txt").exists()

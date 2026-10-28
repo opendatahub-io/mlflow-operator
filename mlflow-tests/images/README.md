@@ -183,7 +183,7 @@ continue to use the environment flags and validate PostgreSQL deployment setting
 | `workspaces` | `workspace1-<random>,workspace2-<random>` | Comma-separated list of workspace namespaces to create and test against. |
 | `upgrade_test_workspace` | `mlflow-upgrade-test-workspace` | Static workspace namespace for upgrade pytest phases and their RBAC setup. |
 | `ARTIFACT_BACKENDS` | `file,s3` | Comma-separated artifact backends to run in sequence (`file`, `s3`, `externals3`). Upgrade pytest phases require exactly one value. |
-| `TEST_RESULTS_DIR` | `/mlflow/results` | Directory for JUnit XML output. Pytest writes `xunit_report_<storage>.xml` here; pre-pytest harness aborts write the same file so Jenkins still sees a failed `mlflow-e2e` testcase. A compact `debug/failure-snapshot.txt` is also copied into that JUnit error body. |
+| `TEST_RESULTS_DIR` | `/mlflow/results` | Directory for JUnit XML output. Pytest writes `xunit_report_<storage>.xml` here; pre-pytest harness aborts write the same file so Jenkins still sees a failed `mlflow-e2e` testcase. Diagnostics are kept under `debug/<storage>/` (or `debug/bootstrap/` before a backend is selected); `failure-snapshot.txt` is also copied into that JUnit error body. |
 | `DEPLOY_PY` | `<repo>/.github/actions/deploy/deploy.py` | Path to the deploy helper script. |
 
 ## Storage configuration
