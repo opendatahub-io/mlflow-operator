@@ -314,6 +314,13 @@ class TestSkillRegistryJourneys(TestBase):
                         validate_func=validate_authentication_denied,
                         workspace_to_use=TEAM_A_WORKSPACE,
                     ),
+                    # Team A's agent gets team A's Skill in its own workspace, not team B's.
+                    TestStep(
+                        action_func=action_pull_skill(),
+                        validate_func=validate_pulled_skill(CODE_REVIEW_V1),
+                        workspace_to_use=TEAM_A_WORKSPACE,
+                        user_info=_review_agent(TEAM_A_WORKSPACE),
+                    ),
                     # Team A's publisher deletes team A's Skill; team B's agent still gets team B's.
                     TestStep(
                         action_func=action_delete_skill,
