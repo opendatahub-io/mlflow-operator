@@ -578,7 +578,7 @@ class TestSkillRegistry(TestBase):
                     workspace_to_use=WORKSPACE,
                     test_steps=[
                         TestStep(
-                            action_func=action_register_local_skill,
+                            action_func=action_register_local_skill(),
                             validate_func=validate_skill_artifact_registered,
                             user_info=UserInfo(
                                 workspace=WORKSPACE,
@@ -602,7 +602,7 @@ class TestSkillRegistry(TestBase):
                     workspace_to_use=WORKSPACE,
                     test_steps=[
                         TestStep(
-                            action_func=action_register_local_skill,
+                            action_func=action_register_local_skill(),
                             validate_func=validate_skill_artifact_registered,
                             user_info=UserInfo(
                                 workspace=WORKSPACE,
@@ -625,7 +625,7 @@ class TestSkillRegistry(TestBase):
                     test_name="User with CREATE cannot register a local Skill without UPDATE",
                     workspace_to_use=WORKSPACE,
                     test_steps=TestStep(
-                        action_func=action_register_local_skill,
+                        action_func=action_register_local_skill(),
                         validate_func=validate_authentication_denied,
                         user_info=UserInfo(
                             workspace=WORKSPACE,
@@ -642,7 +642,7 @@ class TestSkillRegistry(TestBase):
                 test_name="Local Skill registration is unavailable without artifact serving",
                 workspace_to_use=WORKSPACE,
                 test_steps=TestStep(
-                    action_func=action_register_local_skill,
+                    action_func=action_register_local_skill(),
                     validate_func=validate_skill_artifact_registration_unavailable,
                     user_info=UserInfo(
                         workspace=WORKSPACE,

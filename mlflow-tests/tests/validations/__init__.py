@@ -35,6 +35,8 @@ from .skill_validations import (
     validate_skill_search_includes_active_skill,
     validate_skill_search_excludes_other_workspace,
     validate_skill_updated,
+    validate_pulled_skill,
+    validate_skill_versions,
 )
 from .artifact_validations import (
     validate_artifact_logged,
@@ -94,6 +96,8 @@ __all__ = [
     "validate_skill_search_includes_active_skill",
     "validate_skill_search_excludes_other_workspace",
     "validate_skill_updated",
+    "validate_pulled_skill",
+    "validate_skill_versions",
     "validate_artifact_logged",
     "validate_artifact_downloaded",
     "validate_model_logged",
