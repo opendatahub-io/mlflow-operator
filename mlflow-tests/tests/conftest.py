@@ -14,6 +14,7 @@ from mlflow_tests.manager.user import K8UserManager
 from mlflow_tests.utils.client import ClientManager
 from .constants.config import Config
 from .http_utils import (
+    check_mlflow_client_tls_compatibility,
     configure_ca_bundle_environment,
     get_requests_verify_value,
     get_s3_verify_value,
@@ -160,9 +161,9 @@ def setup_clients():
     # Configure TLS for tracking and artifact-storage clients.
     os.environ['MLFLOW_TRACKING_INSECURE_TLS'] = Config.DISABLE_TLS
     configure_ca_bundle_environment()
-    os.environ['MLFLOW_S3_IGNORE_TLS'] = str(
-        get_s3_verify_value(Config.S3_URL) is False
-    ).lower()
+    ignore_s3_tls = get_s3_verify_value(Config.S3_URL) is False
+    os.environ['MLFLOW_S3_IGNORE_TLS'] = str(ignore_s3_tls).lower()
+    check_mlflow_client_tls_compatibility(ignore_s3_tls=ignore_s3_tls)
     logger.debug("Configured TLS environment variables")
     if Config.ARTIFACT_STORAGE == "s3" and not Config.SERVE_ARTIFACTS:
         logger.debug("Set AWS Credentials because artifact store is s3 and server_artifacts=false")
