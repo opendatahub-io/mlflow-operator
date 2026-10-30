@@ -91,6 +91,23 @@ func TestConfigureTLSFromClientAPINotPresentUsesUnwatchedFallback(t *testing.T) 
 	}
 }
 
+func TestConfigureTLSFromClientUnregisteredAPIServerSchemeFailsClosed(t *testing.T) {
+	bootstrapClient := &countingReader{
+		Reader: fake.NewClientBuilder().WithScheme(runtime.NewScheme()).Build(),
+	}
+
+	result, err := configureTLSFromClient(context.Background(), bootstrapClient, logr.Discard())
+	if err == nil {
+		t.Fatal("configureTLSFromClient() error = nil, want unregistered APIServer scheme error")
+	}
+	if bootstrapClient.getCalls != 1 {
+		t.Fatalf("APIServer Get calls = %d, want 1", bootstrapClient.getCalls)
+	}
+	if len(result.Opts) != 0 {
+		t.Fatalf("TLS options = %d, want none when the APIServer scheme is unregistered", len(result.Opts))
+	}
+}
+
 func TestConfigureTLSFromClientEmptyCipherListAdherence(t *testing.T) {
 	scheme := runtime.NewScheme()
 	if err := configv1.Install(scheme); err != nil {
