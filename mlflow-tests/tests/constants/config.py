@@ -34,6 +34,13 @@ class Config:
         if workspace.strip()  # Filter out empty strings after stripping
     ]
 
+    @classmethod
+    def effective_serve_artifacts(cls) -> bool:
+        """Return whether MLflow serves artifacts, which local Skill registration requires."""
+        # File-backed storage requires MLflow artifact serving for local uploads, so deploy.py
+        # forces this setting to true when no dedicated artifact server is configured.
+        return cls.SERVE_ARTIFACTS or (cls.ARTIFACT_STORAGE == "file" and not cls.ARTIFACTS_SERVER)
+
     UPGRADE_SUPPORTED_VERSION: str = os.getenv("MLFLOW_TEST_SUPPORTED_VERSION", "").strip()
     UPGRADE_VERSION_CONFIGMAP_NAME: str = "mlflow-upgrade-test-version"
     UPGRADE_VERSION_CONFIGMAP_KEY: str = "pre_upgrade_version"

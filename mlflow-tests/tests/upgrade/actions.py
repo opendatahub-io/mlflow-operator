@@ -6,10 +6,13 @@ import logging
 import os
 import tempfile
 import time
+from pathlib import Path
 
 import mlflow
 from mlflow.entities.span import NO_OP_SPAN_TRACE_ID
 from mlflow.exceptions import MlflowException
+from mlflow.genai import OCISource
+from mlflow.genai.skill_content.digest import compute_tree_digest
 from mlflow.tracing.attachments import Attachment
 from mlflow.utils.workspace_utils import WORKSPACE_HEADER_NAME
 import requests
@@ -18,6 +21,7 @@ from ..constants.config import Config
 from ..http_utils import get_mlflow_base_uri, get_requests_verify_value
 from ..shared import TestContext
 from .utils import (
+    build_upgrade_skill_markdown,
     get_pre_upgrade_version_from_configmap,
     get_supported_upgrade_version_from_env,
     upsert_pre_upgrade_version_configmap,
@@ -425,3 +429,112 @@ def action_create_upgrade_mcp_access_endpoint(test_context: TestContext) -> None
         server_version=server_payload["version"],
     )
     test_context.upgrade_observed_state["mcp_access_endpoint_id"] = endpoint.id
+
+
+def _require_upgrade_skill_absent(test_context: TestContext, name: str) -> None:
+    try:
+        test_context.user_client.get_skill(name=name)
+        raise AssertionError(
+            f"Upgrade Skill '{name}' already exists in workspace "
+            f"'{test_context.active_workspace}'. Clean the static upgrade workspace before reseeding."
+        )
+    except MlflowException as exc:
+        if not _is_missing_resource_error(exc):
+            raise
+
+
+def action_register_upgrade_skill_versions(test_context: TestContext) -> None:
+    """Register each configured version of the static upgrade Skill from a local directory."""
+    payload = _require_upgrade_payload(test_context, "skill_registry")
+    name = payload["name"]
+    _require_upgrade_skill_absent(test_context, name)
+    registered = []
+    for version_payload in payload["versions"]:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            (Path(tmpdir) / "SKILL.md").write_text(
+                build_upgrade_skill_markdown(payload, version_payload), encoding="utf-8"
+            )
+            version = mlflow.genai.register_skill(source=tmpdir, name=name)
+        registered.append({"version": version.version, "digest": version.digest})
+        logger.info("Registered upgrade Skill '%s' version %s", name, version.version)
+    test_context.upgrade_observed_state["registered_skill_versions"] = registered
+
+
+def action_tag_and_alias_upgrade_skill(test_context: TestContext) -> None:
+    """Set the description, tags, and alias, pointing the alias at the first version."""
+    payload = _require_upgrade_payload(test_context, "skill_registry")
+    registered = test_context.upgrade_observed_state.get("registered_skill_versions")
+    if not registered:
+        raise ValueError("Upgrade Skill versions must be registered before tagging")
+    name = payload["name"]
+    first_version = registered[0]["version"]
+    client = test_context.user_client
+    client.update_skill(name=name, description=payload["description"])
+    for key, value in payload["skill_tags"].items():
+        client.set_skill_tag(name=name, key=key, value=value)
+    for key, value in payload["version_tags"].items():
+        client.set_skill_version_tag(name=name, version=first_version, key=key, value=value)
+    client.set_skill_alias(name=name, alias=payload["alias"], version=first_version)
+
+
+def action_collect_upgrade_skill_observations(test_context: TestContext) -> None:
+    """Read the upgrade Skill back through get, versions, alias, latest, search, and pull."""
+    payload = _require_upgrade_payload(test_context, "skill_registry")
+    name = payload["name"]
+    alias = payload["alias"]
+    client = test_context.user_client
+    observed = test_context.upgrade_observed_state
+
+    skill = client.get_skill(name=name)
+    observed["skill"] = {
+        "description": skill.description,
+        "tags": dict(skill.tags),
+        "aliases": dict(skill.aliases),
+        "latest_version": skill.latest_version,
+    }
+    observed["skill_version_digests"] = {
+        version.version: version.digest for version in client.search_skill_versions(name=name)
+    }
+    by_alias = client.get_skill_version_by_alias(name=name, alias=alias)
+    observed["skill_version_by_alias"] = {
+        "version": by_alias.version,
+        "digest": by_alias.digest,
+        "tags": dict(by_alias.tags),
+    }
+    observed["latest_skill_version"] = client.get_latest_skill_version(name=name).version
+    search_results = client.search_skills(include_skill_identities=[name])
+    observed["skill_found_in_search"] = any(result.name == name for result in search_results)
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        pulled = Path(mlflow.genai.pull(f"skills:/{name}@{alias}", destination=Path(tmpdir) / "pulled"))
+        observed["pulled_skill_markdown"] = (pulled / "SKILL.md").read_text(encoding="utf-8")
+        observed["pulled_skill_digest"] = compute_tree_digest(pulled)
+
+
+def action_register_upgrade_oci_skill_version(test_context: TestContext) -> None:
+    """Register the static OCI Skill version from its source metadata, without fetching the image."""
+    payload = _require_upgrade_payload(test_context, "skill_registry_oci")
+    name = payload["name"]
+    _require_upgrade_skill_absent(test_context, name)
+    version = test_context.user_client.create_skill_version(
+        name=name,
+        source=OCISource(image=payload["image"], subpath=payload["subpath"]),
+        digest=payload["digest"],
+    )
+    logger.info("Registered upgrade OCI Skill '%s' version %s", name, version.version)
+
+
+def action_collect_upgrade_oci_skill_versions(test_context: TestContext) -> None:
+    """Record the stored source metadata of each version of the static OCI Skill."""
+    payload = _require_upgrade_payload(test_context, "skill_registry_oci")
+    versions = test_context.user_client.search_skill_versions(name=payload["name"])
+    test_context.upgrade_observed_state["oci_skill_versions"] = [
+        {
+            "version": version.version,
+            "source_type": getattr(version.source_type, "value", version.source_type),
+            "image": getattr(version.source, "image", None),
+            "subpath": getattr(version.source, "subpath", None),
+            "digest": version.digest,
+        }
+        for version in versions
+    ]

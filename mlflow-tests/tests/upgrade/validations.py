@@ -9,7 +9,12 @@ import pytest
 
 from ..constants.config import Config
 from ..shared import TestContext
-from .utils import get_requested_upgrade_phase, normalize_mlflow_version
+from .utils import (
+    build_upgrade_skill_markdown,
+    compute_upgrade_skill_digest,
+    get_requested_upgrade_phase,
+    normalize_mlflow_version,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -197,3 +202,96 @@ def validate_upgrade_mcp_servers(test_context: TestContext) -> None:
         f"Access endpoint for MCP server '{case['name']}' transport_type mismatch: "
         f"expected '{endpoint_payload['transport_type']}', got '{endpoint.transport_type}'"
     )
+
+
+def _expected_upgrade_skill_versions(case: dict) -> list[dict]:
+    """Return each configured version's number, SKILL.md text, and content digest."""
+    expected = []
+    for number, version_payload in enumerate(case["versions"], start=1):
+        skill_markdown = build_upgrade_skill_markdown(case, version_payload)
+        expected.append(
+            {
+                "version": number,
+                "skill_markdown": skill_markdown,
+                "digest": compute_upgrade_skill_digest(skill_markdown),
+            }
+        )
+    return expected
+
+
+def validate_registered_upgrade_skill_versions(test_context: TestContext) -> None:
+    """Validate that seeding created versions 1..N with the expected content digests."""
+    case = _require_case_payload(test_context, "skill_registry")
+    expected = [
+        {"version": entry["version"], "digest": entry["digest"]}
+        for entry in _expected_upgrade_skill_versions(case)
+    ]
+    registered = test_context.upgrade_observed_state.get("registered_skill_versions")
+    assert registered == expected, f"Expected registered Skill versions {expected}, got {registered}"
+
+
+def validate_upgrade_skill_registry(test_context: TestContext) -> None:
+    """Validate the static upgrade Skill against its configured state."""
+    case = _require_case_payload(test_context, "skill_registry")
+    observed = test_context.upgrade_observed_state
+    expected = _expected_upgrade_skill_versions(case)
+    first, last = expected[0], expected[-1]
+
+    expected_digests = {entry["version"]: entry["digest"] for entry in expected}
+    assert observed["skill_version_digests"] == expected_digests, (
+        f"Skill versions mismatch: expected {expected_digests}, got {observed['skill_version_digests']}"
+    )
+
+    skill = observed["skill"]
+    assert skill["description"] == case["description"], (
+        f"Skill description mismatch: expected '{case['description']}', got '{skill['description']}'"
+    )
+    for key, value in case["skill_tags"].items():
+        assert skill["tags"].get(key) == value, (
+            f"Skill tag '{key}' mismatch: expected '{value}', got '{skill['tags'].get(key)}'"
+        )
+    assert skill["aliases"] == {case["alias"]: first["version"]}, (
+        f"Skill aliases mismatch: expected {{'{case['alias']}': {first['version']}}}, got {skill['aliases']}"
+    )
+    assert skill["latest_version"] == last["version"], (
+        f"Skill latest_version mismatch: expected {last['version']}, got {skill['latest_version']}"
+    )
+    assert observed["latest_skill_version"] == last["version"], (
+        f"Latest Skill version mismatch: expected {last['version']}, got {observed['latest_skill_version']}"
+    )
+
+    by_alias = observed["skill_version_by_alias"]
+    assert by_alias["version"] == first["version"], (
+        f"Alias '{case['alias']}' resolved to version {by_alias['version']}, expected {first['version']}"
+    )
+    assert by_alias["digest"] == first["digest"], (
+        f"Alias '{case['alias']}' digest mismatch: expected '{first['digest']}', got '{by_alias['digest']}'"
+    )
+    for key, value in case["version_tags"].items():
+        assert by_alias["tags"].get(key) == value, (
+            f"Skill version tag '{key}' mismatch: expected '{value}', got '{by_alias['tags'].get(key)}'"
+        )
+
+    assert observed["skill_found_in_search"], "Upgrade Skill was not returned by search_skills"
+    assert observed["pulled_skill_markdown"] == first["skill_markdown"], (
+        f"Pulled SKILL.md for alias '{case['alias']}' does not match version {first['version']}"
+    )
+    assert observed["pulled_skill_digest"] == first["digest"], (
+        f"Pulled content digest mismatch: expected '{first['digest']}', got '{observed['pulled_skill_digest']}'"
+    )
+
+
+def validate_upgrade_oci_skill_version(test_context: TestContext) -> None:
+    """Validate that the static OCI Skill version kept its source metadata and digest."""
+    case = _require_case_payload(test_context, "skill_registry_oci")
+    expected = [
+        {
+            "version": 1,
+            "source_type": "oci",
+            "image": case["image"],
+            "subpath": case["subpath"],
+            "digest": case["digest"],
+        }
+    ]
+    observed = test_context.upgrade_observed_state.get("oci_skill_versions")
+    assert observed == expected, f"OCI Skill versions mismatch: expected {expected}, got {observed}"

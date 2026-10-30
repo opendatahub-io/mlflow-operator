@@ -5,9 +5,11 @@ from __future__ import annotations
 from functools import lru_cache
 import logging
 from pathlib import Path
+import tempfile
 
 from kubernetes import client as k8s_client
 from kubernetes.client.rest import ApiException
+from mlflow.genai.skill_content.digest import compute_tree_digest
 from packaging.version import Version
 
 from mlflow_tests.utils.client import ClientManager
@@ -197,3 +199,18 @@ def should_run_versioned_test(path: str | Path, phase: str | None = None) -> boo
         return False
     effective = Version(effective_version)
     return effective >= Version(f"{minimum[0]}.{minimum[1]}")
+
+
+def build_upgrade_skill_markdown(payload: dict, version_payload: dict) -> str:
+    """Return the SKILL.md text that an upgrade Skill version is registered with."""
+    return (
+        f"---\nname: {payload['name']}\ndescription: {payload['description']}\n---\n"
+        f"{version_payload['body']}"
+    )
+
+
+def compute_upgrade_skill_digest(skill_markdown: str) -> str:
+    """Return the content digest of a Skill directory that holds only this SKILL.md."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        (Path(tmpdir) / "SKILL.md").write_text(skill_markdown, encoding="utf-8")
+        return compute_tree_digest(Path(tmpdir))

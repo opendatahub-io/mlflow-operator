@@ -11,6 +11,8 @@ from types import SimpleNamespace
 import pytest
 import yaml
 
+from tests.constants.config import Config
+
 
 _DEPLOY_PATH = (
     Path(__file__).parents[2] / ".github" / "actions" / "deploy" / "deploy.py"
@@ -252,3 +254,27 @@ def test_generated_s3_cr_only_enables_safe_trace_archival(
         assert mlflow_cr["spec"]["storage"]["accessModes"] == ["ReadWriteOnce"]
     else:
         assert "storage" not in mlflow_cr["spec"]
+
+
+@pytest.mark.parametrize(
+    ("serve_artifacts", "artifact_storage", "artifacts_server", "expected"),
+    [
+        (True, "s3", False, True),
+        (True, "file", True, True),
+        (False, "file", False, True),
+        (False, "file", True, False),
+        (False, "s3", False, False),
+    ],
+)
+def test_effective_serve_artifacts_follows_deploy_policy(
+    monkeypatch: pytest.MonkeyPatch,
+    serve_artifacts: bool,
+    artifact_storage: str,
+    artifacts_server: bool,
+    expected: bool,
+) -> None:
+    monkeypatch.setattr(Config, "SERVE_ARTIFACTS", serve_artifacts)
+    monkeypatch.setattr(Config, "ARTIFACT_STORAGE", artifact_storage)
+    monkeypatch.setattr(Config, "ARTIFACTS_SERVER", artifacts_server)
+
+    assert Config.effective_serve_artifacts() is expected
