@@ -155,19 +155,31 @@ func TestRenderChart_CABundle(t *testing.T) {
 	}
 
 	// Check init container exists for combining CA bundles
-	initContainers, _, _ := unstructured.NestedSlice(deployment.Object, "spec", "template", "spec", "initContainers")
-	if len(initContainers) == 0 {
-		t.Fatal("init containers not found - should have combine-ca-bundles init container")
+	initContainers, found, err := unstructured.NestedSlice(deployment.Object, "spec", "template", "spec", "initContainers")
+	if err != nil || !found || len(initContainers) == 0 {
+		t.Fatalf("initContainers missing/invalid: found=%v err=%v", found, err)
 	}
-	initContainer := initContainers[0].(map[string]interface{})
+	initContainer, ok := initContainers[0].(map[string]interface{})
+	if !ok {
+		t.Fatalf("initContainers[0] is not an object: %T", initContainers[0])
+	}
 	if initContainer["name"].(string) != "combine-ca-bundles" {
 		t.Errorf("init container name = %v, want combine-ca-bundles", initContainer["name"])
 	}
 
 	// Check all CA bundle-related env vars exist
-	containers, _, _ := unstructured.NestedSlice(deployment.Object, "spec", "template", "spec", "containers")
-	container := containers[0].(map[string]interface{})
-	envVars, _, _ := unstructured.NestedSlice(container, "env")
+	containers, found, err := unstructured.NestedSlice(deployment.Object, "spec", "template", "spec", "containers")
+	if err != nil || !found || len(containers) == 0 {
+		t.Fatalf("containers missing/invalid: found=%v err=%v", found, err)
+	}
+	container, ok := containers[0].(map[string]interface{})
+	if !ok {
+		t.Fatalf("containers[0] is not an object: %T", containers[0])
+	}
+	envVars, found, err := unstructured.NestedSlice(container, "env")
+	if err != nil || !found {
+		t.Fatalf("env vars missing/invalid: found=%v err=%v", found, err)
+	}
 
 	// These are all the env vars that should be set when CA bundles are enabled
 	requiredEnvVars := []string{
@@ -208,10 +220,17 @@ func TestRenderChart_CABundle(t *testing.T) {
 	}
 
 	// Check combined-ca-bundle volume mount exists on main container
-	volumeMounts, _, _ := unstructured.NestedSlice(container, "volumeMounts")
+	volumeMounts, found, err := unstructured.NestedSlice(container, "volumeMounts")
+	if err != nil || !found {
+		t.Fatalf("volumeMounts missing/invalid: found=%v err=%v", found, err)
+	}
 	foundCombined := false
 	for _, vm := range volumeMounts {
-		name := vm.(map[string]interface{})["name"].(string)
+		vmMap, ok := vm.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		name, _ := vmMap["name"].(string)
 		if name == caCombinedVolume {
 			foundCombined = true
 		}
@@ -222,11 +241,18 @@ func TestRenderChart_CABundle(t *testing.T) {
 
 	// Check that init container has all required volume mounts for combining bundles
 	// With the new structure, volume names are ca-bundle-0 (platform) and ca-bundle-1 (custom)
-	initVolumeMounts, _, _ := unstructured.NestedSlice(initContainer, "volumeMounts")
+	initVolumeMounts, found, err := unstructured.NestedSlice(initContainer, "volumeMounts")
+	if err != nil || !found {
+		t.Fatalf("init container volumeMounts missing/invalid: found=%v err=%v", found, err)
+	}
 	foundInitCombined := false
 	caVolumeCount := 0
 	for _, vm := range initVolumeMounts {
-		name := vm.(map[string]interface{})["name"].(string)
+		vmMap, ok := vm.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		name, _ := vmMap["name"].(string)
 		if name == caCombinedVolume {
 			foundInitCombined = true
 		}
@@ -242,11 +268,17 @@ func TestRenderChart_CABundle(t *testing.T) {
 	}
 
 	// Check volumes exist including combined-ca-bundle emptyDir
-	volumes, _, _ := unstructured.NestedSlice(deployment.Object, "spec", "template", "spec", "volumes")
+	volumes, found, err := unstructured.NestedSlice(deployment.Object, "spec", "template", "spec", "volumes")
+	if err != nil || !found {
+		t.Fatalf("volumes missing/invalid: found=%v err=%v", found, err)
+	}
 	foundCombinedVolume := false
 	for _, vol := range volumes {
-		volMap := vol.(map[string]interface{})
-		name := volMap["name"].(string)
+		volMap, ok := vol.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		name, _ := volMap["name"].(string)
 		if name == caCombinedVolume {
 			foundCombinedVolume = true
 			// Should be an emptyDir
@@ -256,7 +288,11 @@ func TestRenderChart_CABundle(t *testing.T) {
 		}
 		// Check CA ConfigMap volumes have optional: true
 		if len(name) > 10 && name[:10] == "ca-bundle-" {
-			configMap, _, _ := unstructured.NestedMap(volMap, "configMap")
+			configMap, found, err := unstructured.NestedMap(volMap, "configMap")
+			if err != nil || !found {
+				t.Errorf("volume %s: configMap missing/invalid: found=%v err=%v", name, found, err)
+				continue
+			}
 			if optional, ok := configMap["optional"].(bool); !ok || !optional {
 				t.Errorf("volume %s should have optional: true", name)
 			}
@@ -295,14 +331,23 @@ func TestRenderChart_CABundle_ODHOnly(t *testing.T) {
 	}
 
 	// Check init container exists
-	initContainers, _, _ := unstructured.NestedSlice(deployment.Object, "spec", "template", "spec", "initContainers")
-	if len(initContainers) == 0 {
-		t.Fatal("init containers not found")
+	initContainers, found, err := unstructured.NestedSlice(deployment.Object, "spec", "template", "spec", "initContainers")
+	if err != nil || !found || len(initContainers) == 0 {
+		t.Fatalf("initContainers missing/invalid: found=%v err=%v", found, err)
 	}
 
-	containers, _, _ := unstructured.NestedSlice(deployment.Object, "spec", "template", "spec", "containers")
-	container := containers[0].(map[string]interface{})
-	envVars, _, _ := unstructured.NestedSlice(container, "env")
+	containers, found, err := unstructured.NestedSlice(deployment.Object, "spec", "template", "spec", "containers")
+	if err != nil || !found || len(containers) == 0 {
+		t.Fatalf("containers missing/invalid: found=%v err=%v", found, err)
+	}
+	container, ok := containers[0].(map[string]interface{})
+	if !ok {
+		t.Fatalf("containers[0] is not an object: %T", containers[0])
+	}
+	envVars, found, err := unstructured.NestedSlice(container, "env")
+	if err != nil || !found {
+		t.Fatalf("env vars missing/invalid: found=%v err=%v", found, err)
+	}
 
 	foundEnvVars := make(map[string]string)
 	for _, env := range envVars {
@@ -351,29 +396,51 @@ func TestRenderChart_NoCABundle(t *testing.T) {
 	}
 
 	// Check no init containers exist when CA bundles are not configured
-	initContainers, _, _ := unstructured.NestedSlice(deployment.Object, "spec", "template", "spec", "initContainers")
+	initContainers, _, err := unstructured.NestedSlice(deployment.Object, "spec", "template", "spec", "initContainers")
+	if err != nil {
+		t.Fatalf("error reading initContainers: %v", err)
+	}
 	if len(initContainers) > 0 {
 		t.Error("init containers should not exist when no CA bundles are configured")
 	}
 
 	// Check no combined-ca-bundle volume exists
-	volumes, _, _ := unstructured.NestedSlice(deployment.Object, "spec", "template", "spec", "volumes")
+	volumes, _, err := unstructured.NestedSlice(deployment.Object, "spec", "template", "spec", "volumes")
+	if err != nil {
+		t.Fatalf("error reading volumes: %v", err)
+	}
 	for _, vol := range volumes {
-		volMap := vol.(map[string]interface{})
-		if volMap["name"].(string) == caCombinedVolume {
+		volMap, ok := vol.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		name, _ := volMap["name"].(string)
+		if name == caCombinedVolume {
 			t.Errorf("%s volume should not exist when no CA bundles are configured", caCombinedVolume)
 		}
 	}
 
 	// Check CA bundle env vars are not set
-	containers, _, _ := unstructured.NestedSlice(deployment.Object, "spec", "template", "spec", "containers")
-	container := containers[0].(map[string]interface{})
-	envVars, _, _ := unstructured.NestedSlice(container, "env")
+	containers, found, err := unstructured.NestedSlice(deployment.Object, "spec", "template", "spec", "containers")
+	if err != nil || !found || len(containers) == 0 {
+		t.Fatalf("containers missing/invalid: found=%v err=%v", found, err)
+	}
+	container, ok := containers[0].(map[string]interface{})
+	if !ok {
+		t.Fatalf("containers[0] is not an object: %T", containers[0])
+	}
+	envVars, _, err := unstructured.NestedSlice(container, "env")
+	if err != nil {
+		t.Fatalf("error reading env vars: %v", err)
+	}
 
 	caBundleEnvVars := []string{"SSL_CERT_FILE", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE", "AWS_CA_BUNDLE", "PGSSLROOTCERT"}
 	for _, env := range envVars {
-		envMap := env.(map[string]interface{})
-		name := envMap["name"].(string)
+		envMap, ok := env.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		name, _ := envMap["name"].(string)
 		for _, caVar := range caBundleEnvVars {
 			if name == caVar {
 				t.Errorf("env var %s should not be set when no CA bundles are configured", name)
