@@ -130,7 +130,7 @@ components:
           name: mlflow
           namespace: redhat-ods-applications
           conditionType: Available
-      timeout: "60s"
+      timeout: "300s"
 
 recovery:
   reconcileTimeout: "300s"

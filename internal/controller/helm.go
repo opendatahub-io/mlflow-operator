@@ -326,6 +326,14 @@ func (h *HelmRenderer) mlflowToHelmValues(
 	}
 	values["replicaCount"] = replicas
 
+	if mlflow.Spec.StartupProbe != nil {
+		probeValues, err := runtime.DefaultUnstructuredConverter.ToUnstructured(mlflow.Spec.StartupProbe)
+		if err != nil {
+			return nil, fmt.Errorf("failed to convert startupProbe: %w", err)
+		}
+		values["startupProbe"] = probeValues
+	}
+
 	if mlflow.Spec.Resources != nil {
 		resourcesMap, err := runtime.DefaultUnstructuredConverter.ToUnstructured(mlflow.Spec.Resources)
 		if err != nil {
