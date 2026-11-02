@@ -24,6 +24,36 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
+// StartupProbeSpec configures startup probe timing while keeping the probe
+// endpoint and success threshold managed by the operator.
+type StartupProbeSpec struct {
+	// InitialDelaySeconds is the delay before the first startup check.
+	// +kubebuilder:default=0
+	// +kubebuilder:validation:Minimum=0
+	// +optional
+	InitialDelaySeconds *int32 `json:"initialDelaySeconds,omitempty"`
+
+	// TimeoutSeconds is the timeout for each startup check.
+	// +kubebuilder:default=1
+	// +kubebuilder:validation:Minimum=1
+	// +optional
+	TimeoutSeconds *int32 `json:"timeoutSeconds,omitempty"`
+
+	// PeriodSeconds is the interval between startup checks.
+	// +kubebuilder:default=10
+	// +kubebuilder:validation:Minimum=1
+	// +optional
+	PeriodSeconds *int32 `json:"periodSeconds,omitempty"`
+
+	// FailureThreshold is the number of consecutive failures before restarting.
+	// With the default period of 10 seconds, 18 failures allow approximately
+	// 180 seconds for startup. Successful startup ends this probe immediately.
+	// +kubebuilder:default=18
+	// +kubebuilder:validation:Minimum=1
+	// +optional
+	FailureThreshold *int32 `json:"failureThreshold,omitempty"`
+}
+
 // MLflowSpec defines the desired state of MLflow
 // +kubebuilder:validation:XValidation:rule="has(self.defaultArtifactRoot) || (has(self.serveArtifacts) && self.serveArtifacts) || (has(self.artifactsServer) && self.artifactsServer.enabled)",message="defaultArtifactRoot must be set when neither serveArtifacts nor artifactsServer is enabled"
 // +kubebuilder:validation:XValidation:rule="!has(self.defaultArtifactRoot) || !self.defaultArtifactRoot.startsWith('file://') || (has(self.serveArtifacts) && self.serveArtifacts) || (has(self.artifactsServer) && self.artifactsServer.enabled)",message="serveArtifacts or artifactsServer must be enabled when defaultArtifactRoot uses file-based storage (file:// prefix)"
@@ -81,6 +111,13 @@ type MLflowSpec struct {
 	// +kubebuilder:default:={mode:Automatic}
 	// +optional
 	Migration *MLflowMigrationConfig `json:"migration,omitempty"`
+
+	// StartupProbe configures startup timing for the tracking and dedicated artifact
+	// servers. Defaults allow approximately 180 seconds for initialization before
+	// restarting the container. Liveness and readiness checks wait for startup to
+	// succeed. The operator manages the HTTPS server-info endpoint.
+	// +optional
+	StartupProbe *StartupProbeSpec `json:"startupProbe,omitempty"`
 
 	// Resources specifies the compute resources for the MLflow container
 	// +optional

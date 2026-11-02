@@ -253,6 +253,16 @@ spec:
               mountPath: /etc/mlflow
               readOnly: true
             {{- end }}
+          startupProbe:
+            httpGet:
+              path: {{ printf "%s/api/3.0/mlflow/server-info" $healthPrefix }}
+              port: https
+              scheme: HTTPS
+            initialDelaySeconds: {{ .Values.startupProbe.initialDelaySeconds }}
+            timeoutSeconds: {{ .Values.startupProbe.timeoutSeconds }}
+            periodSeconds: {{ .Values.startupProbe.periodSeconds }}
+            successThreshold: 1
+            failureThreshold: {{ .Values.startupProbe.failureThreshold }}
           livenessProbe:
             httpGet:
               path: {{ printf "%s/health" $healthPrefix }}

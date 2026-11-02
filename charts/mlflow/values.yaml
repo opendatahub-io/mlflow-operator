@@ -51,6 +51,16 @@ serviceAccount:
   # onto the main, garbage-collection, and trace-archival ServiceAccounts.
   annotations: {}
 
+# Startup timing for both tracking and dedicated artifact servers.
+# Allow approximately 180 seconds for initialization, including external database
+# startup. Liveness and readiness checks begin only after startup succeeds.
+# The HTTPS server-info endpoint and successThreshold (1) are fixed.
+startupProbe:
+  initialDelaySeconds: 0
+  timeoutSeconds: 1
+  periodSeconds: 10
+  failureThreshold: 18
+
 # Resources for MLflow container
 resources:
   requests:

@@ -297,6 +297,9 @@ func TestBuildMigrationJobFromDeployment(t *testing.T) {
 	g.Expect(job.Spec.Template.Annotations).To(gomega.BeNil())
 
 	container := job.Spec.Template.Spec.Containers[0]
+	g.Expect(container.StartupProbe).To(gomega.BeNil())
+	g.Expect(container.LivenessProbe).To(gomega.BeNil())
+	g.Expect(container.ReadinessProbe).To(gomega.BeNil())
 	g.Expect(container.Name).To(gomega.Equal(migrationJobContainerName))
 	g.Expect(container.Resources.Requests.Cpu().String()).To(gomega.Equal(migrationJobCPURequest))
 	g.Expect(container.Command).To(gomega.Equal([]string{"/bin/sh", "-ec"}))

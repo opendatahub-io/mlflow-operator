@@ -205,6 +205,31 @@ The operator requires two levels of RBAC permissions:
 
 See the manifest files for detailed per-resource documentation.
 
+### Startup probe
+
+The tracking server and optional dedicated artifact server allow approximately
+**180 seconds** for startup by default (18 failed checks at 10-second intervals).
+Their HTTPS startup probe checks `/api/3.0/mlflow/server-info` under each server's
+static prefix. Liveness and readiness probes wait until startup succeeds; a fast
+startup proceeds as soon as the first check succeeds.
+
+For external databases that require a longer startup window, configure probe
+timing through the MLflow CR. Unspecified fields retain their defaults:
+
+```yaml
+spec:
+  startupProbe:
+    failureThreshold: 30  # Approximately 300 seconds with the default period
+```
+
+Standalone Helm installations use the same top-level `startupProbe` values.
+Available fields are `initialDelaySeconds` (default `0`, minimum `0`),
+`timeoutSeconds` (default `1`, minimum `1`), `periodSeconds` (default `10`, minimum
+`1`), and `failureThreshold` (default `18`, minimum `1`). These settings apply to
+both servers; the endpoint and success threshold are fixed. The existing
+liveness and readiness timings are unchanged. A longer startup window tolerates
+slow initialization; unusually slow database connections still warrant investigation.
+
 ### Storage Configuration
 
 `backendStoreUri` (or `backendStoreUriFrom`) is required on new creates and updates. Inline `backendStoreUri` and `registryStoreUri` intentionally accept only the documented SQL schemes (`sqlite://` and `postgresql://`). To avoid breaking already-stored CRs created before this validation was introduced, the operator still falls back to the legacy implicit SQLite backend during reconciliation when both fields are unset.
