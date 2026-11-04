@@ -9,7 +9,7 @@ require (
 	github.com/go-logr/logr v1.4.4
 	github.com/onsi/ginkgo/v2 v2.28.1
 	github.com/onsi/gomega v1.39.1
-	github.com/opendatahub-io/odh-platform-utilities/framework v0.3.1
+	github.com/opendatahub-io/odh-platform-utilities/framework v0.4.0
 	github.com/openshift/api v0.0.0-20261002115817-f8795cdde518
 	github.com/openshift/controller-runtime-common v0.0.0-20261026124434-bdfc411d93cd
 	github.com/prometheus-operator/prometheus-operator/pkg/apis/monitoring v0.89.0
