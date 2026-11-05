@@ -1,4 +1,4 @@
-name: Validate Sample CRs
+name: Validate Sample Manifests
 
 on:
   push:
@@ -10,11 +10,12 @@ on:
       - 'config/samples/**'
       - 'api/**'
       - 'config/crd/**'
+      - 'test/scripts/validate-samples.sh'
       - 'Makefile'
 
 jobs:
   validate-samples:
-    name: Validate Sample CRs
+    name: Validate Sample Manifests
     runs-on: ubuntu-latest
     steps:
       - name: Clone the code

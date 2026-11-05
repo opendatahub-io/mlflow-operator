@@ -1,5 +1,5 @@
 #!/bin/bash
-# This script validates MLflow sample CRs against the CRD
+# Validate sample CRs and Jobs with Kubernetes server-side dry runs.
 # Prerequisites:
 #   - Kind cluster must be running
 #   - kubectl must be configured to connect to the cluster
@@ -22,7 +22,7 @@ parse_crd_config() {
 }
 
 echo "========================================"
-echo "MLflow Sample CR Validation"
+echo "MLflow Sample Manifest Validation"
 echo "========================================"
 echo ""
 
@@ -45,6 +45,7 @@ echo ""
 echo "Discovering sample files..."
 mapfile -t MLFLOW_SAMPLES < <(grep -l "kind: MLflow" config/samples/*.yaml 2>/dev/null | grep -v mlflowconfig || true)
 mapfile -t MLFLOWCONFIG_SAMPLES < <(grep -l "kind: MLflowConfig" config/samples/*.yaml 2>/dev/null || true)
+mapfile -t JOB_SAMPLES < <(grep -l "kind: Job" config/samples/*.yaml 2>/dev/null || true)
 
 if [ "${#MLFLOW_SAMPLES[@]}" -eq 0 ] && [ "${#MLFLOWCONFIG_SAMPLES[@]}" -eq 0 ]; then
     echo -e "${RED}ERROR: No samples found in config/samples/${NC}"
@@ -56,6 +57,9 @@ if [ "${#MLFLOW_SAMPLES[@]}" -gt 0 ]; then
 fi
 if [ "${#MLFLOWCONFIG_SAMPLES[@]}" -gt 0 ]; then
     echo "Found ${#MLFLOWCONFIG_SAMPLES[@]} MLflowConfig sample(s)"
+fi
+if [ "${#JOB_SAMPLES[@]}" -gt 0 ]; then
+    echo "Found ${#JOB_SAMPLES[@]} Job sample(s)"
 fi
 echo ""
 
@@ -119,6 +123,23 @@ for sample in "${MLFLOW_SAMPLES[@]}" "${MLFLOWCONFIG_SAMPLES[@]}"; do
         FAILED=1
     fi
     echo ""
+done
+
+# Validate one-shot Job examples independently of CRD samples. Substitute only
+# the documented placeholders; server-side validation does not start a pod.
+for sample in "${JOB_SAMPLES[@]}"; do
+    echo "Validating $sample..."
+    if sed -e 's/namespace: redhat-ods-applications/namespace: default/' \
+           -e 's/REPLACE_WITH_PREPOPULATION_IMAGE/busybox:1.36/' "$sample" | \
+            kubectl apply --dry-run=server -f - > /dev/null 2>&1; then
+        echo -e "${GREEN}✅ $sample is valid${NC}"
+    else
+        echo -e "${RED}❌ $sample validation failed:${NC}"
+        sed -e 's/namespace: redhat-ods-applications/namespace: default/' \
+            -e 's/REPLACE_WITH_PREPOPULATION_IMAGE/busybox:1.36/' "$sample" | \
+            kubectl apply --dry-run=server -f - 2>&1
+        FAILED=1
+    fi
 done
 
 if [ $FAILED -eq 1 ]; then

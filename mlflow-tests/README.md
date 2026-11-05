@@ -78,6 +78,7 @@ The framework supports configuration via environment variables:
 | `AWS_S3_BUCKET` | S3 bucket for artifact override tests | `""` | Both |
 | `MLFLOW_TEST_SUPPORTED_VERSION` | Supported pre-upgrade MLflow version, normalized to `x.y` | Auto-derived | Upgrade |
 | `upgrade_test_workspace` | Static namespace used by upgrade pytest phases | `mlflow-upgrade-test-workspace` | Upgrade |
+| `MLFLOW_PREPOPULATION_IMAGE` | Image with `mlflow db prepopulate-trace-analytics`; enables the opt-in live Job integration test | Unset | Prepopulation |
 
 **Required Setup:**
 - **Kubernetes Mode**: Requires `MLFLOW_TRACKING_URI`, `workspaces`, and `kube_token`

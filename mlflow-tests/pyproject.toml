@@ -44,6 +44,7 @@ markers = [
     "SkillRegistry: Test Skill Registry RBAC, lifecycle, and artifact operations",
     "pre_upgrade: Seed static MLflow state before an upgrade",
     "post_upgrade: Validate static MLflow state after an upgrade",
+    "prepopulation: Run the trace analytics prepopulation Job against a live predecessor-schema deployment",
 ]
 testpaths = ["tests"]
 python_files = ["test_*.py"]

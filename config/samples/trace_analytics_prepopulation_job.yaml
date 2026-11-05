@@ -1,0 +1,43 @@
+# Run only after verifying the backend database is at Alembic revision
+# b7e2c1a4d9f3. See docs/trace-analytics-prepopulation.md before applying.
+# Replace the image with an MLflow image that contains the prepopulation command.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: mlflow-trace-analytics-prepopulation
+  namespace: redhat-ods-applications
+  labels:
+    app.kubernetes.io/name: mlflow-trace-analytics-prepopulation
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 86400
+  template:
+    spec:
+      automountServiceAccountToken: false
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: prepopulate
+          image: REPLACE_WITH_PREPOPULATION_IMAGE
+          imagePullPolicy: IfNotPresent
+          command: [mlflow]
+          args: [db, prepopulate-trace-analytics]
+          env:
+            - name: MLFLOW_TRACKING_URI
+              valueFrom:
+                secretKeyRef:
+                  name: mlflow-db-credentials
+                  key: backend-store-uri
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              memory: 2Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
