@@ -1,0 +1,29 @@
+# CI-only MLflow CR for the 3.16.1 -> current prepopulation handoff.
+apiVersion: mlflow.opendatahub.io/v1
+kind: MLflow
+metadata:
+  name: mlflow
+spec:
+  image:
+    image: localhost/mlflow-prepopulation-seed:3.16.1
+    imagePullPolicy: IfNotPresent
+  backendStoreUriFrom:
+    name: mlflow-db-credentials
+    key: backend-store-uri
+  registryStoreUriFrom:
+    name: mlflow-db-credentials
+    key: registry-store-uri
+  artifactsDestination: file:///mlflow/artifacts
+  serveArtifacts: true
+  storage:
+    accessModes: [ReadWriteOnce]
+    resources:
+      requests:
+        storage: 1Gi
+  podSecurityContext:
+    runAsNonRoot: true
+    fsGroup: 1001
+    seccompProfile:
+      type: RuntimeDefault
+  traceRollups:
+    schedulingEnabled: false

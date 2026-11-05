@@ -29,6 +29,7 @@
 #   TEST_RESULTS_DIR            host path for JUnit XML output (default: test-results)
 #   SKIP_DEPLOYMENT             forward deployment reuse behavior to test-run.sh
 #   SKIP_OPERATOR               forward operator reuse behavior to test-run.sh
+#   SKIP_INFRASTRUCTURE         forward existing-infrastructure reuse to test-run.sh
 #   SKIP_CLEANUP                forward cleanup behavior to test-run.sh
 #   CLEANUP_REUSED_RESOURCES    forward reused-resource cleanup behavior to test-run.sh
 #   DISABLE_TLS                 forward direct S3 TLS verification behavior to test-run.sh
@@ -104,6 +105,7 @@ fi
 for name in \
   SKIP_DEPLOYMENT \
   SKIP_OPERATOR \
+  SKIP_INFRASTRUCTURE \
   SKIP_CLEANUP \
   CLEANUP_REUSED_RESOURCES \
   DISABLE_TLS \

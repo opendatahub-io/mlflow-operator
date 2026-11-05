@@ -393,6 +393,7 @@ The migration Job explicitly disables `MLFLOW_READ_REPLICA_BACKEND_STORE_URI`, s
 For ODH/RHOAI MLflow images that ship `mlflow.store.db.migration_gap`, that Job also runs the backend-only RHOAI `3.3 -> 3.4` gap repair before the generic MLflow migration logic.
 
 For large trace stores on live OpenShift RHOAI deployments, the [trace analytics prepopulation Job workflow](docs/trace-analytics-prepopulation.md) can backfill denormalized analytics columns before the final operator-managed upgrade. Its [sample Job](config/samples/trace_analytics_prepopulation_job.yaml) uses the primary database Secret and does not advance the Alembic revision. Run it to completion before starting the operator migration; the final `mlflow db upgrade` is still required.
+The dedicated `trace-prepopulation-e2e` job in the upgrade-validation workflow seeds the predecessor schema in Kind, runs the sample Job twice while MLflow serves traffic, and verifies the final operator-managed upgrade.
 
 ### Trace Archival
 

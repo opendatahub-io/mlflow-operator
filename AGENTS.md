@@ -327,7 +327,12 @@ final operator-managed upgrade. The opt-in `prepopulation` pytest marker runs
 the sample Job twice when `MLFLOW_PREPOPULATION_IMAGE` is set on a prepared
 predecessor-schema deployment. A read-only probe Job checks the Alembic revision
 and seeded trace analytics value before and after each run, and the test probes
-the live MLflow API while Jobs run. The normal integration matrix does not run it.
+the live MLflow API while Jobs run. The dedicated `trace-prepopulation-e2e` job
+in `.github/workflows/upgrade-validation.yml` builds a 3.16.1 predecessor
+operator/runtime pair in Kind, runs the test, then upgrades to the current images
+and checks migration completion and the Alembic head. The seed Dockerfile and
+MLflow CR are in `.github/test-infra/trace-prepopulation/`; the normal integration
+matrix does not run it.
 `test/scripts/validate-samples.sh` server-validates the Job sample after replacing
 its documented image and namespace placeholders.
 

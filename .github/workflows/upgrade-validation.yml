@@ -26,6 +26,9 @@ env:
   # in the index, which fails on runners whose Docker keeps the index after a pull.
   MLFLOW_SEED_SOURCE_IMAGE: 'quay.io/opendatahub/mlflow@sha256:25a2f3e626753d7f5d75ad88984da97f76cb75e7a2780e808ced41b7b8a302ee'
   MLFLOW_SEED_IMAGE: 'localhost/mlflow-seed:3.10.1'
+  PREPOPULATION_CLUSTER_NAME: 'mlflow-trace-prepopulation'
+  PREPOPULATION_SEED_IMAGE: 'localhost/mlflow-prepopulation-seed:3.16.1'
+  PREPOPULATION_SEED_OPERATOR_IMAGE: 'localhost/mlflow-operator-prepopulation-seed:3.16.1'
   IS_RHDS_REPOSITORY: ${{ github.repository_owner == 'red-hat-data-services' }}
   IS_CROSS_REPOSITORY_PR: >-
     ${{ github.event_name == 'pull_request' &&
@@ -682,5 +685,204 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: upgrade-debug-logs-${{ matrix.backend_store }}
+          path: debug-logs/
+          retention-days: 7
+
+  trace-prepopulation-e2e:
+    needs: [build-mlflow-runtime-image, build-mlflow-operator-image, build-mlflow-tests-image]
+    name: Prepopulate live trace analytics before upgrade
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          persist-credentials: false
+
+      - name: Free up disk space
+        uses: kubeflow/pipelines/.github/actions/github-disk-cleanup@3004f974b571840bdb1ed6362c520d3cf566e9c0 # master
+
+      - name: Create Kind cluster
+        uses: ./.github/actions/create-cluster
+        with:
+          cluster_name: ${{ env.PREPOPULATION_CLUSTER_NAME }}
+          k8s_version: "v1.34.0"
+
+      - name: Download current operator image
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: ${{ env.OPERATOR_RUNTIME_ARTIFACT }}
+          path: operator-image
+
+      - name: Download current MLflow image
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: ${{ env.MLFLOW_RUNTIME_ARTIFACT }}
+          path: runtime-image
+
+      - name: Download test image
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: ${{ env.MLFLOW_TESTS_RUNTIME_ARTIFACT }}
+          path: test-image
+
+      - name: Load current images
+        shell: bash
+        run: |
+          docker load -i "operator-image/${OPERATOR_RUNTIME_ARTIFACT}.tar"
+          docker load -i "runtime-image/${MLFLOW_RUNTIME_ARTIFACT}.tar"
+          docker load -i "test-image/${MLFLOW_TESTS_RUNTIME_ARTIFACT}.tar"
+          kind load docker-image "${OPERATOR_RUNTIME_IMAGE}" "${MLFLOW_RUNTIME_IMAGE}" \
+            --name "${PREPOPULATION_CLUSTER_NAME}"
+
+      - name: Build and verify predecessor images
+        shell: bash
+        run: |
+          docker build \
+            --build-arg "BASE_IMAGE=${OPERATOR_RUNTIME_IMAGE}" \
+            --build-arg SUPPORTED_MLFLOW_VERSION_OVERRIDE=3.16.1 \
+            -t "${PREPOPULATION_SEED_OPERATOR_IMAGE}" .
+          docker build -f .github/test-infra/trace-prepopulation/Dockerfile \
+            -t "${PREPOPULATION_SEED_IMAGE}" .
+          docker run --rm --entrypoint python3 "${PREPOPULATION_SEED_IMAGE}" -c '
+          import importlib.metadata as metadata
+          import mlflow.store.db.utils as db_utils
+          assert db_utils._get_latest_schema_revision() == "b7e2c1a4d9f3"
+          assert any(entry.name == "kubernetes-auth" for entry in metadata.entry_points(group="mlflow.app"))
+          '
+          kind load docker-image "${PREPOPULATION_SEED_OPERATOR_IMAGE}" \
+            "${PREPOPULATION_SEED_IMAGE}" --name "${PREPOPULATION_CLUSTER_NAME}"
+
+      - name: Install deploy helper dependencies
+        run: python3 -m pip install pyyaml kubernetes
+
+      - name: Deploy predecessor operator and PostgreSQL
+        shell: bash
+        run: |
+          python3 .github/actions/deploy/deploy.py \
+            --namespace "${NAMESPACE}" \
+            --mlflow-operator-image "${PREPOPULATION_SEED_OPERATOR_IMAGE}" \
+            --mlflow-image "${PREPOPULATION_SEED_IMAGE}" \
+            --platform base \
+            --backend-store postgres \
+            --registry-store postgres \
+            --artifact-storage file \
+            --skip-mlflow-cr
+
+      - name: Seed operator-managed MLflow at the predecessor revision
+        shell: bash
+        run: |
+          kubectl apply -f .github/test-infra/trace-prepopulation/seed-mlflow.yaml
+          kubectl wait --for=condition=Available mlflow/mlflow --timeout=600s
+          test "$(kubectl get mlflow mlflow -o jsonpath='{.status.version}')" = "3.16.1"
+          kubectl exec -n "${NAMESPACE}" deploy/mlflow -c mlflow -- python3.12 -c '
+          import os
+          from sqlalchemy import create_engine, text
+          with create_engine(os.environ["MLFLOW_BACKEND_STORE_URI"]).connect() as connection:
+              revision = connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
+          assert revision == "b7e2c1a4d9f3", revision
+          '
+
+      - name: Run the sample Job twice while MLflow serves traffic
+        shell: bash
+        env:
+          ARTIFACT_BACKENDS: file
+          BACKEND_STORE: postgres
+          REGISTRY_STORE: postgres
+          SERVE_ARTIFACTS: "true"
+          SKIP_DEPLOYMENT: "true"
+          SKIP_OPERATOR: "true"
+          SKIP_INFRASTRUCTURE: "true"
+          SKIP_CLEANUP: "true"
+          MLFLOW_PREPOPULATION_IMAGE: ${{ env.MLFLOW_RUNTIME_IMAGE }}
+          PYTEST_MARK_EXPRESSION: prepopulation
+          TEST_RESULTS_DIR: test-results/prepopulation
+        run: mlflow-tests/images/run-integration-tests.sh
+
+      - name: Upgrade the operator and MLflow after prepopulation
+        shell: bash
+        run: |
+          kubectl scale -n "${NAMESPACE}" deployment/mlflow-operator-controller-manager --replicas=0
+          for _ in $(seq 1 60); do
+            pod_count="$(kubectl get pods -n "${NAMESPACE}" -l control-plane=controller-manager -o json | jq '.items | length')"
+            [ "${pod_count}" -eq 0 ] && break
+            sleep 2
+          done
+          test "${pod_count}" -eq 0
+          kubectl patch mlflow mlflow --type=merge -p \
+            "{\"spec\":{\"image\":{\"image\":\"${MLFLOW_RUNTIME_IMAGE}\",\"imagePullPolicy\":\"IfNotPresent\"}}}"
+          echo "MLFLOW_UPGRADE_GENERATION=$(kubectl get mlflow mlflow -o jsonpath='{.metadata.generation}')" >> "${GITHUB_ENV}"
+          kubectl set image -n "${NAMESPACE}" deployment/mlflow-operator-controller-manager \
+            "manager=${OPERATOR_RUNTIME_IMAGE}"
+          kubectl scale -n "${NAMESPACE}" deployment/mlflow-operator-controller-manager --replicas=1
+          kubectl rollout status -n "${NAMESPACE}" deployment/mlflow-operator-controller-manager --timeout=300s
+
+      - name: Verify the final operator-managed database upgrade
+        shell: bash
+        run: |
+          migration_job=""
+          for _ in $(seq 1 120); do
+            migration_job="$(kubectl get jobs -n "${NAMESPACE}" \
+              -l mlflow.opendatahub.io/migration-job=true -o name | \
+              grep -E -- "-g${MLFLOW_UPGRADE_GENERATION}$" | head -1 || true)"
+            [ -n "${migration_job}" ] && break
+            sleep 2
+          done
+          test -n "${migration_job}"
+          kubectl wait -n "${NAMESPACE}" --for=condition=complete "${migration_job}" --timeout=900s
+          kubectl logs -n "${NAMESPACE}" "${migration_job}"
+
+          supported_version="$(python3 scripts/print_supported_mlflow_version.py \
+            --component-metadata config/component_metadata.yaml)"
+          ready=false
+          for _ in $(seq 1 120); do
+            if kubectl get mlflow mlflow -o json | jq -e \
+              --arg version "${supported_version}" \
+              --argjson generation "${MLFLOW_UPGRADE_GENERATION}" \
+              '(.status.version == $version) and
+               ([.status.conditions[]? | select(.type == "Migration" and .status == "True" and .observedGeneration == $generation)] | length == 1)' \
+              >/dev/null && \
+              kubectl get deployment mlflow -n "${NAMESPACE}" -o json | jq -e \
+              --arg image "${MLFLOW_RUNTIME_IMAGE}" \
+              '([.spec.template.spec.containers[] | select(.name == "mlflow") | .image] | first) == $image and
+               (.status.observedGeneration >= .metadata.generation) and
+               (.status.availableReplicas >= 1)' >/dev/null; then
+              ready=true
+              break
+            fi
+            sleep 5
+          done
+          test "${ready}" = true
+          kubectl exec -n "${NAMESPACE}" deploy/mlflow -c mlflow -- python3.12 -c '
+          import os
+          import mlflow.store.db.utils as db_utils
+          engine = db_utils.create_sqlalchemy_engine_with_retry(os.environ["MLFLOW_BACKEND_STORE_URI"])
+          revision = db_utils._get_schema_version(engine)
+          latest = db_utils._get_latest_schema_revision()
+          assert revision == latest, (revision, latest)
+          print(f"backend schema is current: {revision}")
+          '
+
+      - name: Upload prepopulation test report
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: trace-prepopulation-e2e-results
+          path: test-results/
+          retention-days: 7
+
+      - name: Collect debug logs
+        if: ${{ failure() && !cancelled() }}
+        continue-on-error: true
+        uses: ./.github/actions/collect-debug-logs
+        with:
+          debug_namespace: ${{ env.NAMESPACE }}
+
+      - name: Upload debug logs
+        if: ${{ failure() && !cancelled() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: trace-prepopulation-e2e-debug-logs
           path: debug-logs/
           retention-days: 7

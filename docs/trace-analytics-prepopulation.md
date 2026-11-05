@@ -127,6 +127,14 @@ Set `ARTIFACT_BACKENDS` to the storage type of the reused deployment. Set the
 remaining harness environment (test image, namespace, credentials, and
 tracking endpoint) for that deployment as described in
 [the integration test README](../mlflow-tests/README.md). The test image includes
-the sample manifest and reads it directly. The test does not perform the final
-schema upgrade; use the separate upgrade e2e path to validate the operator's
-scale-down and migration behavior.
+the sample manifest and reads it directly. The test itself does not perform the
+final schema upgrade.
+
+The `trace-prepopulation-e2e` job in `.github/workflows/upgrade-validation.yml`
+runs this path in CI. It builds an MLflow 3.16.1 predecessor image with the
+Kubernetes plugins and an operator image configured to support 3.16.1, then
+deploys PostgreSQL and a live MLflow server in Kind. After the test runs the
+sample Job twice, CI stops the predecessor operator, changes the MLflow CR image,
+starts the current operator, and verifies the final migration Job, Deployment,
+and Alembic head. CI-only images and the seed CR live under
+`.github/test-infra/trace-prepopulation/`.
