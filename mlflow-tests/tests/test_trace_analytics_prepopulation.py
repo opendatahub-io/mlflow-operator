@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import re
@@ -29,6 +30,36 @@ JOB_TEMPLATE = (
 )
 JOB_TIMEOUT_SECONDS = 1800
 POLL_SECONDS = 3
+PREDECESSOR_REVISION = "b7e2c1a4d9f3"
+PROBE_PREFIX = "PREPOPULATION_PROBE="
+PROBE_SCRIPT = """
+import json
+import os
+from sqlalchemy import create_engine, inspect, text
+
+engine = create_engine(os.environ["MLFLOW_TRACKING_URI"])
+with engine.connect() as connection:
+    if connection.dialect.name != "postgresql":
+        raise RuntimeError("The prepopulation e2e requires a PostgreSQL primary backend")
+    revision = connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
+    columns = {column["name"] for column in inspect(connection).get_columns("trace_info")}
+    if "trace_name" in columns:
+        trace_name, row_version = connection.execute(
+            text("SELECT trace_name, CAST(xmin AS text) FROM trace_info WHERE request_id = :trace_id"),
+            {"trace_id": os.environ["PREPOPULATION_TRACE_ID"]},
+        ).one()
+    else:
+        row_version = connection.execute(
+            text("SELECT CAST(xmin AS text) FROM trace_info WHERE request_id = :trace_id"),
+            {"trace_id": os.environ["PREPOPULATION_TRACE_ID"]},
+        ).scalar_one_or_none()
+        if row_version is None:
+            raise RuntimeError("seeded trace is missing from the primary backend")
+        trace_name = None
+print("PREPOPULATION_PROBE=" + json.dumps({
+    "revision": revision, "trace_name": trace_name, "row_version": row_version,
+}))
+"""
 
 
 def _job_logs(core_api: client.CoreV1Api, namespace: str, name: str) -> str:
@@ -67,10 +98,13 @@ def _wait_for_job(
     apps_api: client.AppsV1Api,
     namespace: str,
     name: str,
+    live_probe=None,
 ) -> str:
     deadline = time.monotonic() + JOB_TIMEOUT_SECONDS
     while time.monotonic() < deadline:
         _assert_live_and_no_migration(apps_api, batch_api, namespace)
+        if live_probe is not None:
+            live_probe()
         job = batch_api.read_namespaced_job_status(name, namespace)
         conditions = {c.type: c.status for c in job.status.conditions or []}
         if conditions.get("Complete") == "True":
@@ -104,16 +138,38 @@ class TestTraceAnalyticsPrepopulation(TestBase):
         assert backend_ref and backend_ref.get("name") and backend_ref.get("key"), (
             "Prepopulation integration requires a Secret-backed primary backend URI"
         )
+        assert "mlflow.opendatahub.io/force-migrate" not in cr["metadata"].get(
+            "annotations", {}
+        ), "A force-migrate request is pending"
+        migration = next(
+            (
+                condition
+                for condition in cr.get("status", {}).get("conditions", [])
+                if condition["type"] == "Migration"
+            ),
+            None,
+        )
+        assert migration and migration["status"] == "True" and migration.get(
+            "observedGeneration"
+        ) == cr["metadata"]["generation"], (
+            "The MLflow CR must have completed migration for its current generation"
+        )
         deployment = apps_api.read_namespaced_deployment("mlflow", namespace)
         mlflow_container = next(
             container
             for container in deployment.spec.template.spec.containers
             if container.name == "mlflow"
         )
-        deployed_ref = next(
-            var.value_from.secret_key_ref
-            for var in mlflow_container.env or []
-            if var.name == "MLFLOW_BACKEND_STORE_URI"
+        deployed_backend = next(
+            (var for var in mlflow_container.env or [] if var.name == "MLFLOW_BACKEND_STORE_URI"),
+            None,
+        )
+        assert deployed_backend and deployed_backend.value_from, (
+            "The live Deployment must use a Secret-backed primary backend URI"
+        )
+        deployed_ref = deployed_backend.value_from.secret_key_ref
+        assert deployed_ref is not None, (
+            "The live Deployment's effective MLFLOW_BACKEND_STORE_URI must be Secret-backed"
         )
         assert (deployed_ref.name, deployed_ref.key) == (
             backend_ref["name"],
@@ -132,8 +188,9 @@ class TestTraceAnalyticsPrepopulation(TestBase):
             f"prepopulation-e2e-{uuid.uuid4().hex}"
         )
         self.test_context.add_experiment_for_cleanup(experiment_id, workspace)
+        trace_name = f"prepopulation-e2e-{uuid.uuid4().hex}"
         span = self.admin_client.start_trace(
-            name=f"prepopulation-e2e-{uuid.uuid4().hex}",
+            name=trace_name,
             experiment_id=experiment_id,
         )
         trace_id = getattr(span, "request_id", None) or getattr(span, "trace_id", None)
@@ -141,61 +198,88 @@ class TestTraceAnalyticsPrepopulation(TestBase):
         self.admin_client.end_trace(request_id=trace_id, status=TraceStatus.OK)
 
         created_jobs = []
-        try:
-            for run in range(2):
-                job = yaml.safe_load(JOB_TEMPLATE.read_text())
-                name = f"mlflow-trace-prepopulate-e2e-{uuid.uuid4().hex[:8]}"
-                job["metadata"]["name"] = name
-                job["metadata"]["namespace"] = namespace
-                container = job["spec"]["template"]["spec"]["containers"][0]
-                container["image"] = os.environ["MLFLOW_PREPOPULATION_IMAGE"]
-                container["env"][0]["valueFrom"]["secretKeyRef"] = backend_ref
-                pod_spec = job["spec"]["template"]["spec"]
-                if deployment.spec.template.spec.image_pull_secrets:
-                    pod_spec["imagePullSecrets"] = [
-                        client.ApiClient().sanitize_for_serialization(secret)
-                        for secret in deployment.spec.template.spec.image_pull_secrets
-                    ]
-                # Reuse the live Deployment's database trust setup when it builds a CA bundle.
-                for var in mlflow_container.env or []:
-                    if var.name.startswith("PG") or var.name in {
-                        "SSL_CERT_FILE",
-                        "REQUESTS_CA_BUNDLE",
-                        "MLFLOW_MYSQL_CA",
-                    }:
-                        container["env"].append(client.ApiClient().sanitize_for_serialization(var))
-                ca_init = [
-                    item
-                    for item in deployment.spec.template.spec.init_containers or []
-                    if item.name == "combine-ca-bundles"
+
+        def run_job(*, probe: bool) -> str:
+            job = yaml.safe_load(JOB_TEMPLATE.read_text())
+            name = f"mlflow-trace-prepopulate-e2e-{uuid.uuid4().hex[:8]}"
+            job["metadata"]["name"] = name
+            job["metadata"]["namespace"] = namespace
+            container = job["spec"]["template"]["spec"]["containers"][0]
+            container["image"] = os.environ["MLFLOW_PREPOPULATION_IMAGE"]
+            container["env"][0]["valueFrom"]["secretKeyRef"] = backend_ref
+            if probe:
+                container["command"] = ["python3", "-c", PROBE_SCRIPT]
+                container["args"] = []
+                container["env"].append(
+                    {"name": "PREPOPULATION_TRACE_ID", "value": trace_id}
+                )
+            pod_spec = job["spec"]["template"]["spec"]
+            if deployment.spec.template.spec.image_pull_secrets:
+                pod_spec["imagePullSecrets"] = [
+                    client.ApiClient().sanitize_for_serialization(secret)
+                    for secret in deployment.spec.template.spec.image_pull_secrets
                 ]
-                if ca_init:
-                    pod_spec["initContainers"] = [
-                        client.ApiClient().sanitize_for_serialization(item)
-                        for item in ca_init
-                    ]
-                    ca_mounts = [
-                        mount
-                        for mount in mlflow_container.volume_mounts or []
-                        if mount.name == "combined-ca-bundle"
-                    ]
-                    container["volumeMounts"] = [
-                        client.ApiClient().sanitize_for_serialization(mount)
-                        for mount in ca_mounts
-                    ]
-                    volume_names = {
-                        mount.name
-                        for item in ca_init
-                        for mount in item.volume_mounts or []
-                    } | {mount.name for mount in ca_mounts}
-                    pod_spec["volumes"] = [
-                        client.ApiClient().sanitize_for_serialization(volume)
-                        for volume in deployment.spec.template.spec.volumes or []
-                        if volume.name in volume_names
-                    ]
-                batch_api.create_namespaced_job(namespace, job)
-                created_jobs.append(name)
-                logs = _wait_for_job(batch_api, core_api, apps_api, namespace, name)
+            # Reuse the live Deployment's database trust setup when it builds a CA bundle.
+            for var in mlflow_container.env or []:
+                if var.name.startswith("PG") or var.name in {
+                    "SSL_CERT_FILE",
+                    "REQUESTS_CA_BUNDLE",
+                    "MLFLOW_MYSQL_CA",
+                }:
+                    container["env"].append(client.ApiClient().sanitize_for_serialization(var))
+            ca_init = [
+                item
+                for item in deployment.spec.template.spec.init_containers or []
+                if item.name == "combine-ca-bundles"
+            ]
+            if ca_init:
+                pod_spec["initContainers"] = [
+                    client.ApiClient().sanitize_for_serialization(item)
+                    for item in ca_init
+                ]
+                ca_mounts = [
+                    mount
+                    for mount in mlflow_container.volume_mounts or []
+                    if mount.name == "combined-ca-bundle"
+                ]
+                container["volumeMounts"] = [
+                    client.ApiClient().sanitize_for_serialization(mount)
+                    for mount in ca_mounts
+                ]
+                volume_names = {
+                    mount.name
+                    for item in ca_init
+                    for mount in item.volume_mounts or []
+                } | {mount.name for mount in ca_mounts}
+                pod_spec["volumes"] = [
+                    client.ApiClient().sanitize_for_serialization(volume)
+                    for volume in deployment.spec.template.spec.volumes or []
+                    if volume.name in volume_names
+                ]
+            batch_api.create_namespaced_job(namespace, job)
+            created_jobs.append(name)
+            return _wait_for_job(
+                batch_api,
+                core_api,
+                apps_api,
+                namespace,
+                name,
+                live_probe=lambda: self.admin_client.search_experiments(),
+            )
+
+        def probe() -> dict:
+            logs = run_job(probe=True)
+            match = re.search(rf"{PROBE_PREFIX}(.+)", logs)
+            assert match, logs
+            return json.loads(match.group(1))
+
+        try:
+            before = probe()
+            assert before["revision"] == PREDECESSOR_REVISION, before
+            assert before["trace_name"] is None, before
+            first_row_version = None
+            for run in range(2):
+                logs = run_job(probe=False)
                 logger.info("Prepopulation run %d:\n%s", run + 1, logs)
                 assert "Prepopulation completed without advancing the Alembic revision" in logs
                 for entity in ("Traces", "Spans", "Assessments"):
@@ -203,11 +287,15 @@ class TestTraceAnalyticsPrepopulation(TestBase):
                 if run == 0:
                     scanned = re.search(r"Traces: scanned=(\d+)", logs)
                     assert scanned and int(scanned.group(1)) > 0, logs
+                # Other live writers may increase global updated counts on a rerun.
+                after = probe()
+                assert after["revision"] == PREDECESSOR_REVISION, after
+                assert after["trace_name"] == trace_name, after
+                if run == 0:
+                    assert after["row_version"] != before["row_version"], after
+                    first_row_version = after["row_version"]
                 else:
-                    # The second pass must finish cleanly over the rows from the first.
-                    assert re.search(r"Traces: scanned=\d+, updated=0", logs), logs
-                    assert re.search(r"Spans: scanned=\d+, updated=0", logs), logs
-                    assert re.search(r"Assessments: scanned=\d+, updated=0", logs), logs
+                    assert after["row_version"] == first_row_version, after
                 self.admin_client.search_experiments()
                 assert self.admin_client.get_trace(trace_id).info.trace_id == trace_id
 

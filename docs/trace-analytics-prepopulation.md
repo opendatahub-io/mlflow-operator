@@ -16,13 +16,16 @@ defines the predecessor revision and final upgrade sequence.
 2. Confirm the running `MLflow` resource has a remote SQL backend and its primary
    database is at the immediate predecessor Alembic revision `b7e2c1a4d9f3`.
    The command rejects other revisions. For a Secret-backed backend, inspect
-   `spec.backendStoreUriFrom` for the Secret name and key; do not print the Secret value.
+   `spec.backendStoreUriFrom` and the effective `MLFLOW_BACKEND_STORE_URI` entry on
+   the live `mlflow` Deployment. They must reference the same primary Secret name
+   and key. `spec.env` can override the CR's backend-store reference; resolve that
+   mismatch before proceeding. Do not print the Secret value.
    Query the revision from a running MLflow pod, which already has the backend
    URI and database trust configuration in its environment:
 
    ```bash
    oc -n redhat-ods-applications exec deploy/mlflow -c mlflow -- \
-     python3.12 -c 'import os; from sqlalchemy import create_engine, text; e = create_engine(os.environ["MLFLOW_BACKEND_STORE_URI"]); print(e.connect().execute(text("SELECT version_num FROM alembic_version")).scalar_one())'
+     python3 -c 'import os; from sqlalchemy import create_engine, text; e = create_engine(os.environ["MLFLOW_BACKEND_STORE_URI"]); print(e.connect().execute(text("SELECT version_num FROM alembic_version")).scalar_one())'
    ```
 
    The output must be `b7e2c1a4d9f3`. Run the same read-only query after the
@@ -32,7 +35,10 @@ defines the predecessor revision and final upgrade sequence.
    until prepopulation finishes. The Job may use a newer image because it runs only
    the database command. Pin an immutable image digest and confirm the image
    supports the target database driver.
-4. Check that no operator migration Job is pending or running:
+4. Verify the MLflow CR is steady: its `Migration` condition has completed for
+   the current generation, the Deployment is available, and no operator upgrade,
+   force-migrate request, or CR/image change is planned until the Job finishes.
+   Check that no operator migration Job is pending or running:
 
    ```bash
    oc -n redhat-ods-applications get jobs -l mlflow.opendatahub.io/migration-job=true
@@ -49,7 +55,8 @@ Copy [the sample Job](../config/samples/trace_analytics_prepopulation_job.yaml) 
 local file. Set `metadata.namespace` to the namespace containing the MLflow Deployment
 (`redhat-ods-applications` in RHOAI). Replace `REPLACE_WITH_PREPOPULATION_IMAGE` with
 the chosen image reference. Set the `MLFLOW_TRACKING_URI` Secret name and key to the
-same primary backend URI referenced by `spec.backendStoreUriFrom`. The URI stays in
+same primary backend URI referenced by the live Deployment's effective
+`MLFLOW_BACKEND_STORE_URI`. The URI stays in
 the Secret and is never passed as a command argument. Do not use a read-replica URI.
 If the image is private, copy the Deployment's `imagePullSecrets` into the Job pod spec.
 
@@ -96,20 +103,28 @@ Prepopulation alone is not an upgrade and leaves the Alembic revision unchanged.
 
 `mlflow-tests/tests/test_trace_analytics_prepopulation.py` runs the sample Job twice
 against an operator-managed, Secret-backed MLflow Deployment at the predecessor
-revision. It checks the primary Secret reference, Job progress and success, repeat
-execution, live MLflow API reachability and Deployment availability, and the absence
-of overlapping operator migration Jobs. Run it on a dedicated test deployment with
-the candidate command image, before changing the `MLflow` CR image:
+revision on PostgreSQL. A read-only probe Job checks Alembic, the seeded trace's
+analytics value, and its PostgreSQL row version before, between, and after both
+runs. The unchanged row version on the second pass verifies the completed row
+was skipped, even if other writers create new rows. The test checks the primary
+Secret reference, Job progress and success, repeat execution, live MLflow API
+reachability during each Job, Deployment availability, and the absence of
+overlapping operator migration Jobs. Run it on a dedicated test cluster because
+the integration harness creates workspace namespaces and RBAC. Use a known-good
+older MLflow deployment at the predecessor schema and the candidate command
+image, before changing the `MLflow`
+CR image:
 
 ```bash
 MLFLOW_PREPOPULATION_IMAGE=<candidate-image> \
 PYTEST_MARK_EXPRESSION=prepopulation \
-SKIP_DEPLOYMENT=true SKIP_OPERATOR=true SKIP_CLEANUP=true \
+SKIP_DEPLOYMENT=true SKIP_OPERATOR=true SKIP_INFRASTRUCTURE=true SKIP_CLEANUP=true \
 ARTIFACT_BACKENDS=s3 BACKEND_STORE=postgres REGISTRY_STORE=postgres \
 mlflow-tests/images/run-integration-tests.sh
 ```
 
-Set the remaining harness environment (test image, namespace, credentials, and
+Set `ARTIFACT_BACKENDS` to the storage type of the reused deployment. Set the
+remaining harness environment (test image, namespace, credentials, and
 tracking endpoint) for that deployment as described in
 [the integration test README](../mlflow-tests/README.md). The test image includes
 the sample manifest and reads it directly. The test does not perform the final

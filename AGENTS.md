@@ -325,7 +325,11 @@ while the existing MLflow Deployment remains live. It is separate from the
 operator migration Job, does not advance Alembic, and must finish before the
 final operator-managed upgrade. The opt-in `prepopulation` pytest marker runs
 the sample Job twice when `MLFLOW_PREPOPULATION_IMAGE` is set on a prepared
-predecessor-schema deployment; the normal integration matrix does not run it.
+predecessor-schema deployment. A read-only probe Job checks the Alembic revision
+and seeded trace analytics value before and after each run, and the test probes
+the live MLflow API while Jobs run. The normal integration matrix does not run it.
+`test/scripts/validate-samples.sh` server-validates the Job sample after replacing
+its documented image and namespace placeholders.
 
 The `mlflow-tests/` suite also contains opt-in, version-gated upgrade pytest coverage under:
 
