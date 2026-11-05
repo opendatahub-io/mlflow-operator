@@ -748,10 +748,12 @@ jobs:
           docker run --rm --entrypoint python3 "${PREPOPULATION_SEED_IMAGE}" -c '
           import importlib.metadata as metadata
           import mlflow.store.db.utils as db_utils
+          from mlflow_kubernetes_plugins.auth.compiler import _compile_authorization_rules
           from sqlalchemy import create_engine
           assert db_utils._get_latest_schema_revision() == "b7e2c1a4d9f3"
           assert any(entry.name == "kubernetes-auth" for entry in metadata.entry_points(group="mlflow.app"))
           assert create_engine("postgresql://user:pass@localhost/db").dialect.dbapi.__name__ == "psycopg2"
+          _compile_authorization_rules()
           '
           kind load docker-image "${PREPOPULATION_SEED_OPERATOR_IMAGE}" \
             "${PREPOPULATION_SEED_IMAGE}" --name "${PREPOPULATION_CLUSTER_NAME}"
