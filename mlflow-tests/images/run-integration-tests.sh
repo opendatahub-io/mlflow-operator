@@ -113,6 +113,7 @@ for name in \
   AWS_DEFAULT_ENDPOINT \
   AWS_DEFAULT_REGION \
   MLFLOW_TEST_SUPPORTED_VERSION \
+  MLFLOW_PREPOPULATION_IMAGE \
   upgrade_test_workspace; do
   if [[ -v "$name" ]]; then
     docker_args+=(-e "$name=${!name}")

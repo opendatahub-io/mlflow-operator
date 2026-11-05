@@ -317,6 +317,16 @@ For self-deployed SeaweedFS TLS runs, `mlflow-tests/images/test-run.sh` extracts
 
 ### MLflow upgrade pytest phases
 
+The administrator-run trace analytics prepopulation workflow is documented in
+`docs/trace-analytics-prepopulation.md`, with a standalone Job sample at
+`config/samples/trace_analytics_prepopulation_job.yaml`. It runs against the
+primary Secret-backed backend at predecessor Alembic revision `b7e2c1a4d9f3`
+while the existing MLflow Deployment remains live. It is separate from the
+operator migration Job, does not advance Alembic, and must finish before the
+final operator-managed upgrade. The opt-in `prepopulation` pytest marker runs
+the sample Job twice when `MLFLOW_PREPOPULATION_IMAGE` is set on a prepared
+predecessor-schema deployment; the normal integration matrix does not run it.
+
 The `mlflow-tests/` suite also contains opt-in, version-gated upgrade pytest coverage under:
 
 - `mlflow-tests/tests/upgrade/pre_upgrade/`
