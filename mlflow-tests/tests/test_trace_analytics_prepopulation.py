@@ -208,7 +208,7 @@ class TestTraceAnalyticsPrepopulation(TestBase):
             container["image"] = os.environ["MLFLOW_PREPOPULATION_IMAGE"]
             container["env"][0]["valueFrom"]["secretKeyRef"] = backend_ref
             if probe:
-                container["command"] = ["python3", "-c", PROBE_SCRIPT]
+                container["command"] = ["python3.12", "-c", PROBE_SCRIPT]
                 container["args"] = []
                 container["env"].append(
                     {"name": "PREPOPULATION_TRACE_ID", "value": trace_id}
