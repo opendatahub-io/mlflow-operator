@@ -196,6 +196,7 @@ class TestTraceAnalyticsPrepopulation(TestBase):
         trace_id = getattr(span, "request_id", None) or getattr(span, "trace_id", None)
         assert trace_id and trace_id != NO_OP_SPAN_TRACE_ID
         self.admin_client.end_trace(request_id=trace_id, status=TraceStatus.OK)
+        mlflow.flush_trace_async_logging()
 
         created_jobs = []
 
