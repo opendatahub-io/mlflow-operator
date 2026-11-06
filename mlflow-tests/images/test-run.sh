@@ -139,6 +139,11 @@ Other:
                         deploys with PostgreSQL backend and registry stores (default:
                         1m so semantic archival smoke coverage can archive fresh traces)
   workspaces            Comma-separated workspace namespace list (default: two random names)
+  trace_rollups_enabled Exported automatically (true) for S3-compatible suites that
+                        deploy MLflow and PostgreSQL through this harness. File/SQLite
+                        suites, reused deployments/infrastructure, and explicit external
+                        PostgreSQL hosts are excluded. A missing rollup CronJob fails the
+                        enabled smoke test instead of silently skipping it.
   upgrade_test_workspace Static workspace namespace for upgrade pytest phases. During
                         upgrade-phase runs, the harness derives workspaces and RBAC
                         setup from this namespace automatically.
@@ -1479,6 +1484,21 @@ run_suite_body() {
         return 1
     fi
     export garbage_collection_enabled="${deployed_garbage_collection:+true}"
+    # The live rollup smoke seeds backdated traces through MLflow and checks its SQL
+    # rows in the harness PostgreSQL pod, so only select it when this suite deploys
+    # both MLflow and its SQL backend. SKIP_DEPLOYMENT/SKIP_INFRASTRUCTURE and explicit
+    # database hosts must not turn a reused backend into an assumed self-managed one.
+    # Do not gate on CronJob presence: an eligible run must fail if operator wiring is
+    # missing.
+    if [ "$SKIP_DEPLOYMENT" != "true" ] \
+        && [ "$SKIP_INFRASTRUCTURE" != "true" ] \
+        && [ "$BACKEND_STORE" = "postgres" ] \
+        && [ -z "${DB_HOST:-}" ] \
+        && [[ "$STORAGE_TYPE" == "s3" || "$STORAGE_TYPE" == "externals3" ]]; then
+        export trace_rollups_enabled="true"
+    else
+        export trace_rollups_enabled="false"
+    fi
 
     local results_file="${TEST_RESULTS_DIR}/xunit_report_${STORAGE_TYPE}.xml"
     echo "  Running tests (output: $results_file)..."

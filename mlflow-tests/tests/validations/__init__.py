@@ -59,6 +59,17 @@ from .trace_archival_validations import (
     validate_archive_objects_written,
     validate_archival_traces_readable,
 )
+from .trace_rollups_validations import (
+    validate_trace_rollups_ready,
+    validate_trace_rollup_experiment_created,
+    validate_trace_rollup_traces_seeded,
+    validate_additional_trace_rollup_traces_seeded,
+    validate_trace_rollup_incremental_job_completed,
+    validate_trace_rollup_job_completed,
+    validate_trace_rollup_rows,
+    validate_trace_rollup_api_metrics,
+    validate_trace_rollup_traces_readable,
+)
 from .validation_utils import (
     validate_authentication_denied,
     validate_authentication_denied_or_resource_not_found,
@@ -109,6 +120,15 @@ __all__ = [
     "validate_archival_job_completed",
     "validate_archive_objects_written",
     "validate_archival_traces_readable",
+    "validate_trace_rollups_ready",
+    "validate_trace_rollup_experiment_created",
+    "validate_trace_rollup_traces_seeded",
+    "validate_additional_trace_rollup_traces_seeded",
+    "validate_trace_rollup_job_completed",
+    "validate_trace_rollup_incremental_job_completed",
+    "validate_trace_rollup_rows",
+    "validate_trace_rollup_api_metrics",
+    "validate_trace_rollup_traces_readable",
     "validate_authentication_denied",
     "validate_authentication_denied_or_resource_not_found",
     "validate_resource_retrieved_or_created",
