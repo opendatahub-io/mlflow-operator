@@ -82,6 +82,17 @@ func configureTLSFromClient(ctx context.Context, bootstrapClient client.Reader, 
 		return TLSConfig{}, classifyAPIServerReadError(reader.err)
 	}
 
+	if !frameworktls.ShouldHonorClusterTLSProfile(loaded.AdherencePolicy) {
+		// NoOpinion and LegacyAdheringComponentsOnly leave the TLS posture to
+		// the component: serve the Intermediate hardened defaults. The
+		// observed profile is still reported so the watcher anchors change
+		// detection to the cluster state, and it is deliberately not parsed
+		// because it is not applied.
+		log.Info("TLS adherence policy does not require honoring the cluster profile, using Intermediate defaults",
+			"adherence", loaded.AdherencePolicy)
+		return notHonoredTLSConfig(loaded, log)
+	}
+
 	profile := loaded.Spec
 	if reader.apiServer != nil {
 		profile, err = tlspkg.GetTLSProfileSpec(reader.apiServer.Spec.TLSSecurityProfile)
@@ -132,6 +143,23 @@ func fallbackTLSConfig(watchable bool, log logr.Logger) (TLSConfig, error) {
 		Profile:         profile,
 		AdherencePolicy: configv1.TLSAdherencePolicyNoOpinion,
 		Watchable:       watchable,
+	}, nil
+}
+
+// notHonoredTLSConfig serves the Intermediate hardened defaults when the
+// adherence policy leaves the TLS posture to the component. The observed
+// profile seeds the watcher so only real cluster changes trigger a reload,
+// and an adherence flip to Strict re-enters the honoring path.
+func notHonoredTLSConfig(loaded frameworktls.LoadResult, log logr.Logger) (TLSConfig, error) {
+	option, err := tlsOptionsFromProfile(*configv1.TLSProfiles[configv1.TLSProfileIntermediateType], log)
+	if err != nil {
+		return TLSConfig{}, err
+	}
+	return TLSConfig{
+		Opts:            []func(*tls.Config){option},
+		Profile:         loaded.Spec,
+		AdherencePolicy: loaded.AdherencePolicy,
+		Watchable:       loaded.Watchable,
 	}, nil
 }
 
