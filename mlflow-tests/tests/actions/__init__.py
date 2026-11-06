@@ -64,6 +64,17 @@ from .trace_archival_actions import (
     action_wait_for_archive_objects,
     action_reload_archival_traces,
 )
+from .trace_rollups_actions import (
+    action_prepare_trace_rollups,
+    action_seed_trace_rollup_traces,
+    action_seed_additional_trace_rollup_traces,
+    action_run_incremental_trace_rollup_job,
+    action_run_trace_rollup_job,
+    action_read_trace_rollup_rows,
+    action_query_trace_rollup_metrics,
+    action_read_trace_rollup_sources,
+    action_cleanup_trace_rollups,
+)
 from .workspace_actions import (
     action_list_workspaces,
 )
@@ -114,5 +125,14 @@ __all__ = [
     "action_run_archival_job_from_cronjob",
     "action_wait_for_archive_objects",
     "action_reload_archival_traces",
+    "action_prepare_trace_rollups",
+    "action_seed_trace_rollup_traces",
+    "action_seed_additional_trace_rollup_traces",
+    "action_run_trace_rollup_job",
+    "action_run_incremental_trace_rollup_job",
+    "action_read_trace_rollup_rows",
+    "action_query_trace_rollup_metrics",
+    "action_read_trace_rollup_sources",
+    "action_cleanup_trace_rollups",
     "action_list_workspaces",
 ]

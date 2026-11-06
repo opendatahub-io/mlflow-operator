@@ -243,6 +243,19 @@ Set one or both metadata stores to `postgres`, then configure `DB_HOST`, `DB_POR
 BACKEND_STORE=postgres REGISTRY_STORE=postgres DB_HOST=... DB_PASSWORD=... bash images/test-run.sh
 ```
 
+### Trace rollup smoke
+
+The live TestTraceRollups smoke is selected for S3-compatible artifact suites
+that deploy PostgreSQL through this harness. It seeds five traces with known
+latency values and timestamps past the 24-hour cutoff, runs the operator
+CronJob, then adds two traces on the same UTC day and runs a second distinct Job.
+It checks that the updated SQL rollups and public trace-metrics results include
+all seven traces, and that the original and additional trace metadata remain
+readable. It reuses the harness database after verifying that tracking and the
+CronJob use its Secret, then removes test-created Jobs and rollup rows for its
+unique experiment. Reused deployments and explicit external PostgreSQL hosts
+skip it.
+
 ## Architecture notes
 
 - **Workspace namespaces**: the test creates workspace namespaces (`workspace1`, `workspace2` by

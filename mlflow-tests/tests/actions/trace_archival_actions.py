@@ -38,6 +38,7 @@ from ..http_utils import (
     get_s3_verify_value,
 )
 from ..shared import TestContext
+from .job_utils import wait_for_job_complete
 
 logger = logging.getLogger(__name__)
 
@@ -46,7 +47,6 @@ ARCHIVAL_CONTAINER_NAME = "mlflow-trace-archival"
 ARCHIVAL_PREFIX = "trace-archive"
 ARCHIVAL_TRACE_COUNT = 3
 CRONJOB_WAIT_TIMEOUT_SECONDS = 120
-JOB_COMPLETE_TIMEOUT_SECONDS = 180
 ARCHIVE_OBJECT_WAIT_TIMEOUT_SECONDS = 30
 RETENTION_WAIT_BUFFER_SECONDS = 10
 TRACE_VISIBILITY_TIMEOUT_SECONDS = 30
@@ -319,100 +319,6 @@ def _job_from_cronjob(cronjob: client.V1CronJob, job_name: str, namespace: str) 
     )
 
 
-def _condition_status(job: client.V1Job, condition_type: str) -> str | None:
-    for condition in job.status.conditions or []:
-        if condition.type == condition_type:
-            return condition.status
-    return None
-
-
-def pod_diagnostics(core_api: client.CoreV1Api, namespace: str, job_name: str) -> str:
-    lines = [f"Job {job_name} diagnostics in namespace {namespace}:"]
-    try:
-        pods = core_api.list_namespaced_pod(namespace, label_selector=f"job-name={job_name}")
-    except ApiException as exc:
-        return f"{lines[0]} failed to list pods: {exc}"
-
-    if not pods.items:
-        lines.append("No pods found for job-name selector.")
-
-    for pod in pods.items:
-        phase = pod.status.phase if pod.status else "unknown"
-        lines.append(f"Pod {pod.metadata.name} phase={phase}")
-        for status in (pod.status.container_statuses or []) if pod.status else []:
-            waiting = status.state.waiting if status.state else None
-            terminated = status.state.terminated if status.state else None
-            if waiting is not None:
-                lines.append(
-                    f"  container {status.name} waiting reason={waiting.reason} "
-                    f"message={waiting.message}"
-                )
-            if terminated is not None:
-                lines.append(
-                    f"  container {status.name} terminated reason={terminated.reason} "
-                    f"exit_code={terminated.exit_code} message={terminated.message}"
-                )
-        try:
-            events = core_api.list_namespaced_event(
-                namespace,
-                field_selector=f"involvedObject.name={pod.metadata.name}",
-            )
-            for event in events.items:
-                lines.append(
-                    f"  event type={event.type} reason={event.reason} message={event.message}"
-                )
-        except Exception as exc:
-            lines.append(f"  failed to list events: {exc}")
-        try:
-            logs = core_api.read_namespaced_pod_log(
-                name=pod.metadata.name,
-                namespace=namespace,
-                container=ARCHIVAL_CONTAINER_NAME,
-                tail_lines=200,
-            )
-            lines.append(f"  logs:\n{logs}")
-        except ApiException as exc:
-            lines.append(f"  logs unavailable: {exc.reason}")
-    return "\n".join(lines)
-
-
-def _wait_for_job_complete(
-    batch_api: client.BatchV1Api,
-    core_api: client.CoreV1Api,
-    job_name: str,
-    namespace: str,
-) -> None:
-    deadline = time.monotonic() + JOB_COMPLETE_TIMEOUT_SECONDS
-    while time.monotonic() < deadline:
-        try:
-            last_job = batch_api.read_namespaced_job_status(job_name, namespace)
-        except ApiException as exc:
-            if exc.status != 404:
-                raise
-            time.sleep(POLL_INTERVAL_SECONDS)
-            continue
-
-        if _condition_status(last_job, "Complete") == "True":
-            logger.info("Job %s completed successfully", job_name)
-            logger.info(
-                "Completed archival job diagnostics:\n%s",
-                pod_diagnostics(core_api, namespace, job_name),
-            )
-            return
-        if _condition_status(last_job, "Failed") == "True":
-            pytest.fail(
-                f"Trace archival Job {job_name} Failed before completion.\n"
-                f"{pod_diagnostics(core_api, namespace, job_name)}"
-            )
-        time.sleep(POLL_INTERVAL_SECONDS)
-
-    diagnostics = pod_diagnostics(core_api, namespace, job_name)
-    pytest.fail(
-        f"Trace archival Job {job_name} did not Complete within "
-        f"{JOB_COMPLETE_TIMEOUT_SECONDS}s.\n{diagnostics}"
-    )
-
-
 def action_prepare_archival_smoke(test_context: TestContext) -> None:
     """Validate harness config and capture the pre-job archive object count."""
     s3_client, bucket = _archive_s3_client()
@@ -508,7 +414,14 @@ def action_run_archival_job_from_cronjob(test_context: TestContext) -> None:
     cronjob = _wait_for_cronjob(batch_api, namespace)
     batch_api.create_namespaced_job(namespace, _job_from_cronjob(cronjob, job_name, namespace))
     test_context.add_job_for_cleanup(job_name, namespace)
-    _wait_for_job_complete(batch_api, core_api, job_name, namespace)
+    wait_for_job_complete(
+        batch_api,
+        core_api,
+        job_name,
+        namespace,
+        container_name=ARCHIVAL_CONTAINER_NAME,
+        job_description="Trace archival",
+    )
 
 
 def action_wait_for_archive_objects(test_context: TestContext) -> None:
