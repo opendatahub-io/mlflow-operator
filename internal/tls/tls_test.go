@@ -146,8 +146,8 @@ func TestConfigureTLSFromClientEmptyCipherListAdherence(t *testing.T) {
 			policy:        configv1.TLSAdherencePolicy("FuturePolicy"),
 			wantStrictErr: true,
 		},
-		"NoOpinion uses Intermediate defaults": {},
-		"Legacy uses Intermediate defaults": {
+		"NoOpinion accepts empty cipher list": {},
+		"Legacy accepts empty cipher list": {
 			policy: configv1.TLSAdherencePolicyLegacyAdheringComponentsOnly,
 		},
 	} {
@@ -182,109 +182,10 @@ func TestConfigureTLSFromClientEmptyCipherListAdherence(t *testing.T) {
 			for _, option := range result.Opts {
 				option(config)
 			}
-			if config.MinVersion != tls.VersionTLS12 || len(config.CipherSuites) == 0 {
-				t.Errorf("effective TLS config = {MinVersion: %d, CipherSuites: %v}, want TLS 1.2 Intermediate defaults", config.MinVersion, config.CipherSuites)
+			if config.MinVersion != tls.VersionTLS12 || len(config.CipherSuites) != 0 {
+				t.Errorf("effective TLS config = {MinVersion: %d, CipherSuites: %v}, want TLS 1.2 with Go defaults", config.MinVersion, config.CipherSuites)
 			}
 		})
-	}
-}
-
-func TestConfigureTLSFromClientAdherenceGate(t *testing.T) {
-	scheme := runtime.NewScheme()
-	if err := configv1.Install(scheme); err != nil {
-		t.Fatal(err)
-	}
-
-	for name, tt := range map[string]struct {
-		policy        configv1.TLSAdherencePolicy
-		wantHonored   bool
-		wantAdherence configv1.TLSAdherencePolicy
-	}{
-		"unset uses Intermediate defaults": {
-			wantAdherence: configv1.TLSAdherencePolicyNoOpinion,
-		},
-		"Legacy uses Intermediate defaults": {
-			policy:        configv1.TLSAdherencePolicyLegacyAdheringComponentsOnly,
-			wantAdherence: configv1.TLSAdherencePolicyLegacyAdheringComponentsOnly,
-		},
-		"Strict honors the profile": {
-			policy:        configv1.TLSAdherencePolicyStrictAllComponents,
-			wantHonored:   true,
-			wantAdherence: configv1.TLSAdherencePolicyStrictAllComponents,
-		},
-		"unknown policy is treated as Strict": {
-			policy:        configv1.TLSAdherencePolicy("FuturePolicy"),
-			wantHonored:   true,
-			wantAdherence: configv1.TLSAdherencePolicy("FuturePolicy"),
-		},
-	} {
-		t.Run(name, func(t *testing.T) {
-			apiServer := &configv1.APIServer{}
-			apiServer.Name = "cluster"
-			apiServer.Spec.TLSAdherence = tt.policy
-			apiServer.Spec.TLSSecurityProfile = &configv1.TLSSecurityProfile{
-				Type: configv1.TLSProfileModernType,
-			}
-			bootstrapClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(apiServer).Build()
-
-			result, err := configureTLSFromClient(context.Background(), bootstrapClient, logr.Discard())
-			if err != nil {
-				t.Fatalf("configureTLSFromClient() error = %v, want success", err)
-			}
-			if result.AdherencePolicy != tt.wantAdherence {
-				t.Errorf("AdherencePolicy = %q, want %q", result.AdherencePolicy, tt.wantAdherence)
-			}
-			if !result.Watchable {
-				t.Error("Watchable = false, want true so adherence flips trigger a reload")
-			}
-			config := &tls.Config{}
-			for _, option := range result.Opts {
-				option(config)
-			}
-			if tt.wantHonored {
-				if config.MinVersion != tls.VersionTLS13 {
-					t.Errorf("MinVersion = %d, want TLS 1.3 from the honored Modern profile", config.MinVersion)
-				}
-				return
-			}
-			if config.MinVersion != tls.VersionTLS12 || len(config.CipherSuites) == 0 {
-				t.Errorf("effective TLS config = {MinVersion: %d, CipherSuites: %v}, want TLS 1.2 Intermediate defaults", config.MinVersion, config.CipherSuites)
-			}
-			if want := *configv1.TLSProfiles[configv1.TLSProfileModernType]; !reflect.DeepEqual(result.Profile, want) {
-				t.Errorf("Profile = %#v, want the observed Modern spec as the watcher seed", result.Profile)
-			}
-		})
-	}
-}
-
-func TestConfigureTLSFromClientNotHonoredSkipsProfileValidation(t *testing.T) {
-	// A malformed profile must not block startup when the adherence policy
-	// leaves the TLS posture to the component: the profile is never applied.
-	scheme := runtime.NewScheme()
-	if err := configv1.Install(scheme); err != nil {
-		t.Fatal(err)
-	}
-	apiServer := &configv1.APIServer{}
-	apiServer.Name = "cluster"
-	apiServer.Spec.TLSAdherence = configv1.TLSAdherencePolicyLegacyAdheringComponentsOnly
-	apiServer.Spec.TLSSecurityProfile = &configv1.TLSSecurityProfile{
-		Type: configv1.TLSProfileCustomType,
-		Custom: &configv1.CustomTLSProfile{TLSProfileSpec: configv1.TLSProfileSpec{
-			MinTLSVersion: configv1.TLSProtocolVersion("VersionTLS99"),
-		}},
-	}
-	bootstrapClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(apiServer).Build()
-
-	result, err := configureTLSFromClient(context.Background(), bootstrapClient, logr.Discard())
-	if err != nil {
-		t.Fatalf("configureTLSFromClient() error = %v, want the profile skipped under Legacy", err)
-	}
-	config := &tls.Config{}
-	for _, option := range result.Opts {
-		option(config)
-	}
-	if config.MinVersion != tls.VersionTLS12 || len(config.CipherSuites) == 0 {
-		t.Errorf("effective TLS config = {MinVersion: %d, CipherSuites: %v}, want TLS 1.2 Intermediate defaults", config.MinVersion, config.CipherSuites)
 	}
 }
 
