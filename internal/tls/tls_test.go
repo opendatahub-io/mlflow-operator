@@ -13,6 +13,7 @@ import (
 	frameworktls "github.com/opendatahub-io/odh-platform-utilities/framework/tls"
 	configv1 "github.com/openshift/api/config/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -79,15 +80,51 @@ func TestConfigureTLSFromClientInternalErrorUsesWatchableFallback(t *testing.T) 
 	}
 }
 
-func TestConfigureTLSFromClientAPINotPresentUsesUnwatchedFallback(t *testing.T) {
+func TestConfigureTLSFromClientAPIAbsentFallbacks(t *testing.T) {
 	apiServerGR := schema.GroupResource{Group: "config.openshift.io", Resource: "apiservers"}
-	bootstrapClient := &getErrorClient{err: apierrors.NewNotFound(apiServerGR, "cluster")}
-	result, err := configureTLSFromClient(context.Background(), bootstrapClient, logr.Discard())
-	if err != nil {
-		t.Fatalf("configureTLSFromClient() error = %v", err)
+	for name, tt := range map[string]struct {
+		readErr       error
+		wantWatchable bool
+	}{
+		"API not served is not watchable": {
+			readErr: &meta.NoKindMatchError{
+				GroupKind:        schema.GroupKind{Group: "config.openshift.io", Kind: "APIServer"},
+				SearchedVersions: []string{"v1"},
+			},
+			wantWatchable: false,
+		},
+		"missing APIServer object stays watchable": {
+			readErr:       apierrors.NewNotFound(apiServerGR, "cluster"),
+			wantWatchable: true,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			bootstrapClient := &getErrorClient{err: tt.readErr}
+			result, err := configureTLSFromClient(context.Background(), bootstrapClient, logr.Discard())
+			if err != nil {
+				t.Fatalf("configureTLSFromClient() error = %v, want fallback", err)
+			}
+			if result.Watchable != tt.wantWatchable {
+				t.Errorf("Watchable = %t, want %t", result.Watchable, tt.wantWatchable)
+			}
+		})
 	}
-	if result.Watchable {
-		t.Error("Watchable = true, want false when the API is absent")
+}
+
+func TestConfigureTLSFromClientUnregisteredAPIServerSchemeFailsClosed(t *testing.T) {
+	bootstrapClient := &countingReader{
+		Reader: fake.NewClientBuilder().WithScheme(runtime.NewScheme()).Build(),
+	}
+
+	result, err := configureTLSFromClient(context.Background(), bootstrapClient, logr.Discard())
+	if err == nil {
+		t.Fatal("configureTLSFromClient() error = nil, want unregistered APIServer scheme error")
+	}
+	if bootstrapClient.getCalls != 1 {
+		t.Fatalf("APIServer Get calls = %d, want 1", bootstrapClient.getCalls)
+	}
+	if len(result.Opts) != 0 {
+		t.Fatalf("TLS options = %d, want none when the APIServer scheme is unregistered", len(result.Opts))
 	}
 }
 
