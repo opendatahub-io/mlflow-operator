@@ -265,6 +265,7 @@ PVC mounts are workload-specific. GC mounts configured storage only for local or
 - The presence-based `mlflow.opendatahub.io/force-migrate` annotation forces a one-shot migration; the operator clears it after a successful forced run, and if a finished Job already exists for the current desired generation, the operator deletes it first so it can create the replacement Job with the same generated name. Terminal migration failures instruct admins to use that annotation after fixing the issue.
 - When backend and registry store URIs differ, the migration Job must handle them independently and only advance `status.version` after both succeed
 - Migration Jobs must explicitly neutralize `MLFLOW_READ_REPLICA_BACKEND_STORE_URI`; schema initialization and upgrades always target the primary backend and registry stores
+- The admin-run trace analytics prepopulation Job must not overlap database migrations and never advances the Alembic revision; the final operator-managed upgrade remains required. See `docs/trace-analytics-prepopulation.md`.
 
 ## Testing
 
@@ -358,6 +359,14 @@ The long-form testing map for the RHOAI MLflow fork now lives in
 shift-left MLflow entrypoints, workflow names in this repository, or the MLflow
 fork's migration-gap and UI-E2E references change.
 
+### Trace analytics prepopulation phase
+
+See `docs/rhoai-mlflow-testing.md` for setup and coverage limits.
+
+- Require explicit `trace_analytics_prepopulation` marker selection and an eligible self-deployed PostgreSQL suite with `TRACE_PREPOPULATION_IMAGE`.
+- Keep predecessor version/schema/image pins aligned with the command's required revision (`b7e2c1a4d9f3`) and migration `down_revision`, not merely the supported target version.
+- Keep decoded database credentials out of shared state and raw Job logs out of reports/debug artifacts. Read Secrets/logs without preloading to avoid Kubernetes DEBUG body logging.
+
 ### Linting
 
 This repo uses golangci-lint; to ensure linting is successful after code changes, run
@@ -432,6 +441,10 @@ The `config/samples/` directory contains example MLflow custom resource configur
 
 9. **mlflow_v1_mlflow_trace_rollups.yaml** - SQL trace rollup maintenance
 
+10. **trace_analytics_prepopulation_job.yaml** - Trace analytics prepopulation Job (non-CR)
+    - Standalone, manually applied Job for live deployments with a Secret-backed primary PostgreSQL backend
+    - Does not advance the Alembic revision; see `docs/trace-analytics-prepopulation.md`
+
 **When to update samples:**
 
 Samples MUST be updated when:
@@ -449,9 +462,10 @@ After updating samples, ensure:
    make manifests  # Generate CRDs first
 
    # Validate locally (client-side only, no cluster required)
-   # Find all MLflow sample files by content, not naming pattern
+   # Find all MLflow sample files by parsed kind, not string matching
    mapfile -t MLFLOW_SAMPLES < <(
-     grep -l "kind: MLflow" config/samples/*.yaml 2>/dev/null | grep -v mlflowconfig || true
+     python3 test/scripts/classify_samples.py config/samples \
+       | awk -F'\t' '$1=="MLflow"{print $3}' | sort -u
    )
    for sample in "${MLFLOW_SAMPLES[@]}"; do
      echo "Validating $sample..."
@@ -463,7 +477,8 @@ After updating samples, ensure:
    # Note: Validate these against a cluster after installing the vendored CRD:
    #   kubectl apply -f config/crd/mlflow.kubeflow.org_mlflowconfigs.yaml
    mapfile -t MLFLOWCONFIG_SAMPLES < <(
-     grep -l "kind: MLflowConfig" config/samples/*.yaml 2>/dev/null || true
+     python3 test/scripts/classify_samples.py config/samples \
+       | awk -F'\t' '$1=="MLflowConfig"{print $3}' | sort -u
    )
    for sample in "${MLFLOWCONFIG_SAMPLES[@]}"; do
      echo "Validating $sample..."
@@ -525,6 +540,7 @@ Validates sample CRs on every PR:
 - `upgrade-validation.yml` - Upgrade-focused MLflow workflow for push and pull request validation. It builds and reuses the same operator, runtime, and test image artifacts for two complementary marker-validation jobs plus the upgrade-path e2e job. `current-upgrade-pytest-validation` runs `mlflow-tests` `pre_upgrade` / `post_upgrade` directly on the PR-built images so the upgrade-tagged pytest machinery itself and additive datasets such as `3.11` stay exercised. `seeded-upgrade-state-validation` now seeds a fully source-compatible `3.10.1` deployment by pairing the pinned ODH release 1.1 MLflow runtime digest with the matching pinned `quay.io/opendatahub/mlflow-operator` digest, restoring the operator `config/rbac` tree from commit `38b88c61fa4acd0f35081e4d0685c10c0c5bea91` before the pre-upgrade deployment, then reapplying the current operator manifests as part of the upgrade to the PR-built operator before it runs the `mlflow-tests` `post_upgrade` suite against that upgraded state across both file and S3 artifact backends. The live `upgrade-tests` e2e job follows the same source-compatible seeding model and reapplies the current operator manifests after seeding so the later image-only upgrade step in the test runs with current RBAC. The `build-mlflow-tests-image` job also verifies that the direct-execution test image exposes the repo's normalized supported MLflow version through `MLFLOW_TEST_SUPPORTED_VERSION`, matching the Jenkins-style container entry path. The workflow still retags the pinned MLflow seed runtime digest to a local tag before `kind load`, but it now references the pinned seed operator digest directly from Quay. Failed jobs upload debug artifacts with namespace snapshots plus operator, MLflow, and migration-job pod logs and descriptions when available.
 - `operator-chaos.yml` - Offline operator-chaos upgrade-risk gate. It validates `chaos/knowledge/mlflow.yaml`, runs `operator-chaos preflight --local`, diffs the base and PR knowledge models with `operator-chaos diff --breaking`, compares the checked-in MLflow CRD schema with `operator-chaos diff-crds`, previews generated upgrade experiments with `operator-chaos simulate-upgrade --dry-run`, and fails fast when validation, command execution, or breaking knowledge/CRD changes are reported. This workflow is intentionally asset-focused and does not create a cluster or execute live chaos experiments.
 - `verify-mlflow-version-alignment.yml` - Scheduled ODH-only default-image alignment check. It runs directly from the checked-out operator repo and verifies the `config/base/params.env` plus `.github/test-infra/overlays/kind/params.env` defaults against the supported MLflow version metadata without instantiating the heavier integration workflow.
+- `trace-analytics-prepopulation.yml` - Runs the live prepopulation phase against a CI predecessor fixture, then verifies the final operator-managed upgrade.
 - `test-e2e.yml` - Runs end-to-end tests
 - `verify-kustomize.yml` - Validates kustomize overlays
 

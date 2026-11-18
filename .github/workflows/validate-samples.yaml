@@ -8,6 +8,7 @@ on:
     paths:
       - '.github/**'
       - 'config/samples/**'
+      - 'test/scripts/**'
       - 'api/**'
       - 'config/crd/**'
       - 'Makefile'
@@ -24,6 +25,9 @@ jobs:
         uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version-file: go.mod
+
+      - name: Install sample discovery dependencies
+        run: python3 -m pip install pyyaml
 
       - name: Generate CRD manifests
         run: make manifests

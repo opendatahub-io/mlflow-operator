@@ -32,6 +32,13 @@
 #   SKIP_CLEANUP                forward cleanup behavior to test-run.sh
 #   CLEANUP_REUSED_RESOURCES    forward reused-resource cleanup behavior to test-run.sh
 #   DISABLE_TLS                 forward direct S3 TLS verification behavior to test-run.sh
+#   TRACE_PREPOPULATION_IMAGE   MLflow image used by the trace analytics
+#                               prepopulation Job; makes the
+#                               trace_analytics_prepopulation pytest phase
+#                               eligible for self-deployed PostgreSQL suites
+#                               (the phase still requires explicit marker
+#                               selection, e.g.
+#                               PYTEST_MARK_EXPRESSION=trace_analytics_prepopulation)
 #   MLFLOW_TEST_SUPPORTED_VERSION
 #                               override the version used to select upgrade datasets
 #   upgrade_test_workspace      namespace used by upgrade pre/post phases
@@ -113,7 +120,8 @@ for name in \
   AWS_DEFAULT_ENDPOINT \
   AWS_DEFAULT_REGION \
   MLFLOW_TEST_SUPPORTED_VERSION \
-  upgrade_test_workspace; do
+  upgrade_test_workspace \
+  TRACE_PREPOPULATION_IMAGE; do
   if [[ -v "$name" ]]; then
     docker_args+=(-e "$name=${!name}")
   fi

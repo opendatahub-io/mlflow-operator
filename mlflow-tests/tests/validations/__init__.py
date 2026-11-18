@@ -59,6 +59,14 @@ from .trace_archival_validations import (
     validate_archive_objects_written,
     validate_archival_traces_readable,
 )
+from .trace_prepopulation_validations import (
+    validate_prepopulation_experiment_created,
+    validate_trace_prepopulation_prepared,
+    validate_initial_prepopulation_traces_seeded,
+    validate_first_prepopulation_job,
+    validate_additional_prepopulation_traces_seeded,
+    validate_second_prepopulation_job,
+)
 from .validation_utils import (
     validate_authentication_denied,
     validate_authentication_denied_or_resource_not_found,
@@ -109,6 +117,12 @@ __all__ = [
     "validate_archival_job_completed",
     "validate_archive_objects_written",
     "validate_archival_traces_readable",
+    "validate_trace_prepopulation_prepared",
+    "validate_prepopulation_experiment_created",
+    "validate_initial_prepopulation_traces_seeded",
+    "validate_first_prepopulation_job",
+    "validate_additional_prepopulation_traces_seeded",
+    "validate_second_prepopulation_job",
     "validate_authentication_denied",
     "validate_authentication_denied_or_resource_not_found",
     "validate_resource_retrieved_or_created",
