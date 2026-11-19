@@ -58,6 +58,13 @@ for deployment in mlflow controller-manager; do
         > "${OUTPUT_DIR}/${deployment}-deployment.describe.txt" 2>&1 || true
 done
 
+# Raw container logs are collected per label selector. The prepopulation Job
+# pod is deliberately excluded from raw log collection (its component label
+# also matches app=mlflow): the prepopulation suite's hygiene contract keeps
+# raw Job logs out of uploaded debug artifacts, and its lifecycle diagnostics
+# are already covered by the pods/jobs/events listings above. The `!=`
+# requirement also matches pods that do not carry the component label at all,
+# so the MLflow server pod is unaffected.
 while IFS='|' read -r label suffix; do
     label="${label#"${label%%[![:space:]]*}"}"
     mapfile -t pods < <(
@@ -76,7 +83,7 @@ while IFS='|' read -r label suffix; do
             > "${OUTPUT_DIR}/${pod}${suffix}.previous.log" 2>&1 || true
     done
 done <<'EOF'
-    app=mlflow|
+    app=mlflow,component!=mlflow-trace-analytics-prepopulation|
     control-plane=controller-manager|-operator
     mlflow.opendatahub.io/migration-job=true|-migration
     app=seaweedfs|-seaweedfs

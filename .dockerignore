@@ -28,5 +28,6 @@
 mlflow-tests/.venv/
 !.github/actions/deploy
 !.github/test-infra
+!.github/workflows/trace-analytics-prepopulation.yml
 !config
 !scripts/

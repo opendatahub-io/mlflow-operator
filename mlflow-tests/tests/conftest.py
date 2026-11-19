@@ -31,6 +31,8 @@ from .upgrade.utils import (
 logger = logging.getLogger(__name__)
 random_gen = random.Random()
 
+PREPOPULATION_MARKER = "trace_analytics_prepopulation"
+
 
 def _get_requested_upgrade_phase(mark_expression: str | None = None) -> str:
     """Return the effective upgrade phase from an exact pytest marker selection."""
@@ -40,6 +42,11 @@ def _get_requested_upgrade_phase(mark_expression: str | None = None) -> str:
     if normalized == "post_upgrade":
         return "post_upgrade"
     return ""
+
+
+def _marker_selects_prepopulation(mark_expression: str | None = None) -> bool:
+    """Require explicit marker selection even when the harness enables the phase."""
+    return (mark_expression or "").strip() == PREPOPULATION_MARKER
 
 
 def _should_ignore_upgrade_collection(collection_path: Path, phase: str) -> bool:
@@ -81,12 +88,22 @@ def pytest_ignore_collect(collection_path, config):
 def pytest_collection_modifyitems(config, items):
     """Keep upgrade tests opt-in and gate versioned files per upgrade phase."""
     phase = _get_requested_upgrade_phase(config.option.markexpr)
+    prepopulation_selected = _marker_selects_prepopulation(config.option.markexpr)
     deselected = []
     selected = []
 
     for item in items:
         marker_names = {marker.name for marker in item.iter_markers()}
         is_upgrade_item = bool(marker_names & UPGRADE_PHASES)
+        is_prepopulation_item = PREPOPULATION_MARKER in marker_names
+
+        # The live prepopulation workflow needs an explicit marker selection
+        # even when the harness exported its eligibility flag: without this
+        # gate, plain pytest inside an eligible run would execute a suite
+        # that only makes sense against a predecessor-schema deployment.
+        if is_prepopulation_item and not prepopulation_selected:
+            deselected.append(item)
+            continue
 
         if not phase:
             if is_upgrade_item:

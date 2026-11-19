@@ -15,6 +15,7 @@ runtime and upgrade validation already checked into this repository.
 | Does the MLflow fork itself still work? | [`opendatahub-io/mlflow`](https://github.com/opendatahub-io/mlflow) | [`master.yml`](https://github.com/opendatahub-io/mlflow/blob/master/.github/workflows/master.yml), [`e2e.yml`](https://github.com/opendatahub-io/mlflow/blob/master/.github/workflows/e2e.yml), [`tests/store/db/test_migration_gap.py`](https://github.com/opendatahub-io/mlflow/blob/master/tests/store/db/test_migration_gap.py) |
 | Does the operator still deploy and exercise the current MLflow runtime? | [`opendatahub-io/mlflow-operator`](https://github.com/opendatahub-io/mlflow-operator) | [`.github/workflows/integration-tests.yml`](https://github.com/opendatahub-io/mlflow-operator/blob/main/.github/workflows/integration-tests.yml), [`mlflow-tests/images/test-run.sh`](https://github.com/opendatahub-io/mlflow-operator/blob/main/mlflow-tests/images/test-run.sh) |
 | Does upgrade state survive seeded and current-version upgrade flows? | [`opendatahub-io/mlflow-operator`](https://github.com/opendatahub-io/mlflow-operator) | [`.github/workflows/upgrade-validation.yml`](https://github.com/opendatahub-io/mlflow-operator/blob/main/.github/workflows/upgrade-validation.yml), [`test/e2e/upgrade_e2e_test.go`](https://github.com/opendatahub-io/mlflow-operator/blob/main/test/e2e/upgrade_e2e_test.go) |
+| Does the trace analytics prepopulation Job work against a live predecessor-schema deployment? | [`opendatahub-io/mlflow-operator`](https://github.com/opendatahub-io/mlflow-operator) | [`.github/workflows/trace-analytics-prepopulation.yml`](https://github.com/opendatahub-io/mlflow-operator/blob/main/.github/workflows/trace-analytics-prepopulation.yml), `mlflow-tests -m trace_analytics_prepopulation` |
 | Did a PR change the stable upgrade topology or CRD shape in a risky way? | [`opendatahub-io/mlflow-operator`](https://github.com/opendatahub-io/mlflow-operator) | [`.github/workflows/operator-chaos.yml`](https://github.com/opendatahub-io/mlflow-operator/blob/main/.github/workflows/operator-chaos.yml), [`chaos/knowledge/mlflow.yaml`](https://github.com/opendatahub-io/mlflow-operator/blob/main/chaos/knowledge/mlflow.yaml) |
 | Which external shift-left jobs run against the same MLflow test image? | [Jenkins](https://gitlab.cee.redhat.com/ods/jenkins) | [`components/mlflow/main.yaml`](https://gitlab.cee.redhat.com/ods/jenkins/-/blob/master/resources/configs/components-testing/components/mlflow/main.yaml), [`testsRunners.groovy`](https://gitlab.cee.redhat.com/ods/jenkins/-/blob/master/vars/testsRunners.groovy), [`upgradeRHOAI.groovy`](https://gitlab.cee.redhat.com/ods/jenkins/-/blob/master/vars/upgradeRHOAI.groovy) |
 
@@ -138,6 +139,29 @@ splits upgrade coverage into three pieces:
   `test/e2e/upgrade_e2e_test.go`, which validates operator-managed migration and
   rollout behavior against a seeded `3.10.1` image, then enables the module
   controller path to assert `MLflowOperator.status.releases`.
+
+### Trace analytics prepopulation validation
+
+[`.github/workflows/trace-analytics-prepopulation.yml`](../.github/workflows/trace-analytics-prepopulation.yml)
+runs `trace_analytics_prepopulation` against a live MLflow 3.16.0 fixture at
+Alembic revision `b7e2c1a4d9f3`, using the current runtime image for the Job.
+The fixture pairs `.github/test-infra/trace-analytics-prepopulation/Dockerfile`
+with an operator built using `SUPPORTED_MLFLOW_VERSION_OVERRIDE`.
+
+The test seeds traces and SQL-backed spans through OTLP, verifies backfilled
+values and trace/span rerun idempotency via PostgreSQL `xmin`, and checks that
+the CR and revision remain unchanged. It samples API availability and checks
+for migration overlap. PostgreSQL TLS is enabled with the live Deployment's
+CA-bundle and libpq trust settings. SQL probes have bounded execution and
+sanitized failures.
+
+After prepopulation, CI stops the predecessor operator, waits for its pods to
+terminate, switches images, and verifies the final operator-managed migration.
+No suitable published ODH/RHOAI predecessor image has been identified: this
+validates the schema transition, not a supported RHOAI source-release path.
+Keep predecessor pins aligned with the migration's required schema revision;
+a target-version bump alone does not change them. See the
+[administrator runbook](trace-analytics-prepopulation.md) for production checks.
 
 For local reproduction or OpenShift reuse flows, start with
 [`mlflow-tests/images/README.md`](../mlflow-tests/images/README.md) rather than

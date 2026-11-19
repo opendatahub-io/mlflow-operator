@@ -1,0 +1,591 @@
+name: Trace Analytics Prepopulation Validation
+
+env:
+  NAMESPACE: 'opendatahub'
+  AWS_ACCESS_KEY_ID: 'minio'
+  AWS_SECRET_ACCESS_KEY: 'minio123'
+  AWS_S3_BUCKET: 'mlpipeline'
+  MLFLOW_RUNTIME_ARTIFACT: 'mlflow-runtime-image'
+  MLFLOW_RUNTIME_IMAGE: 'localhost/mlflow-runtime:ci'
+  MLFLOW_TESTS_RUNTIME_ARTIFACT: 'mlflow-tests-image'
+  MLFLOW_TESTS_RUNTIME_IMAGE: 'localhost/mlflow-tests:ci'
+  OPERATOR_RUNTIME_ARTIFACT: 'mlflow-operator-image'
+  OPERATOR_RUNTIME_IMAGE: 'localhost/mlflow-operator:ci'
+  # No suitable published ODH/RHOAI predecessor image has been identified,
+  # so CI assembles a test fixture. The server serves at the Alembic
+  # revision the prepopulation command requires; the predecessor operator is
+  # the same source built with the predecessor SupportedMLflowVersion so the
+  # seeded deployment settles instead of immediately migrating. The server
+  # image (public python base) is built in a parallel job; the predecessor
+  # operator is built inside the validation job FROM the current operator
+  # image, because the operator Dockerfiles default to an authenticated base
+  # image that only the logged-in operator build job can pull.
+  PREDECESSOR_RUNTIME_ARTIFACT: 'mlflow-predecessor-image'
+  PREDECESSOR_RUNTIME_IMAGE: 'localhost/mlflow-predecessor:3.16.0'
+  PREDECESSOR_OPERATOR_IMAGE: 'localhost/mlflow-operator-predecessor:3.16.0'
+  PREDECESSOR_SUPPORTED_MLFLOW_VERSION: '3.16.0'
+  PREDECESSOR_SCHEMA_REVISION: 'b7e2c1a4d9f3'
+  PREDECESSOR_DOCKERFILE: '.github/test-infra/trace-analytics-prepopulation/Dockerfile'
+  PREPOPULATION_CLUSTER_NAME: 'mlflow-prepopulation'
+  # The prepopulation Job image gets its own workflow-level entry: the pytest
+  # step reassigns MLFLOW_RUNTIME_IMAGE to the predecessor image in its env
+  # map, and reading a sibling key that the same map redefines must not be
+  # load-bearing (GH Actions resolves step-env expressions against the
+  # workflow/job scope, but relying on that shadowing is fragile).
+  PREPOPULATION_JOB_IMAGE: 'localhost/mlflow-runtime:ci'
+  IS_RHDS_REPOSITORY: ${{ github.repository_owner == 'red-hat-data-services' }}
+  IS_CROSS_REPOSITORY_PR: >-
+    ${{ github.event_name == 'pull_request' &&
+        github.event.pull_request.head.repo.full_name != github.repository }}
+
+# Run on every PR to ensure broad integration.
+# This does not independently detect changes in the upstream MLflow repo;
+# each run builds the upstream branch selected below.
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+jobs:
+  build-mlflow-runtime-image:
+    permissions:
+      contents: read
+    name: Build MLflow runtime image
+    runs-on: ubuntu-latest
+    outputs:
+      source_repository: ${{ steps.configure.outputs.source_repository }}
+      source_ref: ${{ steps.configure.outputs.source_ref }}
+    steps:
+      - name: Resolve MLflow source build settings
+        id: configure
+        shell: bash
+        env:
+          REPOSITORY_OWNER: ${{ github.repository_owner }}
+          TARGET_REF: ${{ github.base_ref || github.ref_name }}
+        run: |
+          if [[ "$REPOSITORY_OWNER" == "red-hat-data-services" ]]; then
+            SOURCE_REPOSITORY="red-hat-data-services/mlflow"
+          else
+            SOURCE_REPOSITORY="opendatahub-io/mlflow"
+          fi
+
+          if [[ "$REPOSITORY_OWNER" == "opendatahub-io" && "$TARGET_REF" == "main" ]]; then
+            SOURCE_REF="master"
+          else
+            SOURCE_REF="$TARGET_REF"
+          fi
+
+          echo "source_repository=$SOURCE_REPOSITORY" >> "$GITHUB_OUTPUT"
+          echo "source_ref=$SOURCE_REF" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout MLflow source
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          repository: ${{ steps.configure.outputs.source_repository }}
+          ref: ${{ steps.configure.outputs.source_ref }}
+          path: mlflow-upstream
+          persist-credentials: false
+
+      - name: Resolve MLflow Dockerfile
+        id: resolve-mlflow-dockerfile
+        shell: bash
+        run: |
+          if [[ -f mlflow-upstream/Dockerfile.konflux ]]; then
+            echo "path=mlflow-upstream/Dockerfile.konflux" >> "$GITHUB_OUTPUT"
+          else
+            echo "path=mlflow-upstream/Dockerfile" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Trusted RHDS runs use the checked-out default after login.
+      # Cross-repository PRs targeting RHDS use ODH's public base image.
+      #
+      # NOTE: mlflow's resolve-base-image action is used here,
+      # although both mlflow and mlflow-operator define this action.
+      - name: Resolve public base image
+        id: public-base-image
+        if: env.IS_RHDS_REPOSITORY == 'true' && env.IS_CROSS_REPOSITORY_PR == 'true'
+        uses: ./mlflow-upstream/.github/actions/resolve-base-image
+        with:
+          repository: opendatahub-io/mlflow
+          ref: master
+          dockerfile: Dockerfile.konflux
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Log in to Red Hat registry
+        if: env.IS_RHDS_REPOSITORY == 'true' && env.IS_CROSS_REPOSITORY_PR != 'true'
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: registry.redhat.io
+          username: ${{ secrets.RH_REGISTRY_USERNAME }}
+          password: ${{ secrets.RH_REGISTRY_PASSWORD }}
+
+      - name: Build MLflow image archive
+        shell: bash
+        env:
+          DOCKERFILE: ${{ steps.resolve-mlflow-dockerfile.outputs.path }}
+          PUBLIC_BASE_IMAGE: ${{ steps.public-base-image.outputs.base_image }}
+          PUBLIC_SOURCE: ${{ steps.public-base-image.outputs.source }}
+        run: |
+          mkdir -p runtime-image
+          if [[ -n "$PUBLIC_BASE_IMAGE" ]]; then
+            echo "Overriding BASE_IMAGE with $PUBLIC_BASE_IMAGE"
+            echo "Source: $PUBLIC_SOURCE (canonical fallback)"
+            docker build --build-arg "BASE_IMAGE=$PUBLIC_BASE_IMAGE" \
+              -f "$DOCKERFILE" -t "${{ env.MLFLOW_RUNTIME_IMAGE }}" mlflow-upstream
+          else
+            docker build -f "$DOCKERFILE" -t "${{ env.MLFLOW_RUNTIME_IMAGE }}" mlflow-upstream
+          fi
+          docker save -o "runtime-image/${{ env.MLFLOW_RUNTIME_ARTIFACT }}.tar" "${{ env.MLFLOW_RUNTIME_IMAGE }}"
+
+      - name: Upload MLflow image artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ${{ env.MLFLOW_RUNTIME_ARTIFACT }}
+          path: runtime-image/${{ env.MLFLOW_RUNTIME_ARTIFACT }}.tar
+          retention-days: 1
+
+  build-mlflow-operator-image:
+    permissions:
+      contents: read
+    name: Build MLflow operator image
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Resolve operator Dockerfile
+        id: resolve-operator-dockerfile
+        shell: bash
+        run: |
+          if [[ -f Dockerfile.konflux ]]; then
+            echo "path=Dockerfile.konflux" >> "$GITHUB_OUTPUT"
+          else
+            echo "path=Dockerfile" >> "$GITHUB_OUTPUT"
+          fi
+
+      # NOTE: mlflow-operator's resolve-base-image action is used here,
+      # although both mlflow and mlflow-operator define this action.
+      - name: Resolve public base image
+        id: public-base-image
+        if: env.IS_RHDS_REPOSITORY == 'true' && env.IS_CROSS_REPOSITORY_PR == 'true'
+        uses: ./.github/actions/resolve-base-image
+        with:
+          repository: opendatahub-io/mlflow-operator
+          ref: main
+          dockerfile: Dockerfile
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Log in to Red Hat registry
+        if: env.IS_RHDS_REPOSITORY == 'true' && env.IS_CROSS_REPOSITORY_PR != 'true'
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: registry.redhat.io
+          username: ${{ secrets.RH_REGISTRY_USERNAME }}
+          password: ${{ secrets.RH_REGISTRY_PASSWORD }}
+
+      - name: Build MLflow operator image archive
+        shell: bash
+        env:
+          DOCKERFILE: ${{ steps.resolve-operator-dockerfile.outputs.path }}
+          PUBLIC_BASE_IMAGE: ${{ steps.public-base-image.outputs.base_image }}
+          PUBLIC_SOURCE: ${{ steps.public-base-image.outputs.source }}
+        run: |
+          mkdir -p operator-image
+          if [[ -n "$PUBLIC_BASE_IMAGE" ]]; then
+            echo "Overriding BASE_IMAGE with $PUBLIC_BASE_IMAGE"
+            echo "Source: $PUBLIC_SOURCE (canonical fallback)"
+            docker build --build-arg "BASE_IMAGE=$PUBLIC_BASE_IMAGE" \
+              -f "$DOCKERFILE" -t "${{ env.OPERATOR_RUNTIME_IMAGE }}" .
+          else
+            docker build -f "$DOCKERFILE" -t "${{ env.OPERATOR_RUNTIME_IMAGE }}" .
+          fi
+          docker save -o "operator-image/${{ env.OPERATOR_RUNTIME_ARTIFACT }}.tar" "${{ env.OPERATOR_RUNTIME_IMAGE }}"
+
+      - name: Upload MLflow operator image artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ${{ env.OPERATOR_RUNTIME_ARTIFACT }}
+          path: operator-image/${{ env.OPERATOR_RUNTIME_ARTIFACT }}.tar
+          retention-days: 1
+
+  build-mlflow-tests-image:
+    permissions:
+      contents: read
+    name: Build MLflow tests image
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          persist-credentials: false
+
+      - name: Build MLflow tests image archive
+        shell: bash
+        run: |
+          mkdir -p test-image
+          docker build -f mlflow-tests/images/Dockerfile.konflux -t "${{ env.MLFLOW_TESTS_RUNTIME_IMAGE }}" .
+
+      - name: Verify test image baked supported MLflow version
+        shell: bash
+        run: |
+          expected_version="$(python3 scripts/print_supported_mlflow_version.py --component-metadata config/component_metadata.yaml --normalized)"
+          actual_version="$(docker run --rm --entrypoint bash "${{ env.MLFLOW_TESTS_RUNTIME_IMAGE }}" -c 'printf "%s\n" "${MLFLOW_TEST_SUPPORTED_VERSION:?}"')"
+          if [ "$actual_version" != "$expected_version" ]; then
+            printf '::error::Expected test image to expose MLFLOW_TEST_SUPPORTED_VERSION=%s, but saw %s\n' "$expected_version" "$actual_version"
+            exit 1
+          fi
+          printf 'Verified test image baked supported MLflow version: %s\n' "$actual_version"
+
+      - name: Save MLflow tests image archive
+        shell: bash
+        run: |
+          docker save -o "test-image/${{ env.MLFLOW_TESTS_RUNTIME_ARTIFACT }}.tar" "${{ env.MLFLOW_TESTS_RUNTIME_IMAGE }}"
+
+      - name: Upload MLflow tests image artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ${{ env.MLFLOW_TESTS_RUNTIME_ARTIFACT }}
+          path: test-image/${{ env.MLFLOW_TESTS_RUNTIME_ARTIFACT }}.tar
+          retention-days: 1
+
+  # Builds the predecessor server image: an MLflow image whose Alembic head
+  # is exactly the revision the prepopulation command validates. (The
+  # predecessor operator image is built in the validation job FROM the
+  # current operator image, because the operator Dockerfiles default to an
+  # authenticated base image only the logged-in operator build can pull.)
+  build-predecessor-images:
+    permissions:
+      contents: read
+    name: Build predecessor MLflow images
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          persist-credentials: false
+
+      - name: Build predecessor MLflow server image
+        shell: bash
+        run: |
+          docker build -f "${{ env.PREDECESSOR_DOCKERFILE }}" \
+            -t "${{ env.PREDECESSOR_RUNTIME_IMAGE }}" \
+            "$(dirname "${{ env.PREDECESSOR_DOCKERFILE }}")"
+
+      - name: Verify predecessor server image
+        shell: bash
+        run: |
+          reported_version="$(docker run --rm "${{ env.PREDECESSOR_RUNTIME_IMAGE }}" mlflow --version | awk '{print $NF}')"
+          if [ "$reported_version" != "${{ env.PREDECESSOR_SUPPORTED_MLFLOW_VERSION }}" ]; then
+            printf '::error::Predecessor image reports MLflow %s, expected %s\n' \
+              "$reported_version" "${{ env.PREDECESSOR_SUPPORTED_MLFLOW_VERSION }}"
+            exit 1
+          fi
+          # The prepopulation command must NOT exist in the predecessor
+          # server; only the Job image (current runtime) carries it.
+          if docker run --rm "${{ env.PREDECESSOR_RUNTIME_IMAGE }}" \
+              mlflow db prepopulate-trace-analytics --help >/dev/null 2>&1; then
+            printf '::error::Predecessor image unexpectedly contains the prepopulation command\n'
+            exit 1
+          fi
+          # Fail fast on predecessor drift without a live database: the
+          # image's own migration files must resolve to the schema head the
+          # prepopulation command validates, the kubernetes-auth plugin entry
+          # point must exist and compile, and postgresql:// must keep
+          # selecting the psycopg2 driver (the SQLAlchemy <2.1 pin exists
+          # for exactly that).
+          docker run --rm --entrypoint python3 "${{ env.PREDECESSOR_RUNTIME_IMAGE }}" -c '
+          import importlib.metadata as metadata
+          import mlflow.store.db.utils as db_utils
+          from mlflow_kubernetes_plugins.auth.compiler import _compile_authorization_rules
+          from sqlalchemy import create_engine
+          assert db_utils._get_latest_schema_revision() == "${{ env.PREDECESSOR_SCHEMA_REVISION }}"
+          assert any(entry.name == "kubernetes-auth" for entry in metadata.entry_points(group="mlflow.app"))
+          assert create_engine("postgresql://user:pass@localhost/db").dialect.dbapi.__name__ == "psycopg2"
+          _compile_authorization_rules()
+          '
+          printf 'Verified predecessor image: MLflow %s at schema head %s\n' \
+            "$reported_version" "${{ env.PREDECESSOR_SCHEMA_REVISION }}"
+
+      - name: Save predecessor image archive
+        shell: bash
+        run: |
+          mkdir -p predecessor-images
+          docker save -o "predecessor-images/${{ env.PREDECESSOR_RUNTIME_ARTIFACT }}.tar" "${{ env.PREDECESSOR_RUNTIME_IMAGE }}"
+
+      - name: Upload predecessor image artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: predecessor-images
+          path: predecessor-images/*.tar
+          retention-days: 1
+
+  # Deploys the predecessor pair, runs the live prepopulation pytest phase
+  # against it (Job image = current runtime), then performs the final
+  # operator-managed upgrade in place and verifies the migration completed.
+  prepopulation-validation:
+    needs:
+      - build-mlflow-runtime-image
+      - build-mlflow-operator-image
+      - build-mlflow-tests-image
+      - build-predecessor-images
+    name: Run trace analytics prepopulation validation
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          persist-credentials: false
+
+      - name: Free up disk space
+        uses: kubeflow/pipelines/.github/actions/github-disk-cleanup@3004f974b571840bdb1ed6362c520d3cf566e9c0 # master
+
+      - name: Create Kind cluster
+        uses: ./.github/actions/create-cluster
+        with:
+          cluster_name: ${{ env.PREPOPULATION_CLUSTER_NAME }}
+          k8s_version: "v1.34.0"
+
+      - name: Download MLflow operator image artifact
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: ${{ env.OPERATOR_RUNTIME_ARTIFACT }}
+          path: operator-image
+
+      - name: Load MLflow operator image into Kind cluster
+        shell: bash
+        run: |
+          docker load -i "operator-image/${{ env.OPERATOR_RUNTIME_ARTIFACT }}.tar"
+          kind load docker-image "${{ env.OPERATOR_RUNTIME_IMAGE }}" --name "${{ env.PREPOPULATION_CLUSTER_NAME }}"
+
+      - name: Resolve operator Dockerfile
+        id: resolve-operator-dockerfile
+        shell: bash
+        run: |
+          if [[ -f Dockerfile.konflux ]]; then
+            echo "path=Dockerfile.konflux" >> "$GITHUB_OUTPUT"
+          else
+            echo "path=Dockerfile" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build predecessor operator image
+        shell: bash
+        env:
+          DOCKERFILE: ${{ steps.resolve-operator-dockerfile.outputs.path }}
+        run: |
+          # Build FROM the already-built current operator image so this job
+          # never needs registry credentials: the operator Dockerfiles
+          # default to an authenticated base image that only the logged-in
+          # operator build job can pull.
+          docker build \
+            --build-arg "BASE_IMAGE=${{ env.OPERATOR_RUNTIME_IMAGE }}" \
+            --build-arg "SUPPORTED_MLFLOW_VERSION_OVERRIDE=${{ env.PREDECESSOR_SUPPORTED_MLFLOW_VERSION }}" \
+            -f "$DOCKERFILE" -t "${{ env.PREDECESSOR_OPERATOR_IMAGE }}" .
+          kind load docker-image "${{ env.PREDECESSOR_OPERATOR_IMAGE }}" --name "${{ env.PREPOPULATION_CLUSTER_NAME }}"
+
+      - name: Download MLflow runtime image artifact
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: ${{ env.MLFLOW_RUNTIME_ARTIFACT }}
+          path: runtime-image
+
+      - name: Load MLflow runtime image into Kind cluster
+        shell: bash
+        run: |
+          docker load -i "runtime-image/${{ env.MLFLOW_RUNTIME_ARTIFACT }}.tar"
+          kind load docker-image "${{ env.MLFLOW_RUNTIME_IMAGE }}" --name "${{ env.PREPOPULATION_CLUSTER_NAME }}"
+
+      - name: Download predecessor image artifacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: predecessor-images
+          path: predecessor-images
+
+      - name: Load predecessor server image into Kind cluster
+        shell: bash
+        run: |
+          docker load -i "predecessor-images/${{ env.PREDECESSOR_RUNTIME_ARTIFACT }}.tar"
+          kind load docker-image "${{ env.PREDECESSOR_RUNTIME_IMAGE }}" --name "${{ env.PREPOPULATION_CLUSTER_NAME }}"
+
+      - name: Download MLflow tests image artifact
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: ${{ env.MLFLOW_TESTS_RUNTIME_ARTIFACT }}
+          path: test-image
+
+      - name: Load MLflow tests image
+        shell: bash
+        run: docker load -i "test-image/${{ env.MLFLOW_TESTS_RUNTIME_ARTIFACT }}.tar"
+
+      - name: Install deploy helper dependencies
+        run: python3 -m pip install pyyaml kubernetes
+
+      - name: Deploy predecessor operator
+        shell: bash
+        run: |
+          python3 .github/actions/deploy/deploy.py \
+            --namespace "${{ env.NAMESPACE }}" \
+            --mlflow-operator-image "${{ env.PREDECESSOR_OPERATOR_IMAGE }}" \
+            --platform base \
+            --skip-mlflow-cr \
+            --skip-infrastructure
+
+      - name: Run prepopulation validation phase
+        shell: bash
+        env:
+          ARTIFACT_BACKENDS: file
+          BACKEND_STORE: postgres
+          REGISTRY_STORE: postgres
+          POSTGRES_TLS: "true"
+          SERVE_ARTIFACTS: "true"
+          OPERATOR_RUNTIME_IMAGE: ${{ env.PREDECESSOR_OPERATOR_IMAGE }}
+          MLFLOW_RUNTIME_IMAGE: ${{ env.PREDECESSOR_RUNTIME_IMAGE }}
+          TRACE_PREPOPULATION_IMAGE: ${{ env.PREPOPULATION_JOB_IMAGE }}
+          SKIP_OPERATOR: "true"
+          SKIP_CLEANUP: "true"
+          TEST_RESULTS_DIR: test-results/prepopulation
+          PYTEST_MARK_EXPRESSION: trace_analytics_prepopulation
+        run: mlflow-tests/images/run-integration-tests.sh
+
+      - name: Fail when the prepopulation phase executed no tests
+        if: ${{ always() }}
+        shell: bash
+        run: |
+          # A pytest run whose only testcase was skipped exits 0, so a
+          # harness-gate regression would otherwise leave this workflow green
+          # with zero coverage and upgrade a deployment nobody prepopulated.
+          python3 - <<'EOF'
+          import glob
+          import sys
+          import xml.etree.ElementTree as ET
+
+          ran = skipped = 0
+          reports = glob.glob("test-results/prepopulation/**/xunit_report*.xml", recursive=True)
+          for path in reports:
+              for case in ET.parse(path).getroot().iter("testcase"):
+                  if "test_trace_analytics_prepopulation" not in (case.get("classname") or ""):
+                      continue
+                  if case.find("skipped") is not None:
+                      skipped += 1
+                  else:
+                      ran += 1
+          print(f"prepopulation testcases: ran={ran} skipped={skipped} "
+                f"(reports: {len(reports)})")
+          if ran == 0:
+              print("::error::The trace analytics prepopulation phase executed "
+                    "no tests (all skipped or no report); refusing a green "
+                    "run without coverage")
+              sys.exit(1)
+          EOF
+
+      - name: Upgrade the prepopulated deployment in place
+        shell: bash
+        run: |
+          supported_version="$(python3 scripts/print_supported_mlflow_version.py --component-metadata config/component_metadata.yaml)"
+          # Neither operator may reconcile the CR while its runtime pin is
+          # being switched: a version-mismatch migration failure is sticky.
+          kubectl scale deployment/mlflow-operator-controller-manager \
+            --replicas=0 -n "${{ env.NAMESPACE }}"
+          kubectl wait --for=delete pod -l control-plane=controller-manager \
+            --timeout=120s -n "${{ env.NAMESPACE }}"
+          kubectl patch mlflow mlflow \
+            -n "${{ env.NAMESPACE }}" \
+            --type=merge \
+            -p '{"spec":{"image":{"image":"${{ env.MLFLOW_RUNTIME_IMAGE }}","imagePullPolicy":"IfNotPresent"}}}'
+          python3 .github/actions/deploy/deploy.py \
+            --namespace "${{ env.NAMESPACE }}" \
+            --mlflow-operator-image "${{ env.OPERATOR_RUNTIME_IMAGE }}" \
+            --platform base \
+            --skip-mlflow-cr \
+            --skip-infrastructure
+          kubectl wait \
+            --for="jsonpath={.status.version}=${supported_version}" \
+            mlflow/mlflow \
+            --namespace "${{ env.NAMESPACE }}" \
+            --timeout=600s
+          kubectl rollout status deployment/mlflow \
+            --timeout=300s \
+            -n "${{ env.NAMESPACE }}"
+
+      - name: Verify the final operator-managed migration
+        shell: bash
+        run: |
+          migration_condition="$(kubectl get mlflow mlflow \
+            -n "${{ env.NAMESPACE }}" \
+            -o 'jsonpath={.status.conditions[?(@.type=="Migration")].status}')"
+          if [ "$migration_condition" != "True" ]; then
+            printf '::error::MLflow Migration condition is %s, expected True\n' "$migration_condition"
+            exit 1
+          fi
+          # The migration Job itself verifies the final Alembic revision
+          # matches the runtime image head before status.version advances, so
+          # print the resulting revision for the log without re-asserting it.
+          # Derive the database user and name from the backend Secret instead
+          # of assuming the harness defaults; never print the URI itself.
+          backend_uri="$(kubectl get secret mlflow-db-credentials \
+            -n "${{ env.NAMESPACE }}" \
+            -o jsonpath='{.data.backend-store-uri}' | base64 -d)"
+          db_user="$(python3 -c \
+            'import sys, urllib.parse; print(urllib.parse.urlparse(sys.argv[1]).username)' \
+            "$backend_uri")"
+          db_name="$(python3 -c \
+            'import sys, urllib.parse; print((urllib.parse.urlparse(sys.argv[1]).path or "/").lstrip("/"))' \
+            "$backend_uri")"
+          final_revision="$(kubectl exec -n "${{ env.NAMESPACE }}" \
+            "$(kubectl get pod -n "${{ env.NAMESPACE }}" -l app=mlflow-postgres -o jsonpath='{.items[0].metadata.name}')" \
+            -- psql -U "$db_user" -d "$db_name" -t -A -c 'SELECT version_num FROM alembic_version')"
+          printf 'Final Alembic revision after upgrade: %s\n' "$final_revision"
+
+          # Match the exact trace/span IDs exported by the predecessor test,
+          # including the rows written after the last prepopulation Job.
+          expected="$(cat test-results/prepopulation/trace-migration-expectations.json)"
+          verified="$(kubectl exec -i -n "${{ env.NAMESPACE }}" \
+            "$(kubectl get pod -n "${{ env.NAMESPACE }}" -l app=mlflow-postgres -o jsonpath='{.items[0].metadata.name}')" \
+            -- psql -X -U "$db_user" -d "$db_name" -t -A \
+            -v ON_ERROR_STOP=1 -v expected="$expected" <<'SQL'
+          SELECT count(*) > 0 AND bool_and(
+            t.request_id IS NOT NULL AND s.span_id IS NOT NULL
+            AND t.trace_name IS NOT DISTINCT FROM e.trace_name
+            AND s.model_name IS NOT DISTINCT FROM e.model_name
+            AND s.model_provider IS NOT DISTINCT FROM e.model_provider
+          )
+          FROM json_to_recordset(:'expected'::json) AS e(
+            trace_id text, trace_name text, span_id text, model_name text, model_provider text
+          )
+          LEFT JOIN trace_info t ON t.request_id = e.trace_id
+          LEFT JOIN spans s ON s.trace_id = e.trace_id AND s.span_id = e.span_id;
+          SQL
+          )"
+          if [ "$verified" != "t" ]; then
+            echo '::error::Final migration left seeded trace/span analytics missing or incorrect'
+            exit 1
+          fi
+
+      - name: Upload prepopulation validation reports
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: trace-analytics-prepopulation-results
+          path: test-results/
+          retention-days: 7
+
+      - name: Collect prepopulation debug logs
+        if: ${{ failure() && !cancelled() }}
+        continue-on-error: true
+        uses: ./.github/actions/collect-debug-logs
+        with:
+          debug_namespace: ${{ env.NAMESPACE }}
+          output_dir: debug-logs
+
+      - name: Upload prepopulation debug logs
+        if: ${{ failure() && !cancelled() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: trace-analytics-prepopulation-debug-logs
+          path: debug-logs/
+          retention-days: 7

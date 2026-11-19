@@ -1,9 +1,11 @@
 #!/bin/bash
-# This script validates MLflow sample CRs against the CRD
+# This script validates MLflow sample manifests against the CRD (CR samples)
+# and the cluster schema (non-CR samples such as the prepopulation Job).
 # Prerequisites:
 #   - Kind cluster must be running
 #   - kubectl must be configured to connect to the cluster
 #   - CRD manifests must be generated (run 'make manifests' first)
+#   - python3 with PyYAML (for kind-based sample discovery)
 
 set -euo pipefail
 
@@ -41,12 +43,52 @@ fi
 echo -e "${GREEN}✅ Kubernetes cluster is accessible${NC}"
 echo ""
 
-# Discover all sample files
+# Discover all sample files by parsing each document's kind. String matching
+# like `grep "kind: Job"` would silently skip valid manifests whose formatting
+# differs (quotes, indentation, comments), so classification always goes
+# through the YAML parser in classify_samples.py.
 echo "Discovering sample files..."
-mapfile -t MLFLOW_SAMPLES < <(grep -l "kind: MLflow" config/samples/*.yaml 2>/dev/null | grep -v mlflowconfig || true)
-mapfile -t MLFLOWCONFIG_SAMPLES < <(grep -l "kind: MLflowConfig" config/samples/*.yaml 2>/dev/null || true)
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if ! python3 -c "import yaml" &>/dev/null; then
+    echo -e "${RED}ERROR: PyYAML is required for sample discovery (python3 -m pip install pyyaml)${NC}"
+    exit 1
+fi
+SAMPLE_KINDS_FILE="$(mktemp)"
+trap 'rm -f "$SAMPLE_KINDS_FILE"' EXIT
+if ! python3 "$SCRIPT_DIR/classify_samples.py" config/samples > "$SAMPLE_KINDS_FILE"; then
+    echo -e "${RED}ERROR: Failed to classify samples in config/samples/${NC}"
+    exit 1
+fi
 
-if [ "${#MLFLOW_SAMPLES[@]}" -eq 0 ] && [ "${#MLFLOWCONFIG_SAMPLES[@]}" -eq 0 ]; then
+# One entry per file, preserving the kind sets each file contributes. The
+# classifier also emits each document's declared namespace (or "-"), so the
+# validation loop below can create those namespaces first: server-side dry
+# runs still pass through namespace admission, and a namespaced sample such
+# as the prepopulation Job would otherwise fail on a fresh Kind cluster that
+# never created its namespace.
+mapfile -t SAMPLE_FILES < <(cut -f3 "$SAMPLE_KINDS_FILE" | sort -u)
+declare -A SAMPLE_FILE_KINDS
+while IFS=$'\t' read -r sample_kind sample_namespace sample_file; do
+    SAMPLE_FILE_KINDS["$sample_file"]+="$sample_kind "
+done < "$SAMPLE_KINDS_FILE"
+
+MLFLOW_SAMPLES=()
+MLFLOWCONFIG_SAMPLES=()
+OTHER_SAMPLES=()
+for sample in "${SAMPLE_FILES[@]}"; do
+    sample_kinds="${SAMPLE_FILE_KINDS["$sample"]}"
+    case "$sample_kinds" in
+        *MLflow\ *) MLFLOW_SAMPLES+=("$sample") ;;
+    esac
+    case "$sample_kinds" in
+        *MLflowConfig\ *) MLFLOWCONFIG_SAMPLES+=("$sample") ;;
+    esac
+    if [[ "$sample_kinds" != *"MLflow "* && "$sample_kinds" != *"MLflowConfig "* ]]; then
+        OTHER_SAMPLES+=("$sample")
+    fi
+done
+
+if [ "${#SAMPLE_FILES[@]}" -eq 0 ]; then
     echo -e "${RED}ERROR: No samples found in config/samples/${NC}"
     exit 1
 fi
@@ -56,6 +98,9 @@ if [ "${#MLFLOW_SAMPLES[@]}" -gt 0 ]; then
 fi
 if [ "${#MLFLOWCONFIG_SAMPLES[@]}" -gt 0 ]; then
     echo "Found ${#MLFLOWCONFIG_SAMPLES[@]} MLflowConfig sample(s)"
+fi
+if [ "${#OTHER_SAMPLES[@]}" -gt 0 ]; then
+    echo "Found ${#OTHER_SAMPLES[@]} non-CR sample(s): ${OTHER_SAMPLES[*]}"
 fi
 echo ""
 
@@ -107,9 +152,26 @@ for crd_config in "${CRDS[@]}"; do
 done
 echo ""
 
-# Validate all samples
+# Namespaced samples dry-run against namespace admission, so create every
+# declared namespace (idempotently) before validating. Samples without a
+# namespace are applied into the default namespace by the dry run.
+mapfile -t SAMPLE_NAMESPACES < <(cut -f2 "$SAMPLE_KINDS_FILE" | grep -v '^-$' | sort -u)
+for sample_namespace in "${SAMPLE_NAMESPACES[@]}"; do
+    echo "Ensuring namespace ${sample_namespace} exists..."
+    if ! kubectl create namespace "$sample_namespace" --dry-run=client -o yaml \
+        | kubectl apply -f - > /dev/null; then
+        echo -e "${RED}ERROR: Failed to ensure namespace ${sample_namespace}${NC}"
+        exit 1
+    fi
+done
+if [ "${#SAMPLE_NAMESPACES[@]}" -gt 0 ]; then
+    echo ""
+fi
+
+# Validate all samples (CR samples against their installed CRDs, non-CR
+# samples such as Jobs against built-in cluster schema)
 FAILED=0
-for sample in "${MLFLOW_SAMPLES[@]}" "${MLFLOWCONFIG_SAMPLES[@]}"; do
+for sample in "${MLFLOW_SAMPLES[@]}" "${MLFLOWCONFIG_SAMPLES[@]}" "${OTHER_SAMPLES[@]}"; do
     echo "Validating $sample..."
     if kubectl apply --dry-run=server -f "$sample" > /dev/null 2>&1; then
         echo -e "${GREEN}✅ $sample is valid${NC}"
@@ -145,7 +207,7 @@ echo ""
 
 # Check that all sample files are mentioned in AGENTS.md
 MISSING=0
-for sample in "${MLFLOW_SAMPLES[@]}" "${MLFLOWCONFIG_SAMPLES[@]}"; do
+for sample in "${MLFLOW_SAMPLES[@]}" "${MLFLOWCONFIG_SAMPLES[@]}" "${OTHER_SAMPLES[@]}"; do
     sample_name=$(basename "$sample")
     if ! grep -q "$sample_name" AGENTS.md; then
         echo -e "${RED}❌ Sample $sample_name is not documented in AGENTS.md${NC}"
@@ -171,7 +233,7 @@ echo "------------------------------------------------------------"
 
 # Check that all samples are either in resources or commented in kustomization.yaml
 MISSING=0
-for sample in "${MLFLOW_SAMPLES[@]}" "${MLFLOWCONFIG_SAMPLES[@]}"; do
+for sample in "${MLFLOW_SAMPLES[@]}" "${MLFLOWCONFIG_SAMPLES[@]}" "${OTHER_SAMPLES[@]}"; do
     sample_name=$(basename "$sample")
     if ! grep -q "$sample_name" config/samples/kustomization.yaml; then
         echo -e "${RED}❌ Sample $sample_name is not referenced in kustomization.yaml${NC}"

@@ -64,6 +64,13 @@ from .trace_archival_actions import (
     action_wait_for_archive_objects,
     action_reload_archival_traces,
 )
+from .trace_prepopulation_actions import (
+    action_prepare_trace_prepopulation,
+    action_seed_initial_prepopulation_traces,
+    action_run_first_prepopulation_job,
+    action_seed_additional_prepopulation_traces,
+    action_run_second_prepopulation_job,
+)
 from .workspace_actions import (
     action_list_workspaces,
 )
@@ -114,5 +121,10 @@ __all__ = [
     "action_run_archival_job_from_cronjob",
     "action_wait_for_archive_objects",
     "action_reload_archival_traces",
+    "action_prepare_trace_prepopulation",
+    "action_seed_initial_prepopulation_traces",
+    "action_run_first_prepopulation_job",
+    "action_seed_additional_prepopulation_traces",
+    "action_run_second_prepopulation_job",
     "action_list_workspaces",
 ]

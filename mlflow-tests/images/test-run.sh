@@ -50,8 +50,8 @@ Storage:
   STORAGE_TYPE          Legacy single-suite selector: file|s3|externals3. Prefer ARTIFACT_BACKENDS for
                         multi-suite runs. When STORAGE_TYPE is set and ARTIFACT_BACKENDS is not,
                         ARTIFACT_BACKENDS is derived from STORAGE_TYPE (backward compatibility).
-  BACKEND_STORE         Backend store backend: sqlite|postgres (default: sqlite)
-  REGISTRY_STORE        Registry store backend: sqlite|postgres (default: sqlite)
+  BACKEND_STORE         Backend store backend: sqlite|postgres|postgresql (default: sqlite)
+  REGISTRY_STORE        Registry store backend: sqlite|postgres|postgresql (default: sqlite)
 
   AWS_ACCESS_KEY_ID     S3 access key     (when STORAGE_TYPE=s3 or externals3)
   AWS_SECRET_ACCESS_KEY S3 secret key     (when STORAGE_TYPE=s3 or externals3)
@@ -138,6 +138,17 @@ Other:
                         Retention configured on spec.traceArchival for s3/externals3
                         deploys with PostgreSQL backend and registry stores (default:
                         1m so semantic archival smoke coverage can archive fresh traces)
+  TRACE_PREPOPULATION_IMAGE
+                        MLflow image used by the trace analytics prepopulation Job
+                         when the trace_analytics_prepopulation pytest phase runs.
+                        Must contain the mlflow db prepopulate-trace-analytics
+                        command, so it can be newer than the deployed server image.
+                        The phase is only eligible for self-deployed PostgreSQL
+                        suites that deploy MLflow through this harness and still
+                        requires explicit marker selection
+                        (-m trace_analytics_prepopulation); a plain pytest run
+                        never executes it, and a missing command in the image
+                        fails the enabled test instead of silently skipping it.
   workspaces            Comma-separated workspace namespace list (default: two random names)
   upgrade_test_workspace Static workspace namespace for upgrade pytest phases. During
                         upgrade-phase runs, the harness derives workspaces and RBAC
@@ -1479,6 +1490,28 @@ run_suite_body() {
         return 1
     fi
     export garbage_collection_enabled="${deployed_garbage_collection:+true}"
+    # The live prepopulation exercise seeds traces through MLflow and checks
+    # backfilled rows in the harness PostgreSQL pod, so only select it when this
+    # suite deploys both MLflow and its SQL backend, and an explicit Job image
+    # carrying the prepopulation command was provided. The gate lives in
+    # prepopulation-eligibility.sh (unit-tested there) and accepts both
+    # `postgres` and `postgresql` BACKEND_STORE spellings, matching the deploy
+    # path. SKIP_DEPLOYMENT/SKIP_INFRASTRUCTURE and explicit database hosts
+    # must not turn a reused backend into an assumed self-managed one.
+    if ! prepopulation_eligibility="$(BACKEND_STORE="$BACKEND_STORE" bash "$SCRIPT_DIR/prepopulation-eligibility.sh")"; then
+        fail_suite "test_prepopulation_eligibility" "Failed to determine trace analytics prepopulation eligibility"
+        restore_test_ca_bundle_environment
+        return 1
+    fi
+    if [ "$prepopulation_eligibility" = "eligible" ]; then
+        export trace_analytics_prepopulation_enabled="true"
+        export trace_prepopulate_image="$TRACE_PREPOPULATION_IMAGE"
+    else
+        export trace_analytics_prepopulation_enabled="false"
+        if [ -n "${TRACE_PREPOPULATION_IMAGE:-}" ]; then
+            echo "  trace analytics prepopulation phase not selected (${prepopulation_eligibility})"
+        fi
+    fi
 
     local results_file="${TEST_RESULTS_DIR}/xunit_report_${STORAGE_TYPE}.xml"
     echo "  Running tests (output: $results_file)..."
