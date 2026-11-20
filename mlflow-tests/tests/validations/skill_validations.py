@@ -181,3 +181,36 @@ def validate_skill_artifact_read(test_context: TestContext) -> None:
         != test_context.expected_skill_artifact_content
     ):
         raise AssertionError("Downloaded Skill artifact content did not match")
+
+
+
+def validate_pulled_skill(expected_body: str):
+    """Return a validator that checks the last pull got the version with this SKILL.md text."""
+
+    def validate(test_context: TestContext) -> None:
+        content = test_context.active_skill.artifact_content
+        if not content or not content.endswith(expected_body):
+            raise AssertionError(
+                f"Pulled SKILL.md does not end with {expected_body!r}: {content!r}"
+            )
+
+    validate.__name__ = "validate_pulled_skill"
+    return validate
+
+
+def validate_skill_versions(expected: dict[str, list[int]]):
+    """Return a validator that checks each named Skill has exactly these version numbers."""
+
+    def validate(test_context: TestContext) -> None:
+        for name, expected_versions in expected.items():
+            versions = sorted(
+                version.version
+                for version in test_context.user_client.search_skill_versions(name=name)
+            )
+            if versions != expected_versions:
+                raise AssertionError(
+                    f"Skill {name!r} has versions {versions}, expected {expected_versions}"
+                )
+
+    validate.__name__ = "validate_skill_versions"
+    return validate
