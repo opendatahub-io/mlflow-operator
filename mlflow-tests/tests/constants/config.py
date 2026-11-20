@@ -24,6 +24,7 @@ class Config:
         os.getenv("trace_analytics_prepopulation_enabled", "false") == "true"
     )
     TRACE_PREPOPULATION_IMAGE = os.getenv("trace_prepopulate_image", "").strip()
+    TRACE_ROLLUPS_ENABLED = os.getenv("trace_rollups_enabled", "false") == "true"
     MLFLOW_NAMESPACE = os.getenv("mlflow_namespace", "opendatahub")
     AWS_ACCESS_KEY = os.getenv("AWS_ACCESS_KEY_ID", "")
     AWS_SECRET_KEY = os.getenv("AWS_SECRET_ACCESS_KEY", "")

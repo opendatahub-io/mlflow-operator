@@ -858,6 +858,11 @@ class MLflowDeployer:
                 "name": "mlflow-db-credentials",
                 "key": "backend-store-uri"
             }
+            if getattr(self.args, "trace_rollups_smoke", False):
+                mlflow_cr["spec"]["traceRollups"] = {
+                    "schedule": "0 0 29 2 *",
+                    "timeZone": "Etc/UTC",
+                }
         else:
             mlflow_cr["spec"]["backendStoreUri"] = self.args.backend_store_uri
 
@@ -1564,6 +1569,8 @@ def main():
     parser.add_argument("--trace-archival-retention", default="30d",
                        help="Retention passed to spec.traceArchival when artifact storage is s3 or externals3 "
                             "and both metadata stores use PostgreSQL (default: 30d).")
+    parser.add_argument("--trace-rollups-smoke", action="store_true",
+                       help="Use a non-firing CronJob schedule for the PostgreSQL rollup smoke test.")
     parser.add_argument("--workspace-label-selector", default="")
 
     args = parser.parse_args()
