@@ -244,6 +244,19 @@ Set one or both metadata stores to `postgres`, then configure `DB_HOST`, `DB_POR
 BACKEND_STORE=postgres REGISTRY_STORE=postgres DB_HOST=... DB_PASSWORD=... bash images/test-run.sh
 ```
 
+### Trace rollup smoke
+
+The live `TestTraceRollups` smoke runs on S3-compatible suites that deploy both
+MLflow and PostgreSQL through the harness. The deployer sets the rollup CronJob
+schedule to `0 0 29 2 *` in `Etc/UTC` for these runs. The smoke test seeds five
+traces across two complete historical UTC days, creates a one-off Job from the
+CronJob template, then adds two traces on the earlier day and runs a second Job.
+It checks the SQL summaries for each day, confirms that the public metrics API
+reads both days, and verifies that the
+source traces remain readable. It deletes the test Jobs and rollup rows during
+teardown. Suites using reused deployments or infrastructure, external PostgreSQL
+hosts, or SQLite skip this test.
+
 ## Architecture notes
 
 - **Workspace namespaces**: the test creates workspace namespaces (`workspace1`, `workspace2` by

@@ -71,6 +71,16 @@ from .trace_prepopulation_actions import (
     action_seed_additional_prepopulation_traces,
     action_run_second_prepopulation_job,
 )
+from .trace_rollups_actions import (
+    action_prepare_trace_rollups,
+    action_seed_trace_rollup_traces,
+    action_seed_additional_trace_rollup_traces,
+    action_run_trace_rollup_job,
+    action_read_trace_rollup_rows,
+    action_query_trace_rollup_metrics,
+    action_read_trace_rollup_sources,
+    action_cleanup_trace_rollups,
+)
 from .workspace_actions import (
     action_list_workspaces,
 )
@@ -126,5 +136,13 @@ __all__ = [
     "action_run_first_prepopulation_job",
     "action_seed_additional_prepopulation_traces",
     "action_run_second_prepopulation_job",
+    "action_prepare_trace_rollups",
+    "action_seed_trace_rollup_traces",
+    "action_seed_additional_trace_rollup_traces",
+    "action_run_trace_rollup_job",
+    "action_read_trace_rollup_rows",
+    "action_query_trace_rollup_metrics",
+    "action_read_trace_rollup_sources",
+    "action_cleanup_trace_rollups",
     "action_list_workspaces",
 ]
