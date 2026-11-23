@@ -13,6 +13,7 @@ from mlflow_tests.utils.wait import WaitTimeoutError, wait_until
 logger = logging.getLogger(__name__)
 JOB_WAIT_TIMEOUT_SECONDS = 180
 JOB_WAIT_POLL_INTERVAL_SECONDS = 2
+JOB_WAIT_PROGRESS_INTERVAL_SECONDS = 15
 
 
 def job_from_cronjob(cronjob: client.V1CronJob, job_name: str, namespace: str) -> client.V1Job:
@@ -121,11 +122,12 @@ def wait_for_job_complete(
     """Wait for completion and include pod diagnostics on failure or timeout."""
 
     @wait_until(
-        description=f"{job_description} Job to complete",
+        description=f"{job_description} Job {job_name} to complete",
         timeout=JOB_WAIT_TIMEOUT_SECONDS,
         interval=JOB_WAIT_POLL_INTERVAL_SECONDS,
         until=lambda complete: complete,
         retry_rules={ApiException: lambda exc: exc.status == 404},
+        progress_interval=JOB_WAIT_PROGRESS_INTERVAL_SECONDS,
     )
     def wait_for_completion() -> bool:
         job = batch_api.read_namespaced_job_status(name=job_name, namespace=namespace)

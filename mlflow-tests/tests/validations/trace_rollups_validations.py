@@ -190,8 +190,10 @@ def validate_trace_rollup_traces_readable(test_context: TestContext) -> None:
     validate_no_error(test_context)
     state = test_context.trace_rollups_state
     traces = state.get("observed_traces") or []
-    observed_ids = {trace.info.trace_id for trace in traces}
+    traces_by_id = {trace.info.trace_id: trace for trace in traces}
+    observed_ids = set(traces_by_id)
     expected_ids = set(state.get("trace_ids") or [])
+    expected_span_ids_by_trace_id = state.get("expected_span_ids_by_trace_id") or {}
     statuses = [trace.info.status for trace in traces]
     logger.info(
         "Validating %d source traces after rollup; statuses=%s",
@@ -205,6 +207,23 @@ def validate_trace_rollup_traces_readable(test_context: TestContext) -> None:
     assert all(status == "OK" for status in statuses), (
         f"Source traces changed status after rollup: {statuses}"
     )
+    assert set(expected_span_ids_by_trace_id) == expected_ids, (
+        "Expected root and child span IDs were not captured for every seeded trace"
+    )
+    for trace_id in expected_ids:
+        expected_span_ids = set(expected_span_ids_by_trace_id[trace_id])
+        assert len(expected_span_ids) == 2, (
+            f"Expected distinct root and child span IDs for trace {trace_id}, "
+            f"got {expected_span_ids}"
+        )
+        trace = traces_by_id[trace_id]
+        spans = trace.data.spans if trace.data is not None else []
+        observed_span_ids = {span.span_id for span in spans or []}
+        missing_span_ids = expected_span_ids - observed_span_ids
+        assert not missing_span_ids, (
+            f"Trace {trace_id} is missing seeded root/child span IDs "
+            f"{missing_span_ids}; observed {observed_span_ids}"
+        )
     passes = state.get("trace_status_passes") or []
     if len(passes) >= 2:
         initial_statuses = passes[0]

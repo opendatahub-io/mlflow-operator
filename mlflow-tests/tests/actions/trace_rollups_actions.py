@@ -4,20 +4,30 @@ from __future__ import annotations
 
 import base64
 import logging
+import re
+import select
+import subprocess
+import tempfile
 import time
 import uuid
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import date, datetime, timezone
+from pathlib import Path
 from typing import Any
 from urllib.parse import unquote, urlparse
 
 import mlflow
 import pytest
+import psycopg2
 import requests
 from kubernetes import client
 from kubernetes.client.rest import ApiException
-from kubernetes.stream import stream
 from mlflow.entities import TraceState
+from mlflow.entities.span import NO_OP_SPAN_TRACE_ID
 from mlflow.utils.workspace_utils import WORKSPACE_HEADER_NAME
+from psycopg2 import sql as pg_sql
+from urllib3.exceptions import HTTPError
 
 from mlflow_tests.utils.client import ClientManager
 from mlflow_tests.utils.wait import wait_until
@@ -39,8 +49,10 @@ MLFLOW_API_VERSION = "v1"
 MLFLOW_API_PLURAL = "mlflows"
 POSTGRES_POD_LABEL = "app=mlflow-postgres"
 DATABASE_POD_TIMEOUT_SECONDS = 120
-JOB_TIMEOUT_SECONDS = 180
+JOB_DELETE_TIMEOUT_SECONDS = 180
+JOB_API_REQUEST_TIMEOUT_SECONDS = 10
 SQL_EXEC_TIMEOUT_SECONDS = 60
+POSTGRES_PORT = 5432
 TRACE_VISIBILITY_TIMEOUT_SECONDS = 60
 POLL_INTERVAL_SECONDS = 2
 EXPECTED_TRACE_LATENCIES_MS = [10, 20, 30, 40, 50]
@@ -52,6 +64,10 @@ BACKDATE_DAYS = 3
 MS_PER_DAY = 86_400_000
 NS_PER_MS = 1_000_000
 ROLLUP_TABLE = "sql_trace_metric_daily_rollups"
+ROLLUP_REBUILD_QUEUE_TABLE = "sql_trace_rollup_rebuild_queue"
+ROLLUP_PROBE_COLUMNS = ("sample_count", "sum_value", "max_value", "min_value")
+
+RollupProbeValues = dict[str, dict[str, int | float | None]]
 
 
 def _seed_trace(
@@ -60,7 +76,8 @@ def _seed_trace(
     index: int,
     start_time_ns: int,
     latency_ms: int,
-) -> str:
+    seeded_trace_ids: list[str],
+) -> tuple[str, tuple[str, str]]:
     """Create a backdated two-span trace with a known latency."""
     trace_name = f"rollups-{index}"
     end_time_ns = start_time_ns + latency_ms * NS_PER_MS
@@ -70,6 +87,13 @@ def _seed_trace(
     trace_id = getattr(root_span, "request_id", None) or getattr(
         root_span, "trace_id", None
     )
+    if not trace_id or trace_id == NO_OP_SPAN_TRACE_ID:
+        raise RuntimeError(
+            f"start_trace returned an unusable trace ID {trace_id!r} for "
+            f"trace {trace_name!r} in experiment {experiment_id!r}"
+        )
+    # Register the root before creating the child so partial traces are cleaned up.
+    seeded_trace_ids.append(trace_id)
     child_span = admin_client.start_span(
         name=f"{trace_name}-child",
         trace_id=trace_id,
@@ -87,7 +111,7 @@ def _seed_trace(
         status="OK",
         end_time_ns=end_time_ns,
     )
-    return trace_id
+    return trace_id, (root_span.span_id, child_span.span_id)
 
 
 def _seed_trace_batch(
@@ -97,8 +121,8 @@ def _seed_trace_batch(
     latencies_ms: list[int],
     index_offset: int,
     batch_description: str,
-) -> tuple[list[str], list[int]]:
-    """Seed a batch and return its IDs and verified durations from the trace API."""
+) -> tuple[list[str], list[int], dict[str, tuple[str, str]]]:
+    """Seed traces and return IDs, verified durations, and expected span IDs."""
     if test_context.user_client is None:
         raise ValueError("test_context.user_client must be set before seeding traces")
     experiment_id = test_context.active_experiment_id
@@ -107,18 +131,24 @@ def _seed_trace_batch(
             "test_context.active_experiment_id must be set before seeding traces"
         )
 
-    trace_ids = [
+    seeded_trace_ids = test_context.trace_rollups_state.setdefault("trace_ids", [])
+    seeded_traces = [
         _seed_trace(
             admin_client=test_context.user_client,
             experiment_id=experiment_id,
             index=index_offset + index,
             start_time_ns=start_time_ms * NS_PER_MS,
             latency_ms=latency_ms,
+            seeded_trace_ids=seeded_trace_ids,
         )
         for index, (start_time_ms, latency_ms) in enumerate(
             zip(start_times_ms, latencies_ms, strict=True)
         )
     ]
+    trace_ids = [trace_id for trace_id, _ in seeded_traces]
+    span_ids_by_trace_id = {
+        trace_id: span_ids for trace_id, span_ids in seeded_traces
+    }
     # Finish exporting spans as well as trace metadata before the rollup Job starts.
     mlflow.flush_trace_async_logging()
     _, duration_by_id = _wait_for_seeded_trace_durations(
@@ -135,7 +165,7 @@ def _seed_trace_batch(
                 f"{observed_duration!r} ms, expected {expected_duration} ms"
             )
         observed_latencies_ms.append(observed_duration)
-    return trace_ids, observed_latencies_ms
+    return trace_ids, observed_latencies_ms, span_ids_by_trace_id
 
 
 def _expected_rollup_values(latencies_ms: list[int]) -> dict[str, int]:
@@ -204,55 +234,149 @@ def _backend_uses_harness_secret(env_vars: list[client.V1EnvVar] | None) -> bool
     return False
 
 
+def _start_database_port_forward(
+    database_pod: str,
+) -> tuple[subprocess.Popen[str], int]:
+    process = subprocess.Popen(
+        [
+            "kubectl",
+            "port-forward",
+            "--address",
+            "127.0.0.1",
+            "-n",
+            Config.MLFLOW_NAMESPACE,
+            f"pod/{database_pod}",
+            f":{POSTGRES_PORT}",
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        bufsize=1,
+    )
+    deadline = time.monotonic() + SQL_EXEC_TIMEOUT_SECONDS
+    forwarding_re = re.compile(r"Forwarding from 127\.0\.0\.1:(\d+) -> 5432")
+    try:
+        while time.monotonic() < deadline:
+            if process.poll() is not None or process.stdout is None:
+                raise RuntimeError("Could not start the PostgreSQL port-forward")
+            readable, _, _ = select.select([process.stdout], [], [], 0.2)
+            if not readable:
+                continue
+            line = process.stdout.readline()
+            match = forwarding_re.search(line)
+            if match:
+                return process, int(match.group(1))
+        raise TimeoutError("Timed out starting the PostgreSQL port-forward")
+    except Exception:
+        _stop_database_port_forward(process)
+        raise
+
+
+def _stop_database_port_forward(process: subprocess.Popen[str] | None) -> None:
+    if process is None:
+        return
+    if process.poll() is None:
+        process.terminate()
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait(timeout=5)
+    if process.stdout is not None:
+        process.stdout.close()
+
+
+def _postgres_ca_file(core_api: client.CoreV1Api, state: dict[str, Any]) -> str:
+    configured_ca = Config.CA_BUNDLE
+    if configured_ca and Path(configured_ca).is_file():
+        return configured_ca
+
+    config_map = core_api.read_namespaced_config_map(
+        name="mlflow-ca-bundle", namespace=Config.MLFLOW_NAMESPACE
+    )
+    certificates = [
+        value
+        for key, value in sorted((config_map.data or {}).items())
+        if key.endswith((".crt", ".pem"))
+    ]
+    if not certificates:
+        raise RuntimeError(
+            "The PostgreSQL CA bundle ConfigMap contains no certificates"
+        )
+
+    ca_directory = tempfile.TemporaryDirectory(prefix="mlflow-trace-rollups-ca-")
+    ca_path = Path(ca_directory.name) / "postgres-ca-bundle.pem"
+    ca_path.write_text("\n".join(certificates), encoding="utf-8")
+    state["database_ca_directory"] = ca_directory
+    return str(ca_path)
+
+
+def _database_connection(
+    *,
+    backend_uri: str,
+    local_port: int,
+    core_api: client.CoreV1Api,
+    state: dict[str, Any],
+) -> psycopg2.extensions.connection:
+    connection_parameters = psycopg2.extensions.parse_dsn(backend_uri)
+    connection_parameters.update(
+        {
+            # Keep the URI hostname for TLS name verification while routing the
+            # socket through kubectl's loopback-only port-forward.
+            "hostaddr": "127.0.0.1",
+            "port": str(local_port),
+            "connect_timeout": "10",
+        }
+    )
+    if connection_parameters.get("sslmode") in {"verify-ca", "verify-full"} and not (
+        connection_parameters.get("sslrootcert")
+    ):
+        connection_parameters["sslrootcert"] = _postgres_ca_file(core_api, state)
+    try:
+        connection = psycopg2.connect(**connection_parameters)
+    except psycopg2.Error as exc:
+        raise RuntimeError(
+            "Could not connect to the harness PostgreSQL database"
+        ) from exc
+    connection.autocommit = True
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT set_config('statement_timeout', %s, false)",
+                (f"{SQL_EXEC_TIMEOUT_SECONDS}s",),
+            )
+    except psycopg2.Error as exc:
+        connection.close()
+        raise RuntimeError(
+            "Could not configure the harness PostgreSQL query timeout"
+        ) from exc
+    return connection
+
+
 def _database_query(
     *,
-    core_api: client.CoreV1Api,
-    database_pod: str,
-    db_name: str,
-    db_user: str,
+    state: dict[str, Any],
     sql: str,
+    params: tuple[Any, ...] = (),
 ) -> str:
-    command = [
-        "psql",
-        "-X",
-        "--no-password",
-        "-v",
-        "ON_ERROR_STOP=1",
-        "-U",
-        db_user,
-        "-d",
-        db_name,
-        "-t",
-        "-A",
-        "-c",
-        sql,
-    ]
-    response = stream(
-        core_api.connect_get_namespaced_pod_exec,
-        name=database_pod,
-        namespace=Config.MLFLOW_NAMESPACE,
-        command=command,
-        stderr=True,
-        stdin=False,
-        stdout=True,
-        tty=False,
-        _preload_content=False,
-        _request_timeout=SQL_EXEC_TIMEOUT_SECONDS,
-    )
+    """Execute a SQL statement with psycopg2's server-side parameter binding."""
     try:
-        response.run_forever(timeout=SQL_EXEC_TIMEOUT_SECONDS)
-        if response.is_open():
-            raise TimeoutError(f"psql did not complete within {SQL_EXEC_TIMEOUT_SECONDS}s")
-        try:
-            exit_code = response.returncode
-        except (KeyError, IndexError, TypeError, ValueError) as exc:
-            raise RuntimeError("Kubernetes exec returned no usable psql exit status") from exc
-        if exit_code != 0:
-            stderr = response.read_stderr().strip()
-            raise RuntimeError(f"psql exited with status {exit_code}: {stderr}")
-        return response.read_stdout().strip()
-    finally:
-        response.close()
+        with state["database_connection"].cursor() as cursor:
+            cursor.execute(sql, params)
+            if cursor.description is None:
+                return ""
+            rows = cursor.fetchall()
+    except psycopg2.Error as exc:
+        raise RuntimeError("Trace-rollup database query failed") from exc
+
+    def format_value(value: Any) -> str:
+        if isinstance(value, bool):
+            return "t" if value else "f"
+        if isinstance(value, float) and value.is_integer():
+            return str(int(value))
+        return str(value)
+
+    return "\n".join("|".join(format_value(value) for value in row) for row in rows)
 
 
 def _mlflow_cr(custom_api: client.CustomObjectsApi) -> dict[str, Any]:
@@ -264,36 +388,53 @@ def _mlflow_cr(custom_api: client.CustomObjectsApi) -> dict[str, Any]:
     )
 
 
-def _delete_rollup_job(batch_api: client.BatchV1Api, name: str) -> None:
+def _rollup_job_is_deleted(batch_api: client.BatchV1Api, name: str) -> bool:
     try:
-        batch_api.delete_namespaced_job(
+        batch_api.read_namespaced_job(
             name=name,
             namespace=Config.MLFLOW_NAMESPACE,
-            propagation_policy="Foreground",
+            _request_timeout=JOB_API_REQUEST_TIMEOUT_SECONDS,
         )
-    except ApiException as exc:
-        if exc.status != 404:
-            raise
-    _wait_for_rollup_job_deletion(batch_api=batch_api, name=name)
-
-
-@wait_until(
-    description="test-created trace-rollup Job to be deleted",
-    timeout=JOB_TIMEOUT_SECONDS,
-    interval=POLL_INTERVAL_SECONDS,
-    until=lambda deleted: deleted,
-    retry_rules={
-        ApiException: lambda exc: exc.status in {409, 429} or (exc.status or 0) >= 500
-    },
-)
-def _wait_for_rollup_job_deletion(batch_api: client.BatchV1Api, name: str) -> bool:
-    try:
-        batch_api.read_namespaced_job(name=name, namespace=Config.MLFLOW_NAMESPACE)
     except ApiException as exc:
         if exc.status == 404:
             return True
         raise
     return False
+
+
+def _delete_rollup_job(batch_api: client.BatchV1Api, name: str) -> None:
+    delete_requested = False
+
+    @wait_until(
+        description=f"trace-rollup Job {name} to be deleted",
+        timeout=JOB_DELETE_TIMEOUT_SECONDS,
+        interval=POLL_INTERVAL_SECONDS,
+        until=lambda deleted: deleted,
+        retry_rules={
+            ApiException: lambda exc: (exc.status or 0) in {0, 409, 429}
+            or (exc.status or 0) >= 500,
+            HTTPError: None,
+        },
+    )
+    def delete_and_wait() -> bool:
+        nonlocal delete_requested
+        if not delete_requested:
+            try:
+                batch_api.delete_namespaced_job(
+                    name=name,
+                    namespace=Config.MLFLOW_NAMESPACE,
+                    propagation_policy="Foreground",
+                    _request_timeout=JOB_API_REQUEST_TIMEOUT_SECONDS,
+                )
+            except ApiException as exc:
+                if exc.status != 404:
+                    raise
+            # Only start checking absence after the DELETE succeeded or returned 404.
+            delete_requested = True
+
+        return _rollup_job_is_deleted(batch_api=batch_api, name=name)
+
+    delete_and_wait()
 
 
 def _trace_metric_values(
@@ -394,9 +535,18 @@ def action_prepare_trace_rollups(test_context: TestContext) -> None:
     ):
         pytest.fail("Tracking Deployment is not ready on the harness backend Secret")
 
-    cronjob = batch_api.read_namespaced_cron_job(
-        name=ROLLUPS_CRONJOB_NAME, namespace=namespace
-    )
+    try:
+        cronjob = batch_api.read_namespaced_cron_job(
+            name=ROLLUPS_CRONJOB_NAME, namespace=namespace
+        )
+    except ApiException as exc:
+        if exc.status == 404:
+            exc.reason = (
+                f"{exc.reason or 'Not Found'}\n"
+                "The eligible trace-rollup smoke test expected the MLflow operator to "
+                f"create CronJob {ROLLUPS_CRONJOB_NAME!r} in namespace {namespace!r}."
+            )
+        raise
     rollup_container = next(
         (
             container
@@ -437,11 +587,23 @@ def action_prepare_trace_rollups(test_context: TestContext) -> None:
     database_pod = _database_pod(core_api=core_api)
     if not database_pod:
         pytest.fail("Harness PostgreSQL pod was not found")
-    current_database = _database_query(
+    port_forward, local_port = _start_database_port_forward(database_pod)
+    state.update(
+        {
+            "database": database,
+            "database_user": database_user,
+            "database_pod": database_pod,
+            "database_port_forward": port_forward,
+        }
+    )
+    state["database_connection"] = _database_connection(
+        backend_uri=backend_uri,
+        local_port=local_port,
         core_api=core_api,
-        database_pod=database_pod,
-        db_name=database,
-        db_user=database_user,
+        state=state,
+    )
+    current_database = _database_query(
+        state=state,
         sql="SELECT current_database()",
     )
     if current_database != database:
@@ -451,9 +613,6 @@ def action_prepare_trace_rollups(test_context: TestContext) -> None:
 
     state.update(
         {
-            "database": database,
-            "database_user": database_user,
-            "database_pod": database_pod,
             "backend_secret_name": DB_CREDENTIALS_SECRET_NAME,
             "cronjob": cronjob,
             "expected_schedule": expected_schedule,
@@ -479,6 +638,7 @@ def action_prepare_trace_rollups(test_context: TestContext) -> None:
 def action_seed_trace_rollup_traces(test_context: TestContext) -> None:
     """Seed five traces across two complete historical UTC days."""
     state = test_context.trace_rollups_state
+    state["experiment_id"] = test_context.active_experiment_id
     workspace = test_context.active_workspace
     current_utc_day = time.time_ns() // NS_PER_MS // MS_PER_DAY
     start_time_ms = (current_utc_day - BACKDATE_DAYS) * MS_PER_DAY
@@ -486,7 +646,7 @@ def action_seed_trace_rollup_traces(test_context: TestContext) -> None:
     start_times_ms = [
         boundary_ms - 1000 + index for index in range(TRACE_COUNT - 1)
     ] + [boundary_ms]
-    trace_ids, observed_latencies_ms = _seed_trace_batch(
+    trace_ids, observed_latencies_ms, span_ids_by_trace_id = _seed_trace_batch(
         test_context,
         start_times_ms=start_times_ms,
         latencies_ms=EXPECTED_TRACE_LATENCIES_MS,
@@ -496,8 +656,7 @@ def action_seed_trace_rollup_traces(test_context: TestContext) -> None:
     state.update(
         {
             "workspace": workspace,
-            "experiment_id": test_context.active_experiment_id,
-            "trace_ids": trace_ids,
+            "expected_span_ids_by_trace_id": span_ids_by_trace_id,
             "trace_latencies_by_day": {
                 _utc_day(start_time_ms): observed_latencies_ms[:-1],
                 _utc_day(boundary_ms): observed_latencies_ms[-1:],
@@ -519,7 +678,7 @@ def action_seed_trace_rollup_traces(test_context: TestContext) -> None:
 def action_seed_additional_trace_rollup_traces(test_context: TestContext) -> None:
     """Add two eligible traces on the already rolled-up UTC day."""
     state = test_context.trace_rollups_state
-    existing_trace_ids = state.get("trace_ids") or []
+    existing_trace_ids = list(state.get("trace_ids", []))
     if len(existing_trace_ids) != TRACE_COUNT:
         raise ValueError(
             f"Expected the initial {TRACE_COUNT} traces before adding more, "
@@ -528,7 +687,11 @@ def action_seed_additional_trace_rollup_traces(test_context: TestContext) -> Non
 
     # Rebuild the first UTC day while leaving the second day's traces unchanged.
     additional_start_time_ms = state["start_time_ms"] + len(existing_trace_ids) + 1
-    additional_trace_ids, observed_latencies_ms = _seed_trace_batch(
+    (
+        additional_trace_ids,
+        observed_latencies_ms,
+        additional_span_ids_by_trace_id,
+    ) = _seed_trace_batch(
         test_context,
         start_times_ms=[
             additional_start_time_ms + index for index in range(ADDITIONAL_TRACE_COUNT)
@@ -539,9 +702,9 @@ def action_seed_additional_trace_rollup_traces(test_context: TestContext) -> Non
     )
 
     state["additional_trace_ids"] = additional_trace_ids
-    state["trace_ids_before_additional_seed"] = list(existing_trace_ids)
+    state["trace_ids_before_additional_seed"] = existing_trace_ids
     state["additional_start_time_ms"] = additional_start_time_ms
-    state["trace_ids"].extend(additional_trace_ids)
+    state["expected_span_ids_by_trace_id"].update(additional_span_ids_by_trace_id)
     latencies_by_day = state["trace_latencies_by_day"]
     latencies_by_day[_utc_day(additional_start_time_ms)].extend(observed_latencies_ms)
     state["expected"] = _expected_rollup_values(
@@ -574,9 +737,8 @@ def action_run_trace_rollup_job(test_context: TestContext) -> None:
             uid=cronjob.metadata.uid,
         )
     ]
-    # Register cleanup before submitting, including when creation succeeds but the response is lost.
+    # Register before submitting. The rollup finalizer owns both Job and SQL cleanup.
     state["test_created_job_names"].append(job_name)
-    test_context.add_job_for_cleanup(job_name, namespace)
     batch_api.create_namespaced_job(namespace=namespace, body=job)
     wait_for_job_complete(
         batch_api,
@@ -606,17 +768,15 @@ def _read_trace_rollup_rows(
                COALESCE(MAX(max_value) FILTER (WHERE metric_name = 'latency'), 0),
                COALESCE(MIN(min_value) FILTER (WHERE metric_name = 'latency'), 0)
         FROM {ROLLUP_TABLE}
-        WHERE experiment_id = {int(experiment_id)}
+        WHERE experiment_id = %s
           AND grouping_set = 'global'
-          AND rollup_day BETWEEN DATE '{first_day}' AND DATE '{last_day}'
+          AND rollup_day BETWEEN %s AND %s
         GROUP BY rollup_day
     """
     output = _database_query(
-        core_api=state["core_api"],
-        database_pod=state["database_pod"],
-        db_name=state["database"],
-        db_user=state["database_user"],
+        state=state,
         sql=sql,
+        params=(int(experiment_id), first_day, last_day),
     )
     observed: dict[date, tuple[int, ...]] = {}
     for line in output.splitlines():
@@ -660,69 +820,109 @@ def _read_trace_rollup_metrics(
     return count_metrics, latency_metrics
 
 
-def _set_rollup_probe_values(
-    state: dict[str, Any],
-    experiment_id: str,
+def _read_rollup_probe_rows(
+    cursor: psycopg2.extensions.cursor,
+    experiment_id: int,
     day: date,
-    *,
-    trace_count: int | None = None,
-    latency_sum: int | None = None,
-    latency_max: int | None = None,
-    latency_min: int | None = None,
-) -> None:
-    assignments: list[str] = []
-    metric_names: set[str] = set()
-    if trace_count is not None:
-        assignments.append(
-            "sample_count = CASE WHEN metric_name = 'trace_count' "
-            f"THEN {trace_count} ELSE sample_count END"
-        )
-        metric_names.add("trace_count")
-    if latency_sum is not None:
-        assignments.append(
-            "sum_value = CASE WHEN metric_name = 'latency' "
-            f"THEN {latency_sum} ELSE sum_value END"
-        )
-        metric_names.add("latency")
-    if latency_max is not None:
-        assignments.append(
-            "max_value = CASE WHEN metric_name = 'latency' "
-            f"THEN {latency_max} ELSE max_value END"
-        )
-        metric_names.add("latency")
-    if latency_min is not None:
-        assignments.append(
-            "min_value = CASE WHEN metric_name = 'latency' "
-            f"THEN {latency_min} ELSE min_value END"
-        )
-        metric_names.add("latency")
-    if not assignments:
-        raise ValueError("At least one rollup probe value must be provided")
-
-    metric_filter = ", ".join(f"'{name}'" for name in sorted(metric_names))
-    expected_rows = "\n".join(f"{name}|1" for name in sorted(metric_names))
-    set_clause = ", ".join(assignments)
-    metric_rows = _database_query(
-        core_api=state["core_api"],
-        database_pod=state["database_pod"],
-        db_name=state["database"],
-        db_user=state["database_user"],
-        sql=f"""
-            WITH updated AS (
-                UPDATE {ROLLUP_TABLE}
-                SET {set_clause}
-                WHERE experiment_id = {int(experiment_id)}
-                  AND rollup_day = DATE '{day}' AND grouping_set = 'global'
-                  AND metric_name IN ({metric_filter})
-                RETURNING metric_name
-            )
-            SELECT metric_name, COUNT(*) FROM updated GROUP BY metric_name ORDER BY metric_name
+) -> RollupProbeValues:
+    columns = ", ".join(ROLLUP_PROBE_COLUMNS)
+    cursor.execute(
+        f"""
+            SELECT metric_name, {columns}
+            FROM {ROLLUP_TABLE}
+            WHERE experiment_id = %s
+              AND rollup_day = %s
+              AND grouping_set = 'global'
+              AND metric_name IN ('trace_count', 'latency')
+            FOR UPDATE
         """,
+        (experiment_id, day),
     )
-    assert metric_rows == expected_rows, (
-        f"Expected one materialized row for each probe metric, got {metric_rows!r}; "
-        f"expected {expected_rows!r}"
-    )
+    rows = cursor.fetchall()
+    metric_names = [row[0] for row in rows]
+    if sorted(metric_names) != ["latency", "trace_count"]:
+        raise RuntimeError(
+            f"Expected exactly one {ROLLUP_TABLE} row per metric for "
+            f"experiment {experiment_id} on {day}; got {metric_names}"
+        )
+    return {
+        metric: dict(zip(ROLLUP_PROBE_COLUMNS, values, strict=True))
+        for metric, *values in rows
+    }
+
+
+def _update_rollup_probe_rows(
+    cursor: psycopg2.extensions.cursor,
+    experiment_id: int,
+    day: date,
+    changes: RollupProbeValues,
+) -> None:
+    for metric, values in changes.items():
+        assignments = pg_sql.SQL(", ").join(
+            pg_sql.SQL("{} = %s").format(pg_sql.Identifier(column)) for column in values
+        )
+        cursor.execute(
+            pg_sql.SQL(
+                """
+                    UPDATE {table}
+                    SET {assignments}
+                    WHERE experiment_id = %s
+                      AND rollup_day = %s
+                      AND grouping_set = 'global'
+                      AND metric_name = %s
+                """
+            ).format(table=pg_sql.Identifier(ROLLUP_TABLE), assignments=assignments),
+            (*values.values(), experiment_id, day, metric),
+        )
+        if cursor.rowcount != 1:
+            raise RuntimeError(
+                f"Expected one updated {ROLLUP_TABLE} row for "
+                f"{metric} in experiment {experiment_id} on {day}; got {cursor.rowcount}"
+            )
+
+
+@contextmanager
+def _probe_rollup_values(
+    state: dict[str, Any],
+    experiment_id: int,
+    day: date,
+    changes: RollupProbeValues,
+) -> Iterator[None]:
+    """Commit the probe for API readers and restore the original values afterward."""
+    connection = state["database_connection"]
+    restore_values = None
+    try:
+        try:
+            with connection, connection.cursor() as cursor:
+                original_rows = _read_rollup_probe_rows(cursor, experiment_id, day)
+                expected_rows = {
+                    metric: values | changes.get(metric, {})
+                    for metric, values in original_rows.items()
+                }
+                _update_rollup_probe_rows(cursor, experiment_id, day, changes)
+                probed_rows = _read_rollup_probe_rows(cursor, experiment_id, day)
+                assert probed_rows == expected_rows, (
+                    f"Unexpected trace-rollup probe rows on {day}: "
+                    f"{probed_rows} != {expected_rows}"
+                )
+                restore_values = {
+                    metric: {column: original_rows[metric][column] for column in values}
+                    for metric, values in changes.items()
+                }
+            yield
+        finally:
+            if restore_values is not None:
+                with connection, connection.cursor() as cursor:
+                    _update_rollup_probe_rows(
+                        cursor, experiment_id, day, restore_values
+                    )
+                    restored_rows = _read_rollup_probe_rows(cursor, experiment_id, day)
+                    assert restored_rows == original_rows, (
+                        f"Trace-rollup probe rows were not restored on {day}: "
+                        f"{restored_rows} != {original_rows}"
+                    )
+    except psycopg2.Error as exc:
+        raise RuntimeError("Trace-rollup probe query failed") from exc
 
 
 def action_query_trace_rollup_metrics(test_context: TestContext) -> None:
@@ -735,25 +935,24 @@ def action_query_trace_rollup_metrics(test_context: TestContext) -> None:
     probe_latency_max = state["expected"]["latency_max"] + 1000
     # Probe each day independently while querying the full window. Raw fallback for
     # either partition would omit that day's change.
-    for day, (trace_count, _, latency_max, _) in state["observed_sql_rollups"].items():
-        try:
-            _set_rollup_probe_values(
-                state,
-                experiment_id,
-                day,
-                trace_count=trace_count + probe_count_delta,
-                latency_max=probe_latency_max,
+    for day, (trace_count, _, _, _) in state["observed_sql_rollups"].items():
+        with _probe_rollup_values(
+            state,
+            int(experiment_id),
+            day,
+            {
+                "trace_count": {"sample_count": trace_count + probe_count_delta},
+                "latency": {"max_value": probe_latency_max},
+            },
+        ):
+            probed_count, probed_latency = _read_trace_rollup_metrics(
+                experiment_id, state
             )
-            probed_count, probed_latency = _read_trace_rollup_metrics(experiment_id, state)
             assert probed_count.get("COUNT") == expected_probe_count, (
                 f"Trace-count API did not use the materialized value for {day}: {probed_count}"
             )
             assert probed_latency.get("MAX") == probe_latency_max, (
                 f"Latency API did not use the materialized value for {day}: {probed_latency}"
-            )
-        finally:
-            _set_rollup_probe_values(
-                state, experiment_id, day, trace_count=trace_count, latency_max=latency_max
             )
 
     probe_latency_sum_delta = 1000
@@ -763,15 +962,18 @@ def action_query_trace_rollup_metrics(test_context: TestContext) -> None:
     probe_latency_min = state["expected"]["latency_min"] - 1
     # Change the latency row's own sum and minimum so raw-trace fallback cannot
     # satisfy these aggregations while the source traces remain unchanged.
-    for day, (_, latency_sum, _, latency_min) in state["observed_sql_rollups"].items():
-        try:
-            _set_rollup_probe_values(
-                state,
-                experiment_id,
-                day,
-                latency_sum=latency_sum + probe_latency_sum_delta,
-                latency_min=probe_latency_min,
-            )
+    for day, (_, latency_sum, _, _) in state["observed_sql_rollups"].items():
+        with _probe_rollup_values(
+            state,
+            int(experiment_id),
+            day,
+            {
+                "latency": {
+                    "sum_value": latency_sum + probe_latency_sum_delta,
+                    "min_value": probe_latency_min,
+                }
+            },
+        ):
             _, probed_latency = _read_trace_rollup_metrics(experiment_id, state)
             assert probed_latency.get("AVG") == pytest.approx(expected_probe_average), (
                 f"Latency API did not use the materialized sum for {day}: {probed_latency}"
@@ -779,14 +981,6 @@ def action_query_trace_rollup_metrics(test_context: TestContext) -> None:
             assert probed_latency.get("MIN") == probe_latency_min, (
                 f"Latency API did not use the materialized minimum for {day}: "
                 f"{probed_latency}"
-            )
-        finally:
-            _set_rollup_probe_values(
-                state,
-                experiment_id,
-                day,
-                latency_sum=latency_sum,
-                latency_min=latency_min,
             )
 
     # Verify that cleanup restored both the stored summaries and their public API view.
@@ -807,11 +1001,11 @@ def action_query_trace_rollup_metrics(test_context: TestContext) -> None:
 
 
 def action_read_trace_rollup_sources(test_context: TestContext) -> None:
-    """Reload all seeded trace metadata after rollup processing."""
+    """Reload all seeded trace data and spans after rollup processing."""
     traces = test_context.user_client.search_traces(
         experiment_ids=[test_context.active_experiment_id],
         max_results=100,
-        include_spans=False,
+        include_spans=True,
     )
     test_context.trace_rollups_state["observed_traces"] = traces
     test_context.trace_rollups_state["trace_status_passes"].append(
@@ -823,57 +1017,101 @@ def action_read_trace_rollup_sources(test_context: TestContext) -> None:
     )
 
 
+def _delete_seeded_traces(
+    test_context: TestContext, experiment_id: str, trace_ids: list[str]
+) -> None:
+    mlflow.flush_trace_async_logging()
+    user_client = test_context.user_client
+    deleted = user_client.delete_traces(
+        experiment_id=experiment_id, trace_ids=trace_ids
+    )
+    if deleted != len(trace_ids):
+        # Partial seeds may never reach the store, and retries may find IDs already gone.
+        traces = user_client.search_traces(
+            experiment_ids=[experiment_id], max_results=100, include_spans=False
+        )
+        remaining_ids = set(trace_ids).intersection(
+            trace.info.trace_id for trace in traces
+        )
+        if remaining_ids:
+            raise RuntimeError(f"Seeded traces still present: {sorted(remaining_ids)}")
+    logger.info("Cleaned up seeded traces in smoke experiment %s", experiment_id)
+
+
 def action_cleanup_trace_rollups(test_context: TestContext) -> None:
-    """Remove this smoke test's Jobs before deleting its rollup rows."""
+    """Remove this smoke test's Jobs, source traces, and database rollup state."""
     state = test_context.trace_rollups_state
     if not state:
         return
 
-    cleanup_errors: list[Exception] = []
-    job_cleanup_failed = False
+    cleanup_errors: list[str] = []
     for job_name in reversed(state.get("test_created_job_names", [])):
         try:
             _delete_rollup_job(batch_api=state["batch_api"], name=job_name)
-            test_context.jobs_to_delete.pop(job_name, None)
             logger.info("Deleted test-created rollup Job %s", job_name)
         except Exception as exc:
-            cleanup_errors.append(exc)
-            job_cleanup_failed = True
+            cleanup_errors.append(
+                f"Could not confirm deletion of rollup Job {job_name}: {exc}"
+            )
 
-    experiment_id = test_context.active_experiment_id
+    experiment_id = state.get("experiment_id")
+    trace_ids = state.get("trace_ids")
+    if experiment_id and cleanup_errors:
+        logger.warning(
+            "Skipped trace and SQL cleanup for experiment %s because rollup Job deletion "
+            "could not be confirmed",
+            experiment_id,
+        )
+    if experiment_id and trace_ids and not cleanup_errors:
+        try:
+            # Deleting traces can enqueue rebuilds. Clear the queue after the deletion.
+            _delete_seeded_traces(test_context, experiment_id, trace_ids)
+        except Exception as exc:
+            cleanup_errors.append(
+                f"Could not clean up seeded traces in experiment {experiment_id}: {exc}"
+            )
     if (
         experiment_id
         and state.get("database_pod")
         and state.get("database")
-        and not job_cleanup_failed
+        and state.get("database_connection")
+        and not cleanup_errors
     ):
         try:
-            table_exists = _database_query(
-                core_api=state["core_api"],
-                database_pod=state["database_pod"],
-                db_name=state["database"],
-                db_user=state["database_user"],
-                sql=f"SELECT to_regclass('{ROLLUP_TABLE}') IS NOT NULL",
+            # Keep rebuild entries if the summary deletion fails.
+            with state["database_connection"]:
+                for table in (ROLLUP_REBUILD_QUEUE_TABLE, ROLLUP_TABLE):
+                    table_exists = _database_query(
+                        state=state,
+                        sql="SELECT to_regclass(%s) IS NOT NULL",
+                        params=(table,),
+                    )
+                    if table_exists not in {"t", "f"}:
+                        raise RuntimeError(
+                            f"Unexpected existence result for {table}: {table_exists!r}"
+                        )
+                    if table_exists == "t":
+                        _database_query(
+                            state=state,
+                            sql=f"DELETE FROM {table} WHERE experiment_id = %s",
+                            params=(int(experiment_id),),
+                        )
+            logger.info(
+                "Cleaned up trace-rollup rows and rebuild entries for smoke experiment %s",
+                experiment_id,
             )
-            if table_exists not in {"t", "f"}:
-                raise RuntimeError(f"Unexpected rollup table existence result: {table_exists!r}")
-            if table_exists == "t":
-                _database_query(
-                    core_api=state["core_api"],
-                    database_pod=state["database_pod"],
-                    db_name=state["database"],
-                    db_user=state["database_user"],
-                    sql=f"DELETE FROM {ROLLUP_TABLE} WHERE experiment_id = {int(experiment_id)}",
-                )
-                logger.info(
-                    "Removed trace-rollup rows for smoke experiment %s",
-                    experiment_id,
-                )
         except Exception as exc:
-            cleanup_errors.append(exc)
+            cleanup_errors.append(str(exc))
+
+    connection = state.pop("database_connection", None)
+    if connection is not None:
+        connection.close()
+    _stop_database_port_forward(state.pop("database_port_forward", None))
+    ca_directory = state.pop("database_ca_directory", None)
+    if ca_directory is not None:
+        ca_directory.cleanup()
 
     if cleanup_errors:
         raise RuntimeError(
-            "Trace-rollup smoke cleanup failed: "
-            + "; ".join(str(error) for error in cleanup_errors)
+            "Trace-rollup smoke cleanup failed: " + "; ".join(cleanup_errors)
         )
