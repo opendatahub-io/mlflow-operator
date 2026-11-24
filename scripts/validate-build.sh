@@ -295,6 +295,34 @@ run_operator_integration() (
   backup_dir="$(mktemp -d)"
   cp "$params_env" "$backup_dir/params.env"
 
+  # shellcheck disable=SC2329  # invoked from the EXIT trap
+  dump_diagnostics() {
+    echo "=== Kind diagnostics (namespace $namespace, context $context) ===" >&2
+    k -n "$namespace" get deployment,pods,svc,servicemonitor -o wide >&2 2>&1 || true
+    k get mlflowoperator default-mlflowoperator -o yaml >&2 2>&1 || true
+    k get mlflow mlflow -o yaml >&2 2>&1 || true
+    k -n "$namespace" get events --sort-by=.lastTimestamp >&2 2>&1 | tail -n 60 || true
+    k -n "$namespace" logs "deployment/$controller_deployment" --tail=100 >&2 2>&1 || true
+    k -n "$namespace" logs deployment/mlflow --tail=100 >&2 2>&1 || true
+  }
+
+  # shellcheck disable=SC2329  # invoked from the EXIT trap
+  cleanup() {
+    local status=$?
+    trap - EXIT
+    cp "$backup_dir/params.env" "$params_env" 2>/dev/null || true
+    if [ -n "$private_kubeconfig" ]; then
+      rm -f "$private_kubeconfig"
+    fi
+    rm -f "$ROOT/.github/test-infra/overlays/kind/tls.crt" "$ROOT/.github/test-infra/overlays/kind/tls.key"
+    rm -rf "$backup_dir"
+    if [ "$status" -ne 0 ]; then
+      dump_diagnostics || true
+    fi
+    exit "$status"
+  }
+  trap cleanup EXIT
+
   require_command kubectl
   require_command python3
   require_command kustomize
@@ -324,34 +352,6 @@ run_operator_integration() (
   chmod 600 "$private_kubeconfig"
   kubectl config view --minify --flatten --context "$context" > "$private_kubeconfig" || \
     die "could not build a private kubeconfig for context '$context'"
-
-  # shellcheck disable=SC2329  # invoked from the EXIT trap
-  dump_diagnostics() {
-    echo "=== Kind diagnostics (namespace $namespace, context $context) ===" >&2
-    k -n "$namespace" get deployment,pods,svc,servicemonitor -o wide >&2 2>&1 || true
-    k get mlflowoperator default-mlflowoperator -o yaml >&2 2>&1 || true
-    k get mlflow mlflow -o yaml >&2 2>&1 || true
-    k -n "$namespace" get events --sort-by=.lastTimestamp >&2 2>&1 | tail -n 60 || true
-    k -n "$namespace" logs "deployment/$controller_deployment" --tail=100 >&2 2>&1 || true
-    k -n "$namespace" logs deployment/mlflow --tail=100 >&2 2>&1 || true
-  }
-
-  # shellcheck disable=SC2329  # invoked from the EXIT trap
-  cleanup() {
-    local status=$?
-    trap - EXIT
-    cp "$backup_dir/params.env" "$params_env" 2>/dev/null || true
-    if [ -n "$private_kubeconfig" ]; then
-      rm -f "$private_kubeconfig"
-    fi
-    rm -f "$ROOT/.github/test-infra/overlays/kind/tls.crt" "$ROOT/.github/test-infra/overlays/kind/tls.key"
-    rm -rf "$backup_dir"
-    if [ "$status" -ne 0 ]; then
-      dump_diagnostics || true
-    fi
-    exit "$status"
-  }
-  trap cleanup EXIT
 
   echo "=== Installing Kind prerequisites for the MLflowOperator module path ==="
   k apply -f "$ROOT/config/crd/bases"
