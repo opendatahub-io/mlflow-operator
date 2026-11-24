@@ -532,6 +532,7 @@ Validates sample CRs on every PR:
 - **Prevents**: Merging invalid or undocumented samples
 
 ### Other Workflows
+- `pr-build-validation.yml` - Resolves both Konflux PR targets from `.tekton`, validates their packaging and hermetic build inputs, builds and smoke-tests both images, then runs the `MLflowOperator`/`MLflow` Kind handoff. Keep Dockerfile and context assertions sourced from `.tekton`; the summary job is the only check intended for branch protection.
 - `verify-codegen.yml` - Validates generated code is up-to-date
 - `test.yml` - Runs unit tests
 - `lint.yml` - Runs golangci-lint
