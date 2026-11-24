@@ -291,9 +291,8 @@ run_operator_integration() (
   local operator_pod="" pod="" value="" current_context=""
   local private_kubeconfig="" memory_limit="" patch=""
   local params_env="$ROOT/.github/test-infra/overlays/kind/params.env"
-  local backup_dir
-  backup_dir="$(mktemp -d)"
-  cp "$params_env" "$backup_dir/params.env"
+  local lock_dir="$ROOT/.git/konflux-build-simulator-params.lock"
+  local lock_owned=false backup_dir=""
 
   # shellcheck disable=SC2329  # invoked from the EXIT trap
   dump_diagnostics() {
@@ -306,22 +305,77 @@ run_operator_integration() (
     k -n "$namespace" logs deployment/mlflow --tail=100 >&2 2>&1 || true
   }
 
+  # Serialize checkouts that rewrite the shared overlay params. deploy.py
+  # renders params.env in place, so overlapping local runs could otherwise
+  # snapshot one another's half-written values.
+  acquire_params_lock() {
+    local owner="" attempts=0
+    while ! mkdir "$lock_dir" 2>/dev/null; do
+      owner="$(cat "$lock_dir/pid" 2>/dev/null || true)"
+      if [ -n "$owner" ] && kill -0 "$owner" 2>/dev/null; then
+        if [ "$attempts" -eq 0 ]; then
+          echo "Waiting for pid $owner to release $lock_dir" >&2
+        fi
+        attempts=$((attempts + 1))
+        if [ "$attempts" -ge 300 ]; then
+          die "timed out waiting for the params.env lock held by pid $owner"
+        fi
+        sleep 2
+        continue
+      fi
+      # A process can die before writing its pid. Give that window time to
+      # close, then remove only the lock's own contents.
+      if [ -z "$owner" ] && [ "$attempts" -lt 5 ]; then
+        attempts=$((attempts + 1))
+        sleep 1
+        continue
+      fi
+      rm -f "$lock_dir/pid"
+      rmdir "$lock_dir" 2>/dev/null || die "cannot clear stale params.env lock $lock_dir"
+    done
+    printf '%s\n' "$$" > "$lock_dir/pid" || {
+      rmdir "$lock_dir" 2>/dev/null || true
+      die "cannot record the params.env lock owner"
+    }
+    lock_owned=true
+  }
+
+  # shellcheck disable=SC2329  # invoked from the EXIT trap
+  release_params_lock() {
+    local owner=""
+    if [ "$lock_owned" = true ]; then
+      owner="$(cat "$lock_dir/pid" 2>/dev/null || true)"
+      if [ "$owner" = "$$" ]; then
+        rm -f "$lock_dir/pid"
+        rmdir "$lock_dir" 2>/dev/null || true
+      fi
+      lock_owned=false
+    fi
+  }
+
   # shellcheck disable=SC2329  # invoked from the EXIT trap
   cleanup() {
     local status=$?
     trap - EXIT
-    cp "$backup_dir/params.env" "$params_env" 2>/dev/null || true
+    if [ -n "$backup_dir" ] && [ -f "$backup_dir/params.env" ]; then
+      cp "$backup_dir/params.env" "$params_env" 2>/dev/null || true
+    fi
     if [ -n "$private_kubeconfig" ]; then
       rm -f "$private_kubeconfig"
     fi
     rm -f "$ROOT/.github/test-infra/overlays/kind/tls.crt" "$ROOT/.github/test-infra/overlays/kind/tls.key"
     rm -rf "$backup_dir"
+    release_params_lock
     if [ "$status" -ne 0 ]; then
       dump_diagnostics || true
     fi
     exit "$status"
   }
   trap cleanup EXIT
+
+  acquire_params_lock
+  backup_dir="$(mktemp -d)"
+  cp "$params_env" "$backup_dir/params.env"
 
   require_command kubectl
   require_command python3
@@ -463,7 +517,6 @@ metadata:
 automountServiceAccountToken: false
 EOF
   k -n "$namespace" get secret mlflow-tls >/dev/null 2>&1 || die "deploy.py did not create the mlflow-tls secret"
-  k apply -f "$ROOT/config/samples/mlflow_v1_mlflow_minimal.yaml"
 
   # The sample hardcodes the mutable odh-stable tag and a 512Mi limit that is
   # below MLflow's startup working set in Kind (OOMKilled). Patch the CR, not
@@ -488,7 +541,8 @@ print(
 )
 PY
 )"
-  k patch mlflow mlflow --type=merge -p "$patch"
+  k patch --local -f "$ROOT/config/samples/mlflow_v1_mlflow_minimal.yaml" \
+    --type=merge -p "$patch" -o yaml | k apply -f -
 
   for _ in $(seq 1 120); do
     if k -n "$namespace" get deployment mlflow >/dev/null 2>&1; then

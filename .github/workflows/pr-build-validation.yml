@@ -14,8 +14,7 @@ on:
     types: [opened, synchronize, reopened, edited, labeled, unlabeled]
   workflow_dispatch:
 
-permissions:
-  contents: read
+permissions: {}
 
 concurrency:
   group: pr-build-validation-${{ github.event.pull_request.number || github.run_id }}
@@ -61,7 +60,27 @@ jobs:
           BASE_REF: ${{ github.base_ref }}
         run: |
           set -euo pipefail
-          RELEVANT='^(Dockerfile|\.dockerignore|Makefile|go\.mod|go\.sum|api/|cmd/|internal/|charts/|config/|scripts/|mlflow-tests/|test/crd/|test/e2e/|\.tekton/|\.github/actions/deploy/|\.github/test-infra/|\.github/workflows/|AGENTS\.md)'
+          relevant_paths=(
+            Dockerfile
+            .dockerignore
+            Makefile
+            go.mod
+            go.sum
+            api
+            cmd
+            internal
+            charts
+            config
+            scripts
+            mlflow-tests
+            test/crd
+            test/e2e
+            .tekton
+            .github/actions/deploy
+            .github/test-infra
+            .github/workflows
+            AGENTS.md
+          )
 
           if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
             echo "skip=false" >> "$GITHUB_OUTPUT"
@@ -76,18 +95,24 @@ jobs:
             echo "reason=skip-konflux-sim label present" >> "$GITHUB_OUTPUT"
             echo "ℹ️  Validation skipped: skip-konflux-sim label present"
           else
-            # Capture first: grep -q closes the pipe early and pipefail would
-            # turn that SIGPIPE into a false "no relevant changes" result.
             merge_base="$(git merge-base "origin/${BASE_REF}" HEAD)" || exit 1
-            changed_files="$(git diff --no-renames --name-only "$merge_base" HEAD)" || exit 1
-            if grep -Eq "$RELEVANT" <<< "$changed_files"; then
+            # Match paths inside Git rather than parsing quoted --name-only
+            # output, which cannot reliably represent non-ASCII names.
+            set +e
+            git diff --quiet --no-renames "$merge_base" HEAD -- "${relevant_paths[@]}"
+            diff_status=$?
+            set -e
+            if [ "$diff_status" -eq 1 ]; then
               echo "skip=false" >> "$GITHUB_OUTPUT"
               echo "reason=relevant changes detected" >> "$GITHUB_OUTPUT"
               echo "✅ Validation will run"
-            else
+            elif [ "$diff_status" -eq 0 ]; then
               echo "skip=true" >> "$GITHUB_OUTPUT"
               echo "reason=no Konflux-relevant files changed" >> "$GITHUB_OUTPUT"
               echo "ℹ️  Validation out of scope: no Konflux-relevant files changed"
+            else
+              echo "git diff failed with status $diff_status" >&2
+              exit "$diff_status"
             fi
           fi
 
@@ -192,7 +217,12 @@ jobs:
         id: go-version
         run: |
           set -euo pipefail
-          echo "version=$(python3 scripts/validate_tekton_contracts.py go-version)" >> "$GITHUB_OUTPUT"
+          version="$(python3 scripts/validate_tekton_contracts.py go-version)"
+          if [ -z "$version" ]; then
+            echo "builder Go version resolved to an empty value" >&2
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
 
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
@@ -246,7 +276,12 @@ jobs:
         id: go-version
         run: |
           set -euo pipefail
-          echo "version=$(python3 scripts/validate_tekton_contracts.py go-version)" >> "$GITHUB_OUTPUT"
+          version="$(python3 scripts/validate_tekton_contracts.py go-version)"
+          if [ -z "$version" ]; then
+            echo "builder Go version resolved to an empty value" >&2
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
 
       - name: Set up Go to inspect the built manager
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0

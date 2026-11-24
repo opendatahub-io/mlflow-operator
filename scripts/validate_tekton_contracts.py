@@ -24,7 +24,9 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 TEKTON_GLOB = ".tekton/*pull-request.yaml"
+WORKFLOW_PATH = ".github/workflows/pr-build-validation.yml"
 PIPELINE_PATH = "pipeline/multi-arch-container-build.yaml"
+REPOSITORY_URL = "https://github.com/opendatahub-io/mlflow-operator"
 PIPELINE_DEFAULTS: dict[str, Any] = {
     "hermetic": "false",
     "build-platforms": ["linux/x86_64"],
@@ -76,6 +78,41 @@ def params_map(spec: dict[str, Any]) -> dict[str, Any]:
     return params
 
 
+def workflow_base_branch() -> str:
+    workflow = load_yaml(WORKFLOW_PATH)
+    triggers = workflow.get("on") or workflow.get(True) or {}
+    pull_request = triggers.get("pull_request") or {}
+    branches = pull_request.get("branches")
+    if isinstance(branches, str):
+        branches = [branches]
+    if not isinstance(branches, list) or len(branches) != 1:
+        fail(f"{WORKFLOW_PATH}: expected exactly one pull_request branch, got {branches!r}")
+    return str(branches[0])
+
+
+def assert_pull_request_trigger(
+    relative: str, document: dict[str, Any], base_branch: str
+) -> None:
+    annotations = (document.get("metadata") or {}).get("annotations") or {}
+    expression = annotations.get("pipelinesascode.tekton.dev/on-cel-expression")
+    if not isinstance(expression, str):
+        fail(f"{relative}: pull_request CEL trigger is missing")
+    normalized = " ".join(expression.split())
+    expected = (
+        f'event == "pull_request" && target_branch == "{base_branch}" && '
+        f'target_url == "{REPOSITORY_URL}"'
+    )
+    if normalized != expected:
+        fail(
+            f"{relative}: pull_request CEL trigger does not match the simulator's "
+            f"base branch and repository; expected {expected!r}, got {normalized!r}"
+        )
+
+
+def param_has_value(value: Any) -> bool:
+    return value not in (None, "", [], {})
+
+
 def normalize_platforms(value: Any) -> list[str]:
     if value is None:
         value = PIPELINE_DEFAULTS["build-platforms"]
@@ -96,17 +133,25 @@ def resolve_targets() -> dict[str, dict[str, Any]]:
         fail(f"no Konflux PR PipelineRuns matched {TEKTON_GLOB}")
 
     targets: dict[str, dict[str, Any]] = {}
+    base_branch = workflow_base_branch()
     for path in files:
         relative = str(path.relative_to(ROOT))
         document = load_yaml(relative)
         if document.get("kind") != "PipelineRun":
             continue
+        assert_pull_request_trigger(relative, document, base_branch)
 
         spec = document.get("spec", {}) or {}
         params = params_map(spec)
         for required in ("output-image", "dockerfile", "path-context"):
             if not params.get(required):
                 fail(f"{relative}: spec.params is missing non-empty {required}")
+        for unsupported in ("build-args", "build-args-file"):
+            if param_has_value(params.get(unsupported)):
+                fail(
+                    f"{relative}: {unsupported} is not simulated; refusing to build "
+                    "an image that differs from the Konflux target"
+                )
 
         image = str(params["output-image"])
         repository = image.rsplit("/", 1)[-1].split("@", 1)[0].split(":", 1)[0]
@@ -268,9 +313,7 @@ def parse_copy(arguments: str) -> tuple[list[str], list[str], str]:
 
 
 def normalize_source(source: str) -> str:
-    if source.startswith("./"):
-        return source[2:]
-    return source
+    return posixpath.normpath(source)
 
 
 def assert_copy_sources(relative: str, context: str) -> int:
@@ -481,7 +524,7 @@ def assert_operator_dockerfile(relative: str) -> None:
         if command == "COPY"
     ]
     copied_sources = {
-        source
+        normalize_source(source)
         for flags, sources, _destination in builder_copies
         if not any(flag.startswith("--from") for flag in flags)
         for source in sources
@@ -495,7 +538,7 @@ def assert_operator_dockerfile(relative: str) -> None:
         fail(f"{relative}: expected a 'go mod download' layer")
     download_index = download_indexes[0]
     before_download = {
-        source
+        normalize_source(source)
         for command, arguments in instructions[:download_index]
         if command == "COPY"
         for flags, sources, _destination in [parse_copy(arguments)]
@@ -625,48 +668,105 @@ def dockerignore_included(lines: list[str], path: str) -> tuple[bool, str]:
     return included, deciding_rule
 
 
-def assert_dockerignore_contract(targets: dict[str, dict[str, Any]]) -> None:
+def effective_dockerignore(target: dict[str, Any]) -> tuple[str | None, list[str]]:
+    dockerfile = (ROOT / target["dockerfile"]).resolve()
+    specific = dockerfile.with_name(dockerfile.name + ".dockerignore")
+    context_path = (ROOT / target["context"]).resolve()
+    ignore_path = specific if specific.is_file() else context_path / ".dockerignore"
+    if not ignore_path.is_file():
+        return None, []
+    try:
+        relative = ignore_path.resolve().relative_to(ROOT)
+    except ValueError:
+        fail(f"{target['pipelineRun']}: effective ignore file escapes the repository")
     lines = [
         line.strip()
-        for line in read_text(".dockerignore").splitlines()
+        for line in read_text(relative.as_posix()).splitlines()
         if line.strip() and not line.lstrip().startswith("#")
     ]
-    required = {
+    return relative.as_posix(), lines
+
+
+def local_copy_inputs(relative: str, context: str) -> set[str]:
+    context_path = (ROOT / context).resolve()
+    inputs: set[str] = set()
+    for command, arguments in dockerfile_instructions(relative):
+        if command not in ("COPY", "ADD"):
+            continue
+        flags, sources, _destination = parse_copy(arguments)
+        if any(flag.startswith("--from") for flag in flags):
+            continue
+        for source in sources:
+            normalized = normalize_source(source)
+            if normalized in ("", "."):
+                continue
+            pattern = str(context_path / normalized)
+            matches = (
+                glob.glob(pattern, recursive=True)
+                if any(character in normalized for character in "*?[")
+                else [pattern]
+            )
+            for match in matches:
+                resolved = Path(match).resolve()
+                try:
+                    path = resolved.relative_to(context_path)
+                except ValueError:
+                    fail(f"{relative}: COPY input escapes path-context: {source}")
+                if path.as_posix() not in ("", "."):
+                    inputs.add(path.as_posix())
+    return inputs
+
+
+REQUIRED_DOCKERIGNORE_INPUTS = {
+    "operator": {
         "go.mod",
         "go.sum",
-        "api",
-        "cmd",
+        "api/go.mod",
+        "api/go.sum",
+        "cmd/main.go",
         "internal",
-        "charts",
+        "charts/mlflow/Chart.yaml",
         "Makefile",
-        "config",
-        "scripts",
+        "config/component_metadata.yaml",
+        "scripts/print_supported_mlflow_version.py",
+    },
+    "tests": {
         "mlflow-tests",
-        ".github/actions/deploy",
+        "mlflow-tests/pyproject.toml",
+        "mlflow-tests/uv.lock",
+        "mlflow-tests/src",
+        "mlflow-tests/images/test-run.sh",
+        ".github/actions/deploy/deploy.py",
         ".github/test-infra",
         ".github/workflows/trace-analytics-prepopulation.yml",
-    }
-    required.update(target["dockerfile"] for target in targets.values())
-    missing: list[str] = []
-    for path in sorted(required):
-        included, rule = dockerignore_included(lines, path)
-        if not included:
-            missing.append(f"{path} (excluded by {rule!r})")
-            continue
-        if (ROOT / path).is_dir():
-            for probe in (f"{path}/__probe__", f"{path}/nested/__probe__"):
-                probe_included, probe_rule = dockerignore_included(lines, probe)
-                if not probe_included:
-                    missing.append(f"{path} children (excluded by {probe_rule!r})")
-                    break
-    if missing:
-        fail(
-            ".dockerignore excludes required build inputs: " + ", ".join(missing)
-        )
-    ok(
-        ".dockerignore ordered rules (last match wins) include every directory "
-        "and file the two Konflux Dockerfiles COPY"
-    )
+        "config/component_metadata.yaml",
+        "scripts/print_supported_mlflow_version.py",
+    },
+}
+
+
+def assert_dockerignore_contract(targets: dict[str, dict[str, Any]]) -> None:
+    for role in sorted(targets):
+        target = targets[role]
+        ignore_relative, lines = effective_dockerignore(target)
+        context_path = (ROOT / target["context"]).resolve()
+        checked = local_copy_inputs(target["dockerfile"], target["context"])
+        checked.add(str((ROOT / target["dockerfile"]).resolve().relative_to(context_path)))
+        checked.update(REQUIRED_DOCKERIGNORE_INPUTS[role])
+
+        missing: list[str] = []
+        for path in sorted(checked):
+            included, rule = dockerignore_included(lines, path)
+            if not included:
+                missing.append(f"{path} (excluded by {rule!r})")
+        if missing:
+            source = ignore_relative or "<no ignore file>"
+            fail(
+                f"{source} excludes required inputs for {target['pipelineRun']}: "
+                + ", ".join(missing)
+            )
+        label = ignore_relative or "no ignore file"
+        ok(f"{target['pipelineRun']}: {label} includes all resolved local COPY inputs")
 
 
 def go_directive(relative: str) -> tuple[str, str]:

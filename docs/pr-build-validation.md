@@ -57,8 +57,10 @@ The helper checks:
 - Every local `COPY`/`ADD` source, including Dockerfile JSON-array operands,
   exists under the Tekton context; globs cannot escape it. `COPY --from=...`
   sources are checked by the image-content assertions instead.
-- `.dockerignore` is evaluated in order with Docker's last-match-wins and
-  negation semantics for every root both Dockerfiles consume.
+- The effective ignore file for each target (`<Dockerfile>.dockerignore` when
+  present, otherwise `.dockerignore` from that target's resolved context) is
+  evaluated in order with Docker's last-match-wins and negation semantics
+  against the local COPY inputs and required build files.
 - The operator final image copies `/workspace/manager` to `/manager` and
   `/workspace/charts/mlflow` to `charts/mlflow`, runs as UID 1001, and selects
   the effective FIPS branch (`CGO_ENABLED=1`, `GOEXPERIMENT` and `-tags
@@ -139,17 +141,17 @@ startup. The phase then:
 2. Enables `ENABLE_MLFLOW_OPERATOR_MODULE_CONTROLLER=true` and
    `APPLICATIONS_NAMESPACE=opendatahub`.
 3. Creates `MLflowOperator/default-mlflowoperator` and waits for `Ready=True`.
-4. Applies `config/samples/mlflow_v1_mlflow_minimal.yaml`.
-5. Patches the **MLflow CR**, not its generated Deployment, to the digest-pinned
-   configured operand image and the repo e2e suite's 1Gi/3Gi memory envelope.
-   The sample's tag-only image and 512Mi limit are not used for the runtime
-   proof; patching the Deployment alone is reverted by reconciliation.
-6. Waits until the generated Deployment's `mlflow` container actually shows the
+4. Renders `config/samples/mlflow_v1_mlflow_minimal.yaml` locally with the
+   digest-pinned configured operand image and the repo e2e suite's 1Gi/3Gi
+   memory envelope, then applies that result in one API write.
+   The sample's tag-only image and 512Mi limit never reach the controller;
+   patching the Deployment alone is reverted by reconciliation.
+5. Waits until the generated Deployment's `mlflow` container actually shows the
    patched 3Gi limit, then waits for `MLflow/mlflow` to become
    `Available=True` and asserts `MLflowOperatorReady=True`.
-7. Asserts both `ServiceMonitor` resources exist and use `scheme: https`,
+6. Asserts both `ServiceMonitor` resources exist and use `scheme: https`,
    `port: https` and `/metrics`.
-8. Asserts the operator Deployment, operator Pod and MLflow Pod use the expected
+7. Asserts the operator Deployment, operator Pod and MLflow Pod use the expected
    image, are Ready, and have zero restarts.
 
 The configured Kind release normally installs a default `standard`
@@ -239,7 +241,11 @@ with `git diff` afterward; no injection remains.
 | Operator entrypoint | Changed the final `ENTRYPOINT` | `❌ Dockerfile: ENTRYPOINT must be ["/manager"] in the final image` |
 | Tests entrypoint | Pointed at a nonexistent test runner | `❌ mlflow-tests/images/Dockerfile.konflux: ENTRYPOINT must be ['bash', 'mlflow-tests/images/test-run.sh']` |
 | Builder Go alignment | Changed `go-toolset:1.26` to `1.24` | `❌ Dockerfile builder Go 1.24 is older than go.mod go 1.26.0; GOTOOLCHAIN=local would fail` |
-| Docker ignore inputs | Removed `!go.sum` | `❌ .dockerignore does not re-include required build inputs: go.sum` |
+| Docker ignore inputs | Removed `!go.sum` | `❌ .dockerignore excludes required inputs for .tekton/mlflow-operator-pull-request.yaml: go.sum (excluded by '*')` |
+| Docker ignore nested input | Appended `api/go.sum` to `.dockerignore` | `❌ .dockerignore excludes required inputs for .tekton/mlflow-operator-pull-request.yaml: api/go.sum (excluded by 'api/go.sum')` |
+| Dockerfile-specific ignore | Added `Dockerfile.dockerignore` containing `go.sum` | `❌ Dockerfile.dockerignore excludes required inputs for .tekton/mlflow-operator-pull-request.yaml: go.sum (excluded by 'go.sum')` |
+| PipelineRun PR trigger | Changed the operator CEL target branch to `release` | `❌ .tekton/mlflow-operator-pull-request.yaml: pull_request CEL trigger does not match the simulator's base branch and repository; expected ... target_branch == "main" ...` |
+| Unsupported build args | Added a non-empty Tekton `build-args` value | `❌ .tekton/mlflow-operator-pull-request.yaml: build-args is not simulated; refusing to build an image that differs from the Konflux target` |
 | ServiceMonitor Go scheme | Changed to `monitoringv1.SchemeHTTPS` | `❌ operator self-metrics ServiceMonitor must use monitoringv1.Scheme("https")` |
 | ServiceMonitor fixture | Re-added `HTTP`/`HTTPS` to the CRD enum | `❌ test/crd/...: scheme enum must be exactly ['http', 'https'] ...` |
 | Supported MLflow version | Changed metadata to `v3.18.0` | `❌ supported MLflow version drift: component metadata normalizes to 3.18, mlflow-tests/uv.lock pins 3.17.0` |
@@ -296,6 +302,9 @@ OPERATOR_IMAGE="$SIM_TARGET_IMAGE" ./scripts/validate-build.sh operator
 The script refuses to run unless `kubectl config current-context` is exactly
 `kind-$KIND_CLUSTER_NAME`. It then gives `deploy.py` a private kubeconfig that
 contains only that context, because `deploy.py` does not accept a context flag.
+It also holds a checkout-scoped lock from before the `params.env` snapshot
+through its restoration, so overlapping local runs cannot persist each other's
+rendered overlay values.
 
 ## CI Proof Plan
 
