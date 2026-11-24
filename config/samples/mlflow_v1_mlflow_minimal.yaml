@@ -14,6 +14,9 @@ spec:
   # Number of replicas
   replicas: 1
 
+  # One uvicorn worker. The operator default is 8, which does not fit the 512Mi limit below.
+  workers: 1
+
   migration:
     # Operator-managed database migration mode
     mode: Automatic
