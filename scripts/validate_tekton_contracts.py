@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import glob
 import json
+import posixpath
 import re
 import shlex
 import subprocess
@@ -48,7 +49,9 @@ def info(message: str) -> None:
 
 
 def read_text(relative: str) -> str:
-    path = ROOT / relative
+    path = (ROOT / relative).resolve()
+    if not path.is_relative_to(ROOT):
+        fail(f"required file escapes the repository: {relative}")
     if not path.is_file():
         fail(f"required file is missing: {relative}")
     return path.read_text(encoding="utf-8")
@@ -190,7 +193,12 @@ def emit_target_env(role: str) -> None:
         "PIPELINE_RUN": target["pipelineRun"],
     }
     for key, value in values.items():
-        print(f"SIM_TARGET_{key}={shlex.quote(str(value))}")
+        text = str(value)
+        if "\n" in text or "\r" in text:
+            fail(f"target field {key} contains a newline")
+        # The shell entry point parses these assignments with `read`, never
+        # `eval`, so values are emitted unquoted and validated by the caller.
+        print(f"SIM_TARGET_{key}={text}")
 
 
 def dockerfile_instructions(relative: str) -> list[tuple[str, str]]:
@@ -228,14 +236,32 @@ def builder_go_version(relative: str | None = None) -> str:
 
 
 def parse_copy(arguments: str) -> tuple[list[str], list[str], str]:
-    try:
-        tokens = shlex.split(arguments)
-    except ValueError as exc:
-        fail(f"cannot parse COPY arguments {arguments!r}: {exc}")
-    if len(tokens) < 2:
+    remainder = arguments.strip()
+    flags: list[str] = []
+    while True:
+        match = re.match(r"--\S+", remainder)
+        if match is None:
+            break
+        flags.append(match.group(0))
+        remainder = remainder[match.end():].lstrip()
+    if not remainder:
         fail(f"COPY requires at least one source and a destination: {arguments!r}")
-    flags = [token for token in tokens if token.startswith("--")]
-    operands = [token for token in tokens if not token.startswith("--")]
+
+    operands: list[str]
+    if remainder.startswith("["):
+        try:
+            value = json.loads(remainder)
+        except json.JSONDecodeError as exc:
+            fail(f"cannot parse COPY JSON arguments {arguments!r}: {exc}")
+        if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+            fail(f"COPY JSON arguments must be a string array: {arguments!r}")
+        operands = value
+    else:
+        try:
+            operands = shlex.split(remainder)
+        except ValueError as exc:
+            fail(f"cannot parse COPY arguments {arguments!r}: {exc}")
+
     if len(operands) < 2:
         fail(f"COPY requires at least one source and a destination: {arguments!r}")
     return flags, operands[:-1], operands[-1]
@@ -260,11 +286,25 @@ def assert_copy_sources(relative: str, context: str) -> int:
             if source in (".", "./"):
                 checked += 1
                 continue
+            source_path = Path(source)
+            if source_path.is_absolute():
+                fail(f"{relative}: COPY source must be relative to path-context: {source}")
+            if ".." in source_path.parts:
+                fail(f"{relative}: COPY source escapes path-context: {source}")
             pattern = str(context_path / source)
             if any(character in source for character in "*?["):
-                matches = glob.glob(pattern, recursive=True)
+                matches = [
+                    Path(match).resolve()
+                    for match in glob.glob(pattern, recursive=True)
+                ]
                 if not matches:
                     fail(f"{relative}: COPY source glob matched nothing: {source}")
+                for match in matches:
+                    if context_path not in match.parents and match != context_path:
+                        fail(
+                            f"{relative}: COPY glob match escapes path-context: "
+                            f"{source} -> {match}"
+                        )
             else:
                 resolved = Path(pattern).resolve()
                 if not resolved.exists():
@@ -299,6 +339,109 @@ def final_stage(instructions: list[tuple[str, str]]) -> list[tuple[str, str]]:
     return instructions[indexes[-1]:]
 
 
+def stage_value(
+    instructions: list[tuple[str, str]], variable: str
+) -> str | None:
+    value: str | None = None
+    for command, arguments in instructions:
+        if command == "ARG":
+            try:
+                tokens = shlex.split(arguments)
+            except ValueError:
+                continue
+            for token in tokens:
+                name, separator, default = token.partition("=")
+                if name == variable:
+                    value = default if separator else None
+        elif command == "ENV":
+            try:
+                tokens = shlex.split(arguments)
+            except ValueError:
+                continue
+            if tokens and "=" not in tokens[0]:
+                if tokens[0] == variable and len(tokens) > 1:
+                    value = " ".join(tokens[1:])
+                continue
+            for token in tokens:
+                name, separator, default = token.partition("=")
+                if name == variable:
+                    value = default if separator else None
+    return value
+
+
+def assert_fips_manager_build(
+    relative: str, instructions: list[tuple[str, str]]
+) -> None:
+    build_index = -1
+    build_arguments = ""
+    for index, (command, arguments) in enumerate(instructions):
+        if command != "RUN" or "go build" not in arguments:
+            continue
+        if "cmd/main.go" in arguments and re.search(r"-o\s+\S*manager\b", arguments):
+            build_index = index
+            build_arguments = arguments
+            break
+    if build_index < 0:
+        fail(f"{relative}: no RUN step builds the packaged manager with -o manager")
+
+    stage_start = max(
+        index
+        for index, (command, _arguments) in enumerate(instructions)
+        if command == "FROM" and index < build_index
+    )
+    cgo_default = stage_value(instructions[stage_start:build_index], "CGO_ENABLED")
+    if cgo_default != "1":
+        fail(
+            f"{relative}: effective CGO_ENABLED for the packaged /manager is "
+            f"{cgo_default!r}; the FIPS branch requires an ARG/ENV default of 1"
+        )
+
+    branch = re.search(
+        r"if\s+\[\s*\"?\$\{?CGO_ENABLED\}?\"?\s*=\s*\"?1\"?\s*\]\s*;\s*then"
+        r"(?P<fips>.*?)\belse\b(?P<nonfips>.*?)\bfi\b",
+        build_arguments,
+        re.DOTALL,
+    )
+    if not branch:
+        fail(
+            f"{relative}: manager build does not select the FIPS branch with "
+            "'if [ \"$CGO_ENABLED\" = \"1\" ]'"
+        )
+    fips = branch.group("fips")
+    nonfips = branch.group("nonfips")
+    if not re.search(r"\bCGO_ENABLED=1\b", fips):
+        fail(f"{relative}: FIPS manager branch must build with CGO_ENABLED=1")
+    if "GOEXPERIMENT=strictfipsruntime" not in fips:
+        fail(f"{relative}: FIPS manager branch must set GOEXPERIMENT=strictfipsruntime")
+    if "-tags strictfipsruntime" not in fips:
+        fail(f"{relative}: FIPS manager branch must pass -tags strictfipsruntime")
+    if "CGO_ENABLED=0" not in nonfips:
+        fail(f"{relative}: the non-FIPS branch must set CGO_ENABLED=0 for local builds")
+    if "GOEXPERIMENT=strictfipsruntime" in nonfips or "-tags strictfipsruntime" in nonfips:
+        fail(f"{relative}: the non-FIPS branch must not inherit the FIPS build flags")
+    if not re.search(r"-o\s+(?:/workspace/)?manager\b", fips):
+        fail(
+            f"{relative}: FIPS manager branch must write the binary later copied "
+            "to /manager"
+        )
+    if "cmd/main.go" not in fips:
+        fail(f"{relative}: FIPS manager branch must build cmd/main.go")
+
+    workdir = "/"
+    for command, arguments in instructions[stage_start:build_index]:
+        if command == "WORKDIR":
+            workdir = arguments.strip()
+    if workdir.rstrip("/") != "/workspace":
+        fail(
+            f"{relative}: builder WORKDIR is {workdir!r}, so '-o manager' is not "
+            "the /workspace/manager the final image copies"
+        )
+    ok(
+        f"{relative}: effective manager build selects CGO_ENABLED=1 with "
+        "GOEXPERIMENT and -tags strictfipsruntime"
+    )
+
+
 def assert_operator_dockerfile(relative: str) -> None:
     instructions = dockerfile_instructions(relative)
     text = read_text(relative)
@@ -330,8 +473,7 @@ def assert_operator_dockerfile(relative: str) -> None:
         fail(f"{relative}: final image must run as USER 1001")
     if "registry.access.redhat.com/ubi9/ubi-minimal" not in text:
         fail(f"{relative}: runtime base image must be the UBI 9 minimal image")
-    if "GOEXPERIMENT=strictfipsruntime" not in text or "-tags strictfipsruntime" not in text:
-        fail(f"{relative}: operator build must keep the FIPS strictfipsruntime build flags")
+    assert_fips_manager_build(relative, instructions)
 
     builder_copies = [
         parse_copy(arguments)
@@ -419,13 +561,76 @@ def assert_tests_dockerfile(relative: str) -> None:
     ok(f"{relative}: tests image entrypoint, assets and version contract match")
 
 
+def dockerignore_expression(pattern: str) -> re.Pattern[str]:
+    pattern = posixpath.normpath(pattern.lstrip("/"))
+    pieces = ["^"]
+    index = 0
+    while index < len(pattern):
+        character = pattern[index]
+        if character == "*":
+            if pattern[index:index + 2] == "**":
+                index += 2
+                if index < len(pattern) and pattern[index] == "/":
+                    pieces.append("(?:.*/)?")
+                    index += 1
+                else:
+                    pieces.append(".*")
+                continue
+            pieces.append("[^/]*")
+        elif character == "?":
+            pieces.append("[^/]")
+        elif character == "[":
+            end = index + 1
+            if end < len(pattern) and pattern[end] in "!^":
+                end += 1
+            if end < len(pattern) and pattern[end] == "]":
+                end += 1
+            while end < len(pattern) and pattern[end] != "]":
+                end += 1
+            if end >= len(pattern):
+                pieces.append(r"\[")
+            else:
+                content = pattern[index + 1:end]
+                if content.startswith("!"):
+                    content = "^" + content[1:]
+                elif content.startswith("^"):
+                    content = "\\" + content
+                pieces.append(f"[{content}]")
+                index = end
+        else:
+            pieces.append(re.escape(character))
+        index += 1
+    pieces.append("$")
+    return re.compile("".join(pieces))
+
+
+def dockerignore_included(lines: list[str], path: str) -> tuple[bool, str]:
+    candidates = [path]
+    parent = path
+    while "/" in parent:
+        parent = parent.rsplit("/", 1)[0]
+        candidates.append(parent)
+    included = True
+    deciding_rule = "<default>"
+    for line in lines:
+        negated = line.startswith("!")
+        pattern = line[1:] if negated else line
+        pattern = posixpath.normpath(pattern.lstrip("/"))
+        if pattern in ("", "."):
+            continue
+        expression = dockerignore_expression(pattern)
+        if any(expression.match(candidate) for candidate in candidates):
+            included = negated
+            deciding_rule = line
+    return included, deciding_rule
+
+
 def assert_dockerignore_contract(targets: dict[str, dict[str, Any]]) -> None:
     lines = [
         line.strip()
         for line in read_text(".dockerignore").splitlines()
         if line.strip() and not line.lstrip().startswith("#")
     ]
-    negations = {line[1:].rstrip("/") for line in lines if line.startswith("!")}
     required = {
         "go.mod",
         "go.sum",
@@ -442,14 +647,26 @@ def assert_dockerignore_contract(targets: dict[str, dict[str, Any]]) -> None:
         ".github/workflows/trace-analytics-prepopulation.yml",
     }
     required.update(target["dockerfile"] for target in targets.values())
-    missing = sorted(
-        path
-        for path in required
-        if not any(path == negation or path.startswith(negation + "/") for negation in negations)
-    )
+    missing: list[str] = []
+    for path in sorted(required):
+        included, rule = dockerignore_included(lines, path)
+        if not included:
+            missing.append(f"{path} (excluded by {rule!r})")
+            continue
+        if (ROOT / path).is_dir():
+            for probe in (f"{path}/__probe__", f"{path}/nested/__probe__"):
+                probe_included, probe_rule = dockerignore_included(lines, probe)
+                if not probe_included:
+                    missing.append(f"{path} children (excluded by {probe_rule!r})")
+                    break
     if missing:
-        fail(".dockerignore does not re-include required build inputs: " + ", ".join(missing))
-    ok(".dockerignore re-includes every source the two Konflux Dockerfiles COPY")
+        fail(
+            ".dockerignore excludes required build inputs: " + ", ".join(missing)
+        )
+    ok(
+        ".dockerignore ordered rules (last match wins) include every directory "
+        "and file the two Konflux Dockerfiles COPY"
+    )
 
 
 def go_directive(relative: str) -> tuple[str, str]:
@@ -617,7 +834,10 @@ def assert_servicemonitor_contract() -> None:
 
     chart_monitors = []
     for path in sorted((ROOT / "charts").rglob("*.yaml")):
-        text = path.read_text(encoding="utf-8")
+        resolved = path.resolve()
+        if not resolved.is_relative_to(ROOT):
+            fail(f"chart file escapes the repository: {path}")
+        text = resolved.read_text(encoding="utf-8")
         if "kind: ServiceMonitor" not in text:
             continue
         chart_monitors.append(path)
@@ -625,6 +845,8 @@ def assert_servicemonitor_contract() -> None:
             fail(f"{path.relative_to(ROOT)}: ServiceMonitor scheme must be lowercase https")
         if re.search(r"(?m)^\s*scheme:\s*HTTPS\s*$", text):
             fail(f"{path.relative_to(ROOT)}: ServiceMonitor scheme must not be uppercase HTTPS")
+        if not re.search(r"(?m)^\s*(?:-\s*)?path:\s*/metrics\s*$", text):
+            fail(f"{path.relative_to(ROOT)}: ServiceMonitor path must be /metrics")
     if not chart_monitors:
         fail("charts/: no ServiceMonitor template found")
 
@@ -661,14 +883,24 @@ def assert_servicemonitor_contract() -> None:
             f"v{prometheus_version.group(1)}, fixture declares {fixture_version}"
         )
 
-    ok("ServiceMonitor scheme contract is lowercase https in Go and chart; the fixture rejects uppercase")
+    ok(
+        "ServiceMonitor contract is lowercase https with /metrics in Go and chart; "
+        "the fixture rejects uppercase"
+    )
+
+
+def workflow_triggers(relative: str) -> dict[str, Any]:
+    document = load_yaml(relative)
+    triggers = document.get("on") or document.get(True) or {}
+    if not isinstance(triggers, dict):
+        fail(f"{relative}: unsupported workflow trigger definition")
+    return triggers
 
 
 def assert_generator_delegation() -> None:
     codegen_relative = ".github/workflows/verify-codegen.yml"
     codegen = read_text(codegen_relative)
-    triggers = load_yaml(codegen_relative).get("on") or load_yaml(codegen_relative).get(True) or {}
-    if "pull_request" not in triggers:
+    if "pull_request" not in workflow_triggers(codegen_relative):
         fail(f"{codegen_relative}: generated-code drift handling no longer runs on pull_request")
     for command in ("make manifests", "make generate"):
         if not re.search(rf"(?m)^\s*run:\s*{re.escape(command)}\s*$", codegen):
@@ -678,11 +910,14 @@ def assert_generator_delegation() -> None:
             )
     if not re.search(r"(?m)^\s*git diff --exit-code\b", codegen):
         fail(f"{codegen_relative}: generated-code drift no longer fails on a diff")
-    kustomize = read_text(".github/workflows/verify-kustomize.yml")
+    kustomize_relative = ".github/workflows/verify-kustomize.yml"
+    kustomize = read_text(kustomize_relative)
+    if "pull_request" not in workflow_triggers(kustomize_relative):
+        fail(f"{kustomize_relative}: manifest drift handling no longer runs on pull_request")
     if not re.search(r"(?m)^\s*run:\s*make verify-manifests\s*$", kustomize):
         fail(
             "manifest build drift handling is no longer delegated to "
-            ".github/workflows/verify-kustomize.yml: missing a run step for 'make verify-manifests'"
+            f"{kustomize_relative}: missing a run step for 'make verify-manifests'"
         )
     makefile = read_text("Makefile")
     for target in ("manifests:", "generate:", "verify-manifests:"):
@@ -699,6 +934,18 @@ def assert_runtime_contract() -> None:
     for flag in ("--skip-mlflow-cr", "--mlflow-operator-image", "--namespace"):
         if flag not in deploy:
             fail(f".github/actions/deploy/deploy.py: missing {flag}")
+    workflow = read_text(".github/workflows/pr-build-validation.yml")
+    mlflow_images = re.findall(r"(?m)^\s*MLFLOW_IMAGE:\s*(\S+)\s*$", workflow)
+    if len(mlflow_images) != 1:
+        fail(
+            "pr-build-validation.yml: MLFLOW_IMAGE must be defined exactly once "
+            "so a job-level override cannot restore a mutable reference"
+        )
+    if not re.fullmatch(r"\S+@sha256:[0-9a-f]{64}", mlflow_images[0]):
+        fail(
+            "pr-build-validation.yml: MLFLOW_IMAGE must pin the runtime by digest "
+            f"(got {mlflow_images[0]!r})"
+        )
     manager = read_text("config/manager/manager.yaml")
     if "ENABLE_MLFLOW_OPERATOR_MODULE_CONTROLLER" not in manager:
         fail("config/manager/manager.yaml: module controller toggle is missing")

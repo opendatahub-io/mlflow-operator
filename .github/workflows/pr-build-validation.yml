@@ -31,7 +31,9 @@ env:
   # this validation runs against (CWE-829).
   SIM_KIND_NODE_IMAGE: 'kindest/node:v1.33.7@sha256:d26ef333bdb2cbe9862a0f7c3803ecc7b4303d8cea8e814b481b09949d353040'
   NAMESPACE: opendatahub
-  MLFLOW_IMAGE: quay.io/opendatahub/mlflow:odh-stable
+  # Pinned to the approved multi-arch manifest digest so a retagged
+  # odh-stable cannot change the runtime this validation executes (CWE-829).
+  MLFLOW_IMAGE: quay.io/opendatahub/mlflow:odh-stable@sha256:5a7e2a217634b5d73d6e707e79133fbcadb0277a9753c846ed58fa97220efc4c
 
 jobs:
   check-skip:
@@ -240,6 +242,18 @@ jobs:
             "pyyaml==${SIM_PYYAML_VERSION}"
           echo "$RUNNER_TEMP/sim-venv/bin" >> "$GITHUB_PATH"
 
+      - name: Resolve the builder Go version
+        id: go-version
+        run: |
+          set -euo pipefail
+          echo "version=$(python3 scripts/validate_tekton_contracts.py go-version)" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Go to inspect the built manager
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: ${{ steps.go-version.outputs.version }}
+          cache: false
+
       - name: Build and smoke-test the operator image
         run: |
           set -euo pipefail
@@ -330,7 +344,6 @@ jobs:
     env:
       OPERATOR_IMAGE: ${{ needs.resolve-targets.outputs.operator-image }}
       KIND_CLUSTER_NAME: mlflow-pr-${{ github.run_id }}
-      MLFLOW_IMAGE: quay.io/opendatahub/mlflow:odh-stable
     steps:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

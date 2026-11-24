@@ -54,12 +54,16 @@ The helper checks:
 - Both PipelineRuns use the expected external pipeline and resolve to the
   pipeline's single non-hermetic `linux/x86_64` platform. A multi-arch change
   must be reflected here deliberately.
-- Every local `COPY`/`ADD` source exists under the Tekton context. `COPY
-  --from=...` sources are checked by the image-content assertions instead.
-- `.dockerignore` re-includes the roots both Dockerfiles consume.
+- Every local `COPY`/`ADD` source, including Dockerfile JSON-array operands,
+  exists under the Tekton context; globs cannot escape it. `COPY --from=...`
+  sources are checked by the image-content assertions instead.
+- `.dockerignore` is evaluated in order with Docker's last-match-wins and
+  negation semantics for every root both Dockerfiles consume.
 - The operator final image copies `/workspace/manager` to `/manager` and
-  `/workspace/charts/mlflow` to `charts/mlflow`, runs as UID 1001, and keeps
-  the FIPS `strictfipsruntime` build flags.
+  `/workspace/charts/mlflow` to `charts/mlflow`, runs as UID 1001, and selects
+  the effective FIPS branch (`CGO_ENABLED=1`, `GOEXPERIMENT` and `-tags
+  strictfipsruntime`) for the binary it packages. The image smoke test also
+  reads the binary's Go build info to prove those settings were applied.
 - The tests image uses the `bash mlflow-tests/images/test-run.sh` entrypoint,
   runs as UID 1001, installs with `uv sync --locked`, bakes
   `MLFLOW_TEST_SUPPORTED_VERSION` into `BASH_ENV`, and copies the test assets,
@@ -71,7 +75,8 @@ The helper checks:
   `mlflow-tests/uv.lock`, and the current `pre_upgrade`/`post_upgrade` test
   files agree on the supported MLflow minor version.
 - The operator's self-metrics ServiceMonitor uses lowercase
-  `monitoringv1.Scheme("https")`; the chart ServiceMonitor uses `scheme: https`.
+  `monitoringv1.Scheme("https")`; the chart ServiceMonitor uses `scheme: https`
+  and `path: /metrics`.
 - The ServiceMonitor CRD fixture accepts exactly `http` and `https`. Its source
   annotation is checked against the `prometheus-operator` API version in
   `go.mod`, and its enum is intentionally tighter than the generated v0.89
@@ -86,8 +91,9 @@ This repository already runs the generator checks on PRs:
 - `.github/workflows/verify-kustomize.yml` runs `make verify-manifests`.
 
 The simulator does **not** copy those commands. The static contract fails if
-either workflow stops containing the exact `run:` command it owns, so a future
-change cannot silently remove the drift check while this workflow still passes.
+either workflow stops running on `pull_request` or stops containing the exact
+`run:` command it owns, so a future change cannot silently remove the drift
+check while this workflow still passes.
 
 ## Hermetic Preflight
 
@@ -96,14 +102,16 @@ workflow parses `1.26` from the Tekton-selected Dockerfile, installs it with
 `actions/setup-go`, and runs with `GOTOOLCHAIN=local`, matching the builder's
 no-download behavior. The preflight:
 
-1. Creates an isolated `GOMODCACHE`.
-2. Runs plain `go mod download` for the root and `api` modules with network
-   access. It does not use `all`, which can rewrite `go.sum`.
-3. Fails and restores both checksum files if the cache-population step changes
-   either `go.sum`.
-4. Builds root `cmd/main.go` and the `api` module with `GOPROXY=off` and
-   `GONOPROXY=none`, using the supported-version `-ldflags` value from the
-   Makefile.
+1. Copies the working tree, including uncommitted edits, into a temporary
+   source tree and creates an isolated `GOMODCACHE` outside it.
+2. Runs plain `go mod download` for the root and `api` modules in that copy
+   with network access. It does not use `all`, which can rewrite `go.sum`.
+3. Fails if the cache-population step changes either `go.sum`. The developer's
+   checkout is never written, so the check cannot overwrite an edit made while
+   the preflight runs.
+4. Builds root `cmd/main.go` and the `api` module from the isolated tree with
+   `GOPROXY=off` and `GONOPROXY=none`, using the supported-version `-ldflags`
+   value from the Makefile.
 
 The preflight uses `CGO_ENABLED=0` because stock upstream Go does not implement
 Red Hat's `strictfipsruntime` experiment. The exact FIPS compile is covered by
@@ -135,18 +143,24 @@ startup. The phase then:
 5. Patches the **MLflow CR**, not its generated Deployment, to the repo e2e
    suite's 1Gi/3Gi memory envelope. The sample's 512Mi limit is OOM-killed in
    Kind; patching the Deployment alone is reverted by reconciliation.
-6. Waits for `MLflow/mlflow` to become `Available=True` and asserts
-   `MLflowOperatorReady=True`.
+6. Waits until the generated Deployment's `mlflow` container actually shows the
+   patched 3Gi limit, then waits for `MLflow/mlflow` to become
+   `Available=True` and asserts `MLflowOperatorReady=True`.
 7. Asserts both `ServiceMonitor` resources exist and use `scheme: https`,
    `port: https` and `/metrics`.
 8. Asserts the operator Deployment, operator Pod and MLflow Pod use the expected
    image, are Ready, and have zero restarts.
 
-Kind has no default StorageClass, so the phase creates a static 10Gi PV backed
-by `hostPath` and a default `standard` StorageClass. It does not deploy an
-OpenShift service CA, ConsoleLink or the ODH platform operator. The operator
-tolerates the missing OpenShift API and ConsoleLink CRD; those prerequisites are
-not needed for this module handoff assertion.
+The configured Kind release normally installs a default `standard`
+StorageClass backed by `rancher.io/local-path`, so that dynamic provisioner is
+the normal CI path and stores PVC data under `/var/local-path-provisioner` on
+the Kind node. The phase creates a static 10Gi `hostPath` PV and a
+`no-provisioner` `standard` class only when that built-in class is unavailable.
+If a PVC stays Pending, check which of those two paths is active before
+assuming the static PV was created. The phase does not deploy an OpenShift
+service CA, ConsoleLink or the ODH platform operator. The operator tolerates
+the missing OpenShift API and ConsoleLink CRD; those prerequisites are not
+needed for this module handoff assertion.
 
 ### Historical Evidence
 
@@ -173,7 +187,7 @@ shellcheck scripts/validate-build.sh                            PASS
 actionlint .github/workflows/pr-build-validation.yml            PASS
 ./scripts/validate-build.sh static                              PASS
 
-PATH=<go1.26.0>/bin:$PATH SIM_GOTOOLCHAIN=local \
+PATH="/path/to/go1.26.0/bin:$PATH" SIM_GOTOOLCHAIN=local \
   ./scripts/validate-build.sh hermetic
 ✅ root module built cmd/main.go offline; api module built ./... offline
 
@@ -183,6 +197,11 @@ PATH=<go1.26.0>/bin:$PATH SIM_GOTOOLCHAIN=local \
 ./scripts/validate-build.sh image tests
 ✅ mlflow-tests image smoke passed: entrypoint syntax, assets, oc/kustomize/uv and MLflow 3.17.x
 ```
+
+The image-smoke line above reflects the assertions at the time of the local
+run. The operator image smoke now also reads the packaged `/manager` Go build
+info and requires `CGO_ENABLED=1` and `GOEXPERIMENT=strictfipsruntime`; the
+operator-image CI job is the authoritative proof for that assertion.
 
 The image jobs built the exact `linux/amd64` targets from Tekton. The local
 Kind pass rebuilt the same operator Dockerfile for the native arm64 node and
@@ -237,14 +256,17 @@ and a failed validation. The exit statuses were `0, 0, 1, 1, 1, 1` as expected.
 
 ## Local Usage
 
+Requirements: Python 3.11 or newer (the contract parser imports `tomllib`) and
+a Go release matching the builder for the hermetic and image-smoke checks.
+
 ```bash
-python3 -m venv .venv-sim
+python3.11 -m venv .venv-sim
 . .venv-sim/bin/activate
 python3 -m pip install "pyyaml==6.0.3" "kubernetes==33.1.0"
 
 ./scripts/validate-build.sh static
 ./scripts/validate-build.sh go-version
-PATH=<go1.26.0>/bin:$PATH SIM_GOTOOLCHAIN=local ./scripts/validate-build.sh hermetic
+PATH="/path/to/go1.26.0/bin:$PATH" SIM_GOTOOLCHAIN=local ./scripts/validate-build.sh hermetic
 
 # Exact Tekton architecture and image smoke tests.
 ./scripts/validate-build.sh image operator
@@ -257,9 +279,11 @@ The Kind phase expects an existing cluster, the PR image loaded into it, and
 exact target, while an arm64 host produces a runtime-equivalent local image:
 
 ```bash
-eval "$(python3 scripts/validate_tekton_contracts.py target-env operator)"
+while IFS= read -r assignment; do
+  export "$assignment"
+done < <(python3 scripts/validate_tekton_contracts.py target-env operator)
 export KIND_CLUSTER_NAME=mlflow-pr-local
-export MLFLOW_IMAGE=quay.io/opendatahub/mlflow:odh-stable
+export MLFLOW_IMAGE=quay.io/opendatahub/mlflow:odh-stable@sha256:5a7e2a217634b5d73d6e707e79133fbcadb0277a9753c846ed58fa97220efc4c
 
 docker build -f "$SIM_TARGET_DOCKERFILE" -t "$SIM_TARGET_IMAGE" "$SIM_TARGET_CONTEXT"
 kind create cluster --name "$KIND_CLUSTER_NAME" \
@@ -269,7 +293,8 @@ OPERATOR_IMAGE="$SIM_TARGET_IMAGE" ./scripts/validate-build.sh operator
 ```
 
 The script refuses to run unless `kubectl config current-context` is exactly
-`kind-$KIND_CLUSTER_NAME`, because `deploy.py` does not accept a context flag.
+`kind-$KIND_CLUSTER_NAME`. It then gives `deploy.py` a private kubeconfig that
+contains only that context, because `deploy.py` does not accept a context flag.
 
 ## CI Proof Plan
 
@@ -291,13 +316,14 @@ If Kind cannot run on a developer host, the exact architecture proof is the
   passed on a native arm64 rebuild of the same source. The CI amd64 Kind job has
   not been executed here.
 - The Kind phase does not install OpenShift service CA, ConsoleLink, the Auth
-  CRD or the ODH platform operator. It mocks only the ServiceMonitor and
-  HTTPRoute schemas, a static StorageClass and the MLflow service account/TLS
-  inputs needed to reach the module conditions.
+  CRD or the ODH platform operator. It relies on Kind's default
+  `rancher.io/local-path` StorageClass (or a static PV fallback when absent)
+  and mocks only the ServiceMonitor and HTTPRoute schemas plus the MLflow
+  service account/TLS inputs needed to reach the module conditions.
 - DSC condition propagation, module-handler rollout, bundle/CSV contents and
   platform GC races remain operator-only. They are listed above rather than
   claimed by this workflow.
 - The operator image build uses the Red Hat Go toolset and therefore covers the
   FIPS compile; the fast hermetic preflight deliberately does not.
-- No PR, GitHub Actions run, or CodeRabbit review was performed for this local
-  working-tree change.
+- The local evidence above was gathered before the PR was opened; the
+  workflow jobs are the authoritative CI proof.

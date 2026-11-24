@@ -43,15 +43,34 @@ assert_nonempty_eq() {
 }
 
 load_target() {
-  local role="$1"
+  local role="$1" assignment key value output
   # Resolve the complete target object from Tekton. Workflow-level env is only
-  # a cross-job projection; trusting it here can leave fields such as
-  # SIM_TARGET_PIPELINE_RUN unset under `set -u`.
-  eval "$(python3 "$HELPER" target-env "$role")"
+  # a cross-job projection, so clear inherited values and accept only fields
+  # emitted by a resolver call that actually succeeded.
+  unset SIM_TARGET_IMAGE SIM_TARGET_DOCKERFILE SIM_TARGET_CONTEXT \
+    SIM_TARGET_HERMETIC SIM_TARGET_PLATFORMS SIM_TARGET_PIPELINE_RUN
+  if ! output="$(python3 "$HELPER" target-env "$role")"; then
+    die "failed to resolve the Konflux target for role '$role'"
+  fi
+  while IFS= read -r assignment; do
+    case "$assignment" in
+      '')
+        ;;
+      SIM_TARGET_*=*)
+        key="${assignment%%=*}"
+        value="${assignment#*=}"
+        printf -v "$key" '%s' "$value"
+        ;;
+      *)
+        die "unexpected target resolver output: $assignment"
+        ;;
+    esac
+  done <<< "$output"
   : "${SIM_TARGET_IMAGE:?target image was not resolved}"
   : "${SIM_TARGET_DOCKERFILE:?target dockerfile was not resolved}"
   : "${SIM_TARGET_CONTEXT:?target context was not resolved}"
-  : "${SIM_TARGET_PLATFORMS:?target platforms were not resolved}"
+  : "${SIM_TARGET_HERMETIC:?target hermetic flag was not resolved}"
+  : "${SIM_TARGET_PLATFORMS:?target platforms was not resolved}"
   : "${SIM_TARGET_PIPELINE_RUN:?target PipelineRun was not resolved}"
 }
 
@@ -74,12 +93,14 @@ run_static() {
 run_hermetic() (
   require_command go
   require_command python3
+  require_command tar
 
-  local workdir modcache builder actual ldflags toolchain
+  local workdir src modcache builder actual ldflags toolchain
   workdir="$(mktemp -d)"
   trap 'chmod -R u+w "$workdir" 2>/dev/null || true; rm -rf "$workdir"' EXIT
+  src="$workdir/src"
   modcache="$workdir/gomodcache"
-  mkdir -p "$modcache"
+  mkdir -p "$src" "$modcache"
 
   builder="$(python3 "$HELPER" go-version)"
   # CI installs the builder's Go release and uses local. A developer host may
@@ -97,52 +118,49 @@ run_hermetic() (
   info "builder Go $builder maps to runner $actual; GOTOOLCHAIN=$toolchain pins resolution"
 
   ldflags="-X github.com/opendatahub-io/mlflow-operator/internal/controller.SupportedMLflowVersion=$(python3 scripts/print_supported_mlflow_version.py --component-metadata config/component_metadata.yaml)"
-  cp go.sum "$workdir/root-go.sum"
-  cp api/go.sum "$workdir/api-go.sum"
 
-  # shellcheck disable=SC2329  # invoked from the EXIT trap
-  restore_go_sums() {
-    local source target pair
-    for pair in "root-go.sum:go.sum" "api-go.sum:api/go.sum"; do
-      source="$workdir/${pair%%:*}"
-      target="$ROOT/${pair#*:}"
-      if [ -f "$source" ] && ! cmp -s "$target" "$source"; then
-        chmod u+w "$target" 2>/dev/null || true
-        cp "$source" "$target"
-        echo "restored $target after a failed lockfile check" >&2
-      fi
-    done
-  }
-  trap 'restore_go_sums; chmod -R u+w "$workdir" 2>/dev/null || true; rm -rf "$workdir"' EXIT
+  # Build from an isolated copy of the working tree. The live checkout is never
+  # written, so a go.sum edit made during the run cannot be overwritten by an
+  # EXIT trap and the lockfile checks still apply to this exact revision.
+  (
+    cd "$ROOT"
+    tar \
+      --exclude=.git \
+      --exclude=.venv \
+      --exclude=.venv-sim \
+      --exclude=node_modules \
+      --exclude='*mlflow-tests/.venv' \
+      -cf - .
+  ) | tar -xf - -C "$src"
+  cp "$src/go.sum" "$workdir/root-go.sum"
+  cp "$src/api/go.sum" "$workdir/api-go.sum"
 
   echo "=== Hermetic network phase: populate isolated module cache ==="
   (
-    cd "$ROOT"
+    cd "$src"
     GOMODCACHE="$modcache" GOWORK=off GOFLAGS=-mod=readonly go mod download
   )
   (
-    cd "$ROOT/api"
+    cd "$src/api"
     GOMODCACHE="$modcache" GOWORK=off GOFLAGS=-mod=readonly go mod download
   )
-  if ! cmp -s go.sum "$workdir/root-go.sum"; then
-    restore_go_sums
+  if ! cmp -s "$src/go.sum" "$workdir/root-go.sum"; then
     die "go mod download rewrote go.sum; the lockfile is incomplete"
   fi
-  if ! cmp -s api/go.sum "$workdir/api-go.sum"; then
-    restore_go_sums
+  if ! cmp -s "$src/api/go.sum" "$workdir/api-go.sum"; then
     die "go mod download rewrote api/go.sum; the lockfile is incomplete"
   fi
   info "module cache populated at $modcache"
 
   echo "=== Hermetic offline phase: GOPROXY=off for root and api modules ==="
   (
-    cd "$ROOT"
+    cd "$src"
     GOMODCACHE="$modcache" GOWORK=off GOPROXY=off GONOPROXY=none \
       GOFLAGS=-mod=readonly CGO_ENABLED=0 GOOS=linux \
       go build -buildvcs=false -ldflags "$ldflags" -o "$workdir/manager" cmd/main.go
   )
   (
-    cd "$ROOT/api"
+    cd "$src/api"
     GOMODCACHE="$modcache" GOWORK=off GOPROXY=off GONOPROXY=none \
       GOFLAGS=-mod=readonly CGO_ENABLED=0 GOOS=linux \
       go build -buildvcs=false ./...
@@ -152,20 +170,30 @@ run_hermetic() (
   info "FIPS strictfipsruntime compilation is intentionally left to the operator image job; stock Go has no strictfipsruntime experiment"
 )
 
-smoke_operator_image() {
-  local image="$1" help_output
+smoke_operator_image() (
+  local image="$1" help_output binary_dir container_id buildinfo
   help_output="$(mktemp)"
+  binary_dir="$(mktemp -d)"
+  container_id=""
+  buildinfo="$binary_dir/buildinfo"
+  # shellcheck disable=SC2329  # invoked from the EXIT trap
+  cleanup_smoke() {
+    rm -f "$help_output"
+    if [ -n "$container_id" ]; then
+      docker rm -f "$container_id" >/dev/null 2>&1 || true
+    fi
+    rm -rf "$binary_dir"
+  }
+  trap cleanup_smoke EXIT
+
   docker run --rm --entrypoint /manager "$image" --help >"$help_output" 2>&1 || {
     cat "$help_output" >&2
-    rm -f "$help_output"
     die "operator image /manager --help failed"
   }
   grep -q -- '-metrics-bind-address' "$help_output" || {
     cat "$help_output" >&2
-    rm -f "$help_output"
     die "operator image /manager --help did not expose the manager flags"
   }
-  rm -f "$help_output"
   docker run --rm --entrypoint sh "$image" -c '
     set -euo pipefail
     test -x /manager
@@ -173,8 +201,26 @@ smoke_operator_image() {
     test -f /charts/mlflow/values.yaml
     test "$(id -u)" = "1001"
   ' || die "operator image assets/user contract failed"
-  ok "operator image smoke passed: /manager runs, charts/mlflow assets exist, user=1001"
-}
+
+  # Assert the effective build settings recorded in the packaged binary. Both
+  # FIPS strings can remain in the Dockerfile while CGO_ENABLED=0 selects the
+  # non-FIPS branch, so source text alone is not proof.
+  require_command go
+  container_id="$(docker create "$image")"
+  docker cp "$container_id:/manager" "$binary_dir/manager" >/dev/null
+  docker rm -f "$container_id" >/dev/null
+  container_id=""
+  go version -m "$binary_dir/manager" > "$buildinfo"
+  if ! grep -Eq '^[[:space:]]*build[[:space:]]+CGO_ENABLED=1[[:space:]]*$' "$buildinfo"; then
+    cat "$buildinfo" >&2
+    die "packaged /manager was not built with CGO_ENABLED=1; the non-FIPS branch was selected"
+  fi
+  if ! grep -Eq '^[[:space:]]*build[[:space:]]+GOEXPERIMENT=.*strictfipsruntime' "$buildinfo"; then
+    cat "$buildinfo" >&2
+    die "packaged /manager does not record GOEXPERIMENT=strictfipsruntime"
+  fi
+  ok "operator image smoke passed: /manager runs with CGO_ENABLED=1 strictfipsruntime, charts/mlflow assets exist, user=1001"
+)
 
 smoke_tests_image() {
   local image="$1" expected="$2"
@@ -243,6 +289,7 @@ run_operator_integration() (
   local service_monitor_name="mlflow-metrics-monitor"
   local controller_deployment="mlflow-operator-controller-manager"
   local operator_pod="" pod="" sample_image="" value="" current_context=""
+  local private_kubeconfig="" memory_limit=""
   local params_env="$ROOT/.github/test-infra/overlays/kind/params.env"
   local backup_dir
   backup_dir="$(mktemp -d)"
@@ -270,6 +317,14 @@ run_operator_integration() (
     die "kubectl current-context is '${current_context:-<unset>}', expected '$context'; deploy.py would target the wrong cluster"
   fi
 
+  # deploy.py calls kubectl without --context. Give it a private kubeconfig
+  # that contains only the selected context so a concurrent change to the
+  # shared current-context cannot redirect its writes to another cluster.
+  private_kubeconfig="$(mktemp)"
+  chmod 600 "$private_kubeconfig"
+  kubectl config view --minify --flatten --context "$context" > "$private_kubeconfig" || \
+    die "could not build a private kubeconfig for context '$context'"
+
   # shellcheck disable=SC2329  # invoked from the EXIT trap
   dump_diagnostics() {
     echo "=== Kind diagnostics (namespace $namespace, context $context) ===" >&2
@@ -286,6 +341,9 @@ run_operator_integration() (
     local status=$?
     trap - EXIT
     cp "$backup_dir/params.env" "$params_env" 2>/dev/null || true
+    if [ -n "$private_kubeconfig" ]; then
+      rm -f "$private_kubeconfig"
+    fi
     rm -f "$ROOT/.github/test-infra/overlays/kind/tls.crt" "$ROOT/.github/test-infra/overlays/kind/tls.key"
     rm -rf "$backup_dir"
     if [ "$status" -ne 0 ]; then
@@ -307,8 +365,10 @@ run_operator_integration() (
     crd/servicemonitors.monitoring.coreos.com \
     crd/httproutes.gateway.networking.k8s.io
 
-  # Kind has no default StorageClass. A static PV lets the repo's minimal sample
-  # exercise its PVC path without adding a dynamic provisioner.
+  # Kind normally ships a default `standard` StorageClass backed by
+  # rancher.io/local-path, which is the normal PVC provisioning path. Only when
+  # that class is absent (some older Kind releases) fall back to a static PV so
+  # the repo's minimal sample can still exercise its PVC path.
   if ! k get storageclass standard >/dev/null 2>&1; then
     k apply -f - <<'EOF'
 apiVersion: storage.k8s.io/v1
@@ -339,7 +399,7 @@ EOF
   k annotate storageclass standard storageclass.kubernetes.io/is-default-class=true --overwrite >/dev/null
 
   echo "=== Deploying the PR-built operator image with the repo deploy helper ==="
-  python3 "$ROOT/.github/actions/deploy/deploy.py" \
+  KUBECONFIG="$private_kubeconfig" python3 "$ROOT/.github/actions/deploy/deploy.py" \
     --namespace "$namespace" \
     --mlflow-image "$mlflow_image" \
     --mlflow-operator-image "$image" \
@@ -418,6 +478,19 @@ EOF
     sleep 5
   done
   k -n "$namespace" get deployment mlflow >/dev/null 2>&1 || die "MLflow deployment was not created"
+
+  # A reused Kind cluster can still report the previous run's Available=True
+  # because the MLflow condition has no observedGeneration. Wait until
+  # reconciliation has applied the patched limit before trusting readiness.
+  for _ in $(seq 1 60); do
+    memory_limit="$(k -n "$namespace" get deployment mlflow -o jsonpath='{.spec.template.spec.containers[?(@.name=="mlflow")].resources.limits.memory}' 2>/dev/null || true)"
+    if [ "$memory_limit" = "3Gi" ]; then
+      break
+    fi
+    sleep 5
+  done
+  assert_nonempty_eq "MLflow deployment memory limit" "3Gi" "$memory_limit"
+
   k -n "$namespace" rollout status deployment/mlflow --timeout=900s
   k wait --for=condition=Available mlflow/mlflow --timeout=900s
   assert_nonempty_eq "MLflow Available" "True" "$(k get mlflow mlflow -o jsonpath='{.status.conditions[?(@.type=="Available")].status}')"
@@ -453,6 +526,7 @@ PY
     die "MLflow chart ServiceMonitor $service_monitor_name was not created"
   assert_nonempty_eq "MLflow ServiceMonitor scheme" "https" "$(k -n "$namespace" get servicemonitor "$service_monitor_name" -o jsonpath='{.spec.endpoints[0].scheme}')"
   assert_nonempty_eq "MLflow ServiceMonitor port" "https" "$(k -n "$namespace" get servicemonitor "$service_monitor_name" -o jsonpath='{.spec.endpoints[0].port}')"
+  assert_nonempty_eq "MLflow ServiceMonitor path" "/metrics" "$(k -n "$namespace" get servicemonitor "$service_monitor_name" -o jsonpath='{.spec.endpoints[0].path}')"
 
   ok "MLflowOperator and MLflow are Ready; both ServiceMonitors exist with lowercase https"
 )
