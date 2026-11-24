@@ -140,9 +140,10 @@ startup. The phase then:
    `APPLICATIONS_NAMESPACE=opendatahub`.
 3. Creates `MLflowOperator/default-mlflowoperator` and waits for `Ready=True`.
 4. Applies `config/samples/mlflow_v1_mlflow_minimal.yaml`.
-5. Patches the **MLflow CR**, not its generated Deployment, to the repo e2e
-   suite's 1Gi/3Gi memory envelope. The sample's 512Mi limit is OOM-killed in
-   Kind; patching the Deployment alone is reverted by reconciliation.
+5. Patches the **MLflow CR**, not its generated Deployment, to the digest-pinned
+   configured operand image and the repo e2e suite's 1Gi/3Gi memory envelope.
+   The sample's tag-only image and 512Mi limit are not used for the runtime
+   proof; patching the Deployment alone is reverted by reconciliation.
 6. Waits until the generated Deployment's `mlflow` container actually shows the
    patched 3Gi limit, then waits for `MLflow/mlflow` to become
    `Available=True` and asserts `MLflowOperatorReady=True`.

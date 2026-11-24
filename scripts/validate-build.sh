@@ -288,8 +288,8 @@ run_operator_integration() (
   local monitor_name="mlflow-operator-controller-manager-metrics-monitor"
   local service_monitor_name="mlflow-metrics-monitor"
   local controller_deployment="mlflow-operator-controller-manager"
-  local operator_pod="" pod="" sample_image="" value="" current_context=""
-  local private_kubeconfig="" memory_limit=""
+  local operator_pod="" pod="" value="" current_context=""
+  local private_kubeconfig="" memory_limit="" patch=""
   local params_env="$ROOT/.github/test-infra/overlays/kind/params.env"
   local backup_dir
   backup_dir="$(mktemp -d)"
@@ -465,11 +465,30 @@ EOF
   k -n "$namespace" get secret mlflow-tls >/dev/null 2>&1 || die "deploy.py did not create the mlflow-tls secret"
   k apply -f "$ROOT/config/samples/mlflow_v1_mlflow_minimal.yaml"
 
-  # The sample's 512Mi limit is below MLflow's startup working set in Kind
-  # (OOMKilled). Patch the CR, not the generated Deployment, so reconciliation
-  # keeps the repo e2e suite's proven ceiling instead of resetting it.
-  k patch mlflow mlflow --type=merge -p \
-    '{"spec":{"resources":{"requests":{"cpu":"500m","memory":"1Gi"},"limits":{"cpu":"2","memory":"3Gi"}}}}'
+  # The sample hardcodes the mutable odh-stable tag and a 512Mi limit that is
+  # below MLflow's startup working set in Kind (OOMKilled). Patch the CR, not
+  # the generated Deployment, so reconciliation keeps the digest-pinned operand
+  # image and the repo e2e suite's proven 1Gi/3Gi ceiling.
+  patch="$(python3 - "$mlflow_image" <<'PY'
+import json
+import sys
+
+print(
+    json.dumps(
+        {
+            "spec": {
+                "image": {"image": sys.argv[1]},
+                "resources": {
+                    "requests": {"cpu": "500m", "memory": "1Gi"},
+                    "limits": {"cpu": "2", "memory": "3Gi"},
+                },
+            }
+        }
+    )
+)
+PY
+)"
+  k patch mlflow mlflow --type=merge -p "$patch"
 
   for _ in $(seq 1 120); do
     if k -n "$namespace" get deployment mlflow >/dev/null 2>&1; then
@@ -496,23 +515,14 @@ EOF
   assert_nonempty_eq "MLflow Available" "True" "$(k get mlflow mlflow -o jsonpath='{.status.conditions[?(@.type=="Available")].status}')"
   assert_nonempty_eq "MLflow MLflowOperatorReady" "True" "$(k get mlflow mlflow -o jsonpath='{.status.conditions[?(@.type=="MLflowOperatorReady")].status}')"
 
-  sample_image="$(python3 - "$ROOT/config/samples/mlflow_v1_mlflow_minimal.yaml" <<'PY'
-import sys
-import yaml
-
-with open(sys.argv[1], encoding="utf-8") as handle:
-    sample = yaml.safe_load(handle)
-print(sample["spec"]["image"]["image"])
-PY
-)"
-  assert_nonempty_eq "MLflow sample image matches the configured operand image" "$mlflow_image" "$sample_image"
+  assert_nonempty_eq "MLflow CR image matches the configured operand image" "$mlflow_image" "$(k get mlflow mlflow -o jsonpath='{.spec.image.image}')"
   value="$(k -n "$namespace" get deployment mlflow -o jsonpath='{.spec.template.spec.containers[0].image}')"
-  assert_nonempty_eq "MLflow deployment image" "$sample_image" "$value"
+  assert_nonempty_eq "MLflow deployment image" "$mlflow_image" "$value"
 
   pod="$(k -n "$namespace" get pods -l app=mlflow --sort-by=.metadata.creationTimestamp -o custom-columns=NAME:.metadata.name --no-headers | awk 'NF {name=$1} END {print name}')"
   [ -n "$pod" ] || die "no MLflow pod matched app=mlflow"
   assert_nonempty_eq "MLflow pod Ready" "True" "$(k -n "$namespace" get pod "$pod" -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}')"
-  assert_nonempty_eq "MLflow pod image" "$sample_image" "$(k -n "$namespace" get pod "$pod" -o jsonpath='{.status.containerStatuses[0].image}')"
+  assert_nonempty_eq "MLflow pod image" "$mlflow_image" "$(k -n "$namespace" get pod "$pod" -o jsonpath='{.spec.containers[0].image}')"
   assert_nonempty_eq "MLflow pod restartCount" "0" "$(k -n "$namespace" get pod "$pod" -o jsonpath='{.status.containerStatuses[0].restartCount}')"
 
   echo "=== Asserting the MLflow chart ServiceMonitor ==="
