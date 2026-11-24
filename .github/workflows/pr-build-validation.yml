@@ -1,0 +1,480 @@
+name: PR Build Validation
+
+# Simulates the two Konflux PR builds for this repository:
+#   .tekton/mlflow-operator-pull-request.yaml
+#   .tekton/mlflow-tests-pull-request.yaml
+#
+# Skip with "[skip konflux-sim]" in the PR title or the "skip-konflux-sim" label.
+# The summary job is the only check that needs to be required in branch protection.
+
+on:
+  pull_request:
+    branches:
+      - main
+    types: [opened, synchronize, reopened, edited, labeled, unlabeled]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pr-build-validation-${{ github.event.pull_request.number || github.run_id }}
+  # Metadata edits must re-evaluate the skip decision, but must not cancel a
+  # running build. Only a new commit supersedes an in-flight validation.
+  cancel-in-progress: ${{ github.event.action == 'synchronize' }}
+
+env:
+  SIM_PYYAML_VERSION: '6.0.3'
+  SIM_KUBERNETES_PY_VERSION: '33.1.0'
+  SIM_KUSTOMIZE_VERSION: 'v5.7.1'
+  # Pinned by digest so a retagged upstream node image cannot change the cluster
+  # this validation runs against (CWE-829).
+  SIM_KIND_NODE_IMAGE: 'kindest/node:v1.33.7@sha256:d26ef333bdb2cbe9862a0f7c3803ecc7b4303d8cea8e814b481b09949d353040'
+  NAMESPACE: opendatahub
+  MLFLOW_IMAGE: quay.io/opendatahub/mlflow:odh-stable
+
+jobs:
+  check-skip:
+    name: Check Skip Condition
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      should-skip: ${{ steps.check.outputs.skip }}
+      reason: ${{ steps.check.outputs.reason }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Evaluate skip condition
+        id: check
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          set -euo pipefail
+          RELEVANT='^(Dockerfile|\.dockerignore|Makefile|go\.mod|go\.sum|api/|cmd/|internal/|charts/|config/|scripts/|mlflow-tests/|test/crd/|test/e2e/|\.tekton/|\.github/actions/deploy/|\.github/test-infra/|\.github/workflows/|AGENTS\.md)'
+
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+            echo "reason=manual dispatch" >> "$GITHUB_OUTPUT"
+            echo "✅ Manual dispatch: validation will run"
+          elif [[ "$PR_TITLE" == *"[skip konflux-sim]"* ]]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "reason=PR title contains [skip konflux-sim]" >> "$GITHUB_OUTPUT"
+            echo "ℹ️  Validation skipped: PR title contains [skip konflux-sim]"
+          elif [[ ",${PR_LABELS}," == *",skip-konflux-sim,"* ]]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "reason=skip-konflux-sim label present" >> "$GITHUB_OUTPUT"
+            echo "ℹ️  Validation skipped: skip-konflux-sim label present"
+          else
+            # Capture first: grep -q closes the pipe early and pipefail would
+            # turn that SIGPIPE into a false "no relevant changes" result.
+            merge_base="$(git merge-base "origin/${BASE_REF}" HEAD)" || exit 1
+            changed_files="$(git diff --no-renames --name-only "$merge_base" HEAD)" || exit 1
+            if grep -Eq "$RELEVANT" <<< "$changed_files"; then
+              echo "skip=false" >> "$GITHUB_OUTPUT"
+              echo "reason=relevant changes detected" >> "$GITHUB_OUTPUT"
+              echo "✅ Validation will run"
+            else
+              echo "skip=true" >> "$GITHUB_OUTPUT"
+              echo "reason=no Konflux-relevant files changed" >> "$GITHUB_OUTPUT"
+              echo "ℹ️  Validation out of scope: no Konflux-relevant files changed"
+            fi
+          fi
+
+  resolve-targets:
+    name: Resolve Konflux Targets
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    needs: check-skip
+    if: needs.check-skip.result == 'success' && needs.check-skip.outputs.should-skip != 'true'
+    outputs:
+      operator-image: ${{ steps.targets.outputs.operator-image }}
+      operator-dockerfile: ${{ steps.targets.outputs.operator-dockerfile }}
+      operator-context: ${{ steps.targets.outputs.operator-context }}
+      operator-hermetic: ${{ steps.targets.outputs.operator-hermetic }}
+      operator-platforms: ${{ steps.targets.outputs.operator-platforms }}
+      tests-image: ${{ steps.targets.outputs.tests-image }}
+      tests-dockerfile: ${{ steps.targets.outputs.tests-dockerfile }}
+      tests-context: ${{ steps.targets.outputs.tests-context }}
+      tests-hermetic: ${{ steps.targets.outputs.tests-hermetic }}
+      tests-platforms: ${{ steps.targets.outputs.tests-platforms }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install static parser dependency
+        run: |
+          set -euo pipefail
+          python3 -m venv "$RUNNER_TEMP/sim-venv"
+          "$RUNNER_TEMP/sim-venv/bin/pip" install --disable-pip-version-check \
+            "pyyaml==${SIM_PYYAML_VERSION}"
+          echo "$RUNNER_TEMP/sim-venv/bin" >> "$GITHUB_PATH"
+
+      - name: Resolve Tekton inputs
+        id: targets
+        run: |
+          set -euo pipefail
+          targets="$(python3 scripts/validate_tekton_contracts.py targets)"
+          printf '%s\n' "$targets"
+          for role in operator tests; do
+            for field in image dockerfile context hermetic platforms; do
+              value="$(jq -r --arg role "$role" --arg field "$field" '.[$role][$field] | if type == "array" then join(",") else . end' <<< "$targets")"
+              echo "${role}-${field}=${value}" >> "$GITHUB_OUTPUT"
+            done
+          done
+
+  static-contracts:
+    name: Static Build Contracts
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    needs: check-skip
+    if: needs.check-skip.result == 'success' && needs.check-skip.outputs.should-skip != 'true'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install static parser dependency
+        run: |
+          set -euo pipefail
+          python3 -m venv "$RUNNER_TEMP/sim-venv"
+          "$RUNNER_TEMP/sim-venv/bin/pip" install --disable-pip-version-check \
+            "pyyaml==${SIM_PYYAML_VERSION}"
+          echo "$RUNNER_TEMP/sim-venv/bin" >> "$GITHUB_PATH"
+
+      - name: Validate build contracts
+        run: |
+          set -euo pipefail
+          ./scripts/validate-build.sh static
+
+  go-hermetic-preflight:
+    name: Hermetic Build Preflight
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: read
+    needs: check-skip
+    if: needs.check-skip.result == 'success' && needs.check-skip.outputs.should-skip != 'true'
+    env:
+      GOTOOLCHAIN: local
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install static parser dependency
+        run: |
+          set -euo pipefail
+          python3 -m venv "$RUNNER_TEMP/sim-venv"
+          "$RUNNER_TEMP/sim-venv/bin/pip" install --disable-pip-version-check \
+            "pyyaml==${SIM_PYYAML_VERSION}"
+          echo "$RUNNER_TEMP/sim-venv/bin" >> "$GITHUB_PATH"
+
+      - name: Resolve the builder Go version
+        id: go-version
+        run: |
+          set -euo pipefail
+          echo "version=$(python3 scripts/validate_tekton_contracts.py go-version)" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: ${{ steps.go-version.outputs.version }}
+          cache: false
+
+      - name: Prove root and api modules build with GOPROXY=off
+        run: |
+          set -euo pipefail
+          ./scripts/validate-build.sh hermetic
+
+  operator-image:
+    name: Build and Validate Operator Image
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    needs:
+      - check-skip
+      - resolve-targets
+    if: needs.check-skip.result == 'success' && needs.check-skip.outputs.should-skip != 'true'
+    env:
+      OPERATOR_IMAGE: ${{ needs.resolve-targets.outputs.operator-image }}
+      SIM_TARGET_IMAGE: ${{ needs.resolve-targets.outputs.operator-image }}
+      SIM_TARGET_DOCKERFILE: ${{ needs.resolve-targets.outputs.operator-dockerfile }}
+      SIM_TARGET_CONTEXT: ${{ needs.resolve-targets.outputs.operator-context }}
+      SIM_TARGET_HERMETIC: ${{ needs.resolve-targets.outputs.operator-hermetic }}
+      SIM_TARGET_PLATFORMS: ${{ needs.resolve-targets.outputs.operator-platforms }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Free disk space
+        run: |
+          set -euo pipefail
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android /opt/hostedtoolcache/CodeQL || true
+          docker system prune -af || true
+
+      - name: Install static parser dependency
+        run: |
+          set -euo pipefail
+          python3 -m venv "$RUNNER_TEMP/sim-venv"
+          "$RUNNER_TEMP/sim-venv/bin/pip" install --disable-pip-version-check \
+            "pyyaml==${SIM_PYYAML_VERSION}"
+          echo "$RUNNER_TEMP/sim-venv/bin" >> "$GITHUB_PATH"
+
+      - name: Build and smoke-test the operator image
+        run: |
+          set -euo pipefail
+          ./scripts/validate-build.sh image operator
+
+      - name: Save the operator image
+        run: |
+          set -euo pipefail
+          docker save "$OPERATOR_IMAGE" | gzip > /tmp/operator-image.tar.gz
+          ls -lh /tmp/operator-image.tar.gz
+
+      - name: Upload the operator image
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: operator-image
+          path: /tmp/operator-image.tar.gz
+          retention-days: 1
+          if-no-files-found: error
+
+  mlflow-tests-image:
+    name: Build and Validate MLflow Tests Image
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    permissions:
+      contents: read
+    needs:
+      - check-skip
+      - resolve-targets
+    if: needs.check-skip.result == 'success' && needs.check-skip.outputs.should-skip != 'true'
+    env:
+      MLFLOW_TESTS_IMAGE: ${{ needs.resolve-targets.outputs.tests-image }}
+      SIM_TARGET_IMAGE: ${{ needs.resolve-targets.outputs.tests-image }}
+      SIM_TARGET_DOCKERFILE: ${{ needs.resolve-targets.outputs.tests-dockerfile }}
+      SIM_TARGET_CONTEXT: ${{ needs.resolve-targets.outputs.tests-context }}
+      SIM_TARGET_HERMETIC: ${{ needs.resolve-targets.outputs.tests-hermetic }}
+      SIM_TARGET_PLATFORMS: ${{ needs.resolve-targets.outputs.tests-platforms }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Free disk space
+        run: |
+          set -euo pipefail
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android /opt/hostedtoolcache/CodeQL || true
+          docker system prune -af || true
+
+      - name: Install static parser dependency
+        run: |
+          set -euo pipefail
+          python3 -m venv "$RUNNER_TEMP/sim-venv"
+          "$RUNNER_TEMP/sim-venv/bin/pip" install --disable-pip-version-check \
+            "pyyaml==${SIM_PYYAML_VERSION}"
+          echo "$RUNNER_TEMP/sim-venv/bin" >> "$GITHUB_PATH"
+
+      - name: Build and smoke-test the tests image
+        run: |
+          set -euo pipefail
+          ./scripts/validate-build.sh image tests
+
+      - name: Save the tests image
+        run: |
+          set -euo pipefail
+          docker save "$MLFLOW_TESTS_IMAGE" | gzip > /tmp/mlflow-tests-image.tar.gz
+          ls -lh /tmp/mlflow-tests-image.tar.gz
+
+      - name: Upload the tests image
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: mlflow-tests-image
+          path: /tmp/mlflow-tests-image.tar.gz
+          retention-days: 1
+          if-no-files-found: error
+
+  operator-integration-kind:
+    name: Operator Integration (Kind)
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    permissions:
+      contents: read
+      actions: read
+    needs:
+      - check-skip
+      - resolve-targets
+      - operator-image
+    if: needs.check-skip.result == 'success' && needs.check-skip.outputs.should-skip != 'true'
+    env:
+      OPERATOR_IMAGE: ${{ needs.resolve-targets.outputs.operator-image }}
+      KIND_CLUSTER_NAME: mlflow-pr-${{ github.run_id }}
+      MLFLOW_IMAGE: quay.io/opendatahub/mlflow:odh-stable
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Download the operator image
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: operator-image
+          path: /tmp
+
+      - name: Load the operator image
+        run: |
+          set -euo pipefail
+          docker load < /tmp/operator-image.tar.gz
+          docker image inspect "$OPERATOR_IMAGE" >/dev/null
+
+      - name: Create Kind cluster
+        uses: helm/kind-action@ea822c7bf1874f08e5a491df991c228edffc3376 # v1.15.2
+        with:
+          version: v0.29.0
+          cluster_name: ${{ env.KIND_CLUSTER_NAME }}
+          kubectl_version: v1.33.7
+          node_image: ${{ env.SIM_KIND_NODE_IMAGE }}
+          wait: 120s
+
+      - name: Set up Go for kustomize
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.26'
+          cache: false
+
+      - name: Install the pinned kustomize used by the Makefile
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/bin"
+          GOBIN="$RUNNER_TEMP/bin" go install "sigs.k8s.io/kustomize/kustomize/v5@${SIM_KUSTOMIZE_VERSION}"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+
+      - name: Install deploy.py dependencies
+        run: |
+          set -euo pipefail
+          python3 -m venv "$RUNNER_TEMP/deploy-venv"
+          "$RUNNER_TEMP/deploy-venv/bin/pip" install --disable-pip-version-check \
+            "pyyaml==${SIM_PYYAML_VERSION}" "kubernetes==${SIM_KUBERNETES_PY_VERSION}"
+          echo "$RUNNER_TEMP/deploy-venv/bin" >> "$GITHUB_PATH"
+          if ! command -v envsubst >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y gettext-base
+          fi
+
+      - name: Load the operator image into Kind
+        run: |
+          set -euo pipefail
+          kind load docker-image "$OPERATOR_IMAGE" --name "$KIND_CLUSTER_NAME"
+
+      - name: Validate operator integration
+        run: |
+          set -euo pipefail
+          ./scripts/validate-build.sh operator
+
+      - name: Delete Kind cluster
+        if: always()
+        run: |
+          set -euo pipefail
+          kind delete cluster --name "$KIND_CLUSTER_NAME" || true
+
+  summary:
+    name: Build Validation Summary
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    needs:
+      - check-skip
+      - resolve-targets
+      - static-contracts
+      - go-hermetic-preflight
+      - operator-image
+      - mlflow-tests-image
+      - operator-integration-kind
+    if: always()
+    steps:
+      - name: Check results
+        env:
+          CHECK_SKIP: ${{ needs.check-skip.result }}
+          SKIP: ${{ needs.check-skip.outputs.should-skip }}
+          REASON: ${{ needs.check-skip.outputs.reason }}
+          RESOLVE: ${{ needs.resolve-targets.result }}
+          STATIC: ${{ needs.static-contracts.result }}
+          HERMETIC: ${{ needs.go-hermetic-preflight.result }}
+          OPERATOR_IMAGE: ${{ needs.operator-image.result }}
+          TESTS_IMAGE: ${{ needs.mlflow-tests-image.result }}
+          OPERATOR_KIND: ${{ needs.operator-integration-kind.result }}
+        run: |
+          set -euo pipefail
+          echo "## Konflux Build Simulation Results"
+          echo ""
+
+          if [ "$CHECK_SKIP" != "success" ]; then
+            echo "❌ Skip evaluation failed (${CHECK_SKIP:-no result}); refusing to report success."
+            exit 1
+          fi
+
+          if [ "$SKIP" = "true" ]; then
+            failed=false
+            for result in "$RESOLVE" "$STATIC" "$HERMETIC" "$OPERATOR_IMAGE" "$TESTS_IMAGE" "$OPERATOR_KIND"; do
+              if [ "$result" != "skipped" ]; then
+                failed=true
+              fi
+            done
+            if [ "$failed" = "true" ]; then
+              echo "❌ Validation was marked skipped, but at least one job did not skip cleanly."
+              echo "Resolve=${RESOLVE} Static=${STATIC} Hermetic=${HERMETIC} OperatorImage=${OPERATOR_IMAGE} TestsImage=${TESTS_IMAGE} OperatorKind=${OPERATOR_KIND}"
+              exit 1
+            fi
+            echo "✅ Validation not required: ${REASON:-explicit skip}"
+            exit 0
+          fi
+
+          if [ "$SKIP" != "false" ]; then
+            echo "❌ Skip decision was neither true nor false ('${SKIP:-empty}'); refusing to report success."
+            exit 1
+          fi
+
+          echo "| Phase | Result |"
+          echo "|-------|--------|"
+          echo "| Konflux Targets | ${RESOLVE} |"
+          echo "| Static Contracts | ${STATIC} |"
+          echo "| Hermetic Preflight | ${HERMETIC} |"
+          echo "| Operator Image | ${OPERATOR_IMAGE} |"
+          echo "| MLflow Tests Image | ${TESTS_IMAGE} |"
+          echo "| Operator Integration (Kind) | ${OPERATOR_KIND} |"
+          echo ""
+
+          failed=false
+          for result in "$RESOLVE" "$STATIC" "$HERMETIC" "$OPERATOR_IMAGE" "$TESTS_IMAGE" "$OPERATOR_KIND"; do
+            if [ "$result" != "success" ]; then
+              failed=true
+            fi
+          done
+          if [ "$failed" = "true" ]; then
+            echo "❌ At least one validation job did not run to success. Check the job logs above."
+            exit 1
+          fi
+          echo "✅ All validations passed."
