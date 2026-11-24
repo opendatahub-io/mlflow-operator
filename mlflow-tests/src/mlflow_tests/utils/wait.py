@@ -50,6 +50,7 @@ def wait_until(
     interval: float = 1.0,
     until: Callable[[T], bool] = bool,
     retry_rules: RetryRules | None = None,
+    progress_interval: float | None = None,
 ) -> Callable[[Callable[P, T]], Callable[P, T]]:
     """Decorate a function to poll until its result satisfies a condition.
 
@@ -69,6 +70,8 @@ def wait_until(
             value of ``None`` retries every instance of that type; a predicate
             retries only when it returns true. The first matching type wins, so
             list subclass types before their base classes.
+        progress_interval: Minimum seconds between INFO logs for pending results.
+            If omitted, each pending result is logged as a warning.
 
     Returns:
         A decorator that preserves the decorated function's arguments and
@@ -84,6 +87,10 @@ def wait_until(
         raise ValueError("timeout must be finite and non-negative")
     if not math.isfinite(interval) or interval < 0:
         raise ValueError("interval must be finite and non-negative")
+    if progress_interval is not None and (
+        not math.isfinite(progress_interval) or progress_interval < 0
+    ):
+        raise ValueError("progress_interval must be finite and non-negative")
     retry_rules = _validate_retry_rules(retry_rules)
 
     def decorate(func: Callable[P, T]) -> Callable[P, T]:
@@ -91,7 +98,8 @@ def wait_until(
 
         @functools.wraps(func)
         def wrapped(*args: P.args, **kwargs: P.kwargs) -> T:
-            deadline = time.monotonic() + timeout
+            last_progress = time.monotonic()
+            deadline = last_progress + timeout
             attempt = 0
             last_value: T | None = None
             last_error: Exception | None = None
@@ -117,7 +125,8 @@ def wait_until(
                     if until(value):
                         return value
 
-                remaining = deadline - time.monotonic()
+                now = time.monotonic()
+                remaining = deadline - now
                 if remaining <= 0:
                     raise WaitTimeoutError(
                         f"Timed out waiting for {description} after {timeout}s; "
@@ -133,7 +142,7 @@ def wait_until(
                         attempt,
                         min(interval, remaining),
                     )
-                else:
+                elif progress_interval is None:
                     logger.warning(
                         "%s condition not met: %r (attempt %s); retrying in %ss",
                         description,
@@ -141,6 +150,9 @@ def wait_until(
                         attempt,
                         min(interval, remaining),
                     )
+                elif now - last_progress >= progress_interval:
+                    logger.info("Still waiting for %s", description)
+                    last_progress = now
                 time.sleep(min(interval, remaining))
 
         return wrapped

@@ -150,6 +150,11 @@ Other:
                         never executes it, and a missing command in the image
                         fails the enabled test instead of silently skipping it.
   workspaces            Comma-separated workspace namespace list (default: two random names)
+  trace_rollups_enabled Exported automatically (true) for S3-compatible suites that
+                        deploy MLflow and PostgreSQL through this harness. File/SQLite
+                        suites, reused deployments/infrastructure, and explicit external
+                        PostgreSQL hosts are excluded. A missing rollup CronJob fails the
+                        enabled smoke test instead of silently skipping it.
   upgrade_test_workspace Static workspace namespace for upgrade pytest phases. During
                         upgrade-phase runs, the harness derives workspaces and RBAC
                         setup from this namespace automatically.
@@ -1172,6 +1177,16 @@ run_suite_body() {
     echo "  Suite: storage=${STORAGE_TYPE} backend=${BACKEND_STORE} registry=${REGISTRY_STORE}"
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
+    # The smoke test inspects the harness PostgreSQL pod and requires a CronJob.
+    local rollup_smoke_enabled=false
+    if [ "$SKIP_DEPLOYMENT" != "true" ] \
+        && [ "$SKIP_INFRASTRUCTURE" != "true" ] \
+        && [[ "$BACKEND_STORE" == "postgres" || "$BACKEND_STORE" == "postgresql" ]] \
+        && [ -z "${DB_HOST:-}" ] \
+        && [[ "$STORAGE_TYPE" == "s3" || "$STORAGE_TYPE" == "externals3" ]]; then
+        rollup_smoke_enabled=true
+    fi
+
     # ── Workspace namespaces (idempotent) ────────────────────────────────────────
     for ws in $(echo "$WORKSPACE_LIST" | tr ',' ' '); do
         ws=$(echo "$ws" | xargs); [ -z "$ws" ] && continue
@@ -1214,6 +1229,7 @@ run_suite_body() {
         [ -n "${SEAWEEDFS_IMAGE:-}" ] && deploy_args+=(--seaweedfs-image "$SEAWEEDFS_IMAGE")
         [ -n "${DB_SSLMODE:-}"      ] && deploy_args+=(--postgres-sslmode "$DB_SSLMODE")
         [ -n "${TRACE_ARCHIVAL_RETENTION:-}" ] && deploy_args+=(--trace-archival-retention "$TRACE_ARCHIVAL_RETENTION")
+        [ "$rollup_smoke_enabled" = "true" ] && deploy_args+=(--trace-rollups-smoke)
         [ "${POSTGRES_TLS:-false}"  = "true" ] && deploy_args+=(--postgres-tls)
         [ "${SEAWEEDFS_TLS:-false}" = "true" ] && deploy_args+=(--seaweedfs-tls)
         [ -n "${CA_BUNDLE_PATH:-}"      ] && deploy_args+=(--ca-bundle-path       "$CA_BUNDLE_PATH")
@@ -1512,6 +1528,7 @@ run_suite_body() {
             echo "  trace analytics prepopulation phase not selected (${prepopulation_eligibility})"
         fi
     fi
+    export trace_rollups_enabled="$rollup_smoke_enabled"
 
     local results_file="${TEST_RESULTS_DIR}/xunit_report_${STORAGE_TYPE}.xml"
     echo "  Running tests (output: $results_file)..."

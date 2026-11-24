@@ -1,3 +1,5 @@
+import logging
+
 import pytest
 
 from mlflow_tests.utils.wait import WaitTimeoutError, retry, wait_until
@@ -161,6 +163,33 @@ def test_wait_until_logs_the_value_that_caused_a_retry(
 
     assert get_status() == "Running"
     assert "application readiness condition not met: 'Pending'" in caplog.text
+
+
+def test_wait_until_throttles_pending_logs_without_throttling_polls(
+    caplog: pytest.LogCaptureFixture, fake_clock: FakeClock
+) -> None:
+    caplog.set_level(logging.INFO)
+
+    @wait_until(
+        description="Job to complete",
+        timeout=40,
+        interval=2,
+        retry_rules={ConnectionError: None},
+        progress_interval=15,
+    )
+    def job_complete() -> bool:
+        if fake_clock.now == 4:
+            raise ConnectionError("connection refused")
+        return fake_clock.now == 38
+
+    assert job_complete()
+    assert fake_clock.sleep_delays == [2] * 19
+    assert [record.levelno for record in caplog.records] == [
+        logging.WARNING,
+        logging.INFO,
+        logging.INFO,
+    ]
+    assert caplog.messages[1:] == ["Still waiting for Job to complete"] * 2
 
 
 def test_wait_until_does_not_invoke_again_at_the_deadline(fake_clock: FakeClock) -> None:

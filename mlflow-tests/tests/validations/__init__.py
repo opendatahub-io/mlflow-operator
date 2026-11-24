@@ -67,6 +67,17 @@ from .trace_prepopulation_validations import (
     validate_additional_prepopulation_traces_seeded,
     validate_second_prepopulation_job,
 )
+from .trace_rollups_validations import (
+    validate_trace_rollups_ready,
+    validate_trace_rollup_experiment_created,
+    validate_trace_rollup_traces_seeded,
+    validate_additional_trace_rollup_traces_seeded,
+    validate_trace_rollup_incremental_job_completed,
+    validate_trace_rollup_job_completed,
+    validate_trace_rollup_rows,
+    validate_trace_rollup_api_metrics,
+    validate_trace_rollup_traces_readable,
+)
 from .validation_utils import (
     validate_authentication_denied,
     validate_authentication_denied_or_resource_not_found,
@@ -123,6 +134,15 @@ __all__ = [
     "validate_first_prepopulation_job",
     "validate_additional_prepopulation_traces_seeded",
     "validate_second_prepopulation_job",
+    "validate_trace_rollups_ready",
+    "validate_trace_rollup_experiment_created",
+    "validate_trace_rollup_traces_seeded",
+    "validate_additional_trace_rollup_traces_seeded",
+    "validate_trace_rollup_job_completed",
+    "validate_trace_rollup_incremental_job_completed",
+    "validate_trace_rollup_rows",
+    "validate_trace_rollup_api_metrics",
+    "validate_trace_rollup_traces_readable",
     "validate_authentication_denied",
     "validate_authentication_denied_or_resource_not_found",
     "validate_resource_retrieved_or_created",

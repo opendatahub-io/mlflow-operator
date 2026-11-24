@@ -63,6 +63,7 @@ class TestContext:
         jobs_to_delete: Map of job_name -> namespace for cleanup
         archival_state: Scratch state for the live trace-archival smoke path
         prepopulation_state: Scratch state for the live trace analytics prepopulation path
+        trace_rollups_state: Scratch state for the live SQL trace-rollup smoke path
     """
 
     workspaces: list[str] = field(default_factory=list)
@@ -108,6 +109,7 @@ class TestContext:
     jobs_to_delete: dict[str, str] = field(default_factory=dict)
     archival_state: dict[str, Any] = field(default_factory=dict)
     prepopulation_state: dict[str, Any] = field(default_factory=dict)
+    trace_rollups_state: dict[str, Any] = field(default_factory=dict)
     upgrade_state: dict[str, Any] = field(default_factory=dict)
     upgrade_observed_state: dict[str, Any] = field(default_factory=dict)
     k8_manager: Optional["K8Manager"] = None

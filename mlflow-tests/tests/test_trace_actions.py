@@ -1,6 +1,6 @@
 import errno
 from types import SimpleNamespace
-from unittest.mock import Mock, call
+from unittest.mock import ANY, MagicMock, Mock, call
 
 import pytest
 from mlflow.entities.span import NO_OP_SPAN_TRACE_ID
@@ -9,7 +9,7 @@ from mlflow.exceptions import MlflowException
 from requests import exceptions as requests_exceptions
 from urllib3.exceptions import MaxRetryError, NewConnectionError
 
-from .actions import trace_actions
+from .actions import trace_actions, trace_rollups_actions
 from .actions.trace_actions import action_log_trace, action_post_trace_v3_direct
 from .actions.trace_archival_actions import wait_for_expected_traces
 from .shared import TestContext
@@ -20,6 +20,55 @@ from .validations.trace_archival_validations import _assert_trace_payloads
 def create_experiments_and_runs() -> dict:
     """Override the integration bootstrap fixture for helper-level tests."""
     return {}
+
+
+def test_rollup_cleanup_rolls_back_if_summary_delete_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database = MagicMock()
+    error = RuntimeError("summary deletion failed")
+    query = Mock(side_effect=["t", "", "t", error])
+    database.attach_mock(query, "query")
+    monkeypatch.setattr(trace_rollups_actions, "_database_query", query)
+    context = TestContext(
+        trace_rollups_state={
+            "experiment_id": "42",
+            "database_pod": "postgres",
+            "database": "mlflow",
+            "database_connection": database,
+        }
+    )
+
+    with pytest.raises(RuntimeError, match="summary deletion failed"):
+        trace_rollups_actions.action_cleanup_trace_rollups(context)
+
+    database.assert_has_calls(
+        [
+            call.__enter__(),
+            call.query(
+                state=ANY,
+                sql="SELECT to_regclass(%s) IS NOT NULL",
+                params=(trace_rollups_actions.ROLLUP_REBUILD_QUEUE_TABLE,),
+            ),
+            call.query(
+                state=ANY,
+                sql="DELETE FROM sql_trace_rollup_rebuild_queue WHERE experiment_id = %s",
+                params=(42,),
+            ),
+            call.query(
+                state=ANY,
+                sql="SELECT to_regclass(%s) IS NOT NULL",
+                params=(trace_rollups_actions.ROLLUP_TABLE,),
+            ),
+            call.query(
+                state=ANY,
+                sql="DELETE FROM sql_trace_metric_daily_rollups WHERE experiment_id = %s",
+                params=(42,),
+            ),
+            call.__exit__(RuntimeError, error, ANY),
+            call.close(),
+        ]
+    )
 
 
 def _connection_error_from_socket_error(socket_error: OSError) -> requests_exceptions.ConnectionError:

@@ -784,6 +784,8 @@ Trace analytics prepopulation has opt-in live coverage through the
 They cover backfill, rerun idempotency, and the final database upgrade against
 a CI predecessor fixture; see the testing guide for setup and coverage limits.
 
+`TestTraceRollups` runs on S3-compatible suites where the harness deploys MLflow and PostgreSQL. It creates two one-off Jobs from the operator's rollup CronJob template with a non-firing CI schedule. It checks that both Jobs materialize historical trace summaries, that the public metrics API reads those summaries, and that the source traces remain readable. Ginkgo e2e covers the CronJob's resource lifecycle separately.
+
 For a repo-level map of Red Hat OpenShift AI MLflow fork validation, including
 Jenkins shift-left smoke and upgrade coverage, see the
 [RHOAI MLflow Fork Testing Guide](docs/rhoai-mlflow-testing.md).
