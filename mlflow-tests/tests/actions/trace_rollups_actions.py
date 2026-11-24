@@ -29,13 +29,17 @@ from mlflow.utils.workspace_utils import WORKSPACE_HEADER_NAME
 from psycopg2 import sql as pg_sql
 from urllib3.exceptions import HTTPError
 
-from mlflow_tests.utils.client import ClientManager
+from mlflow_tests.utils.client import ClientManager, read_kubernetes_response
 from mlflow_tests.utils.wait import wait_until
 
 from ..constants.config import Config
 from ..http_utils import get_mlflow_base_uri, get_requests_verify_value
 from ..shared import TestContext
-from .job_utils import job_from_cronjob, wait_for_job_complete
+from .job_utils import (
+    JOB_API_REQUEST_TIMEOUT_SECONDS,
+    job_from_cronjob,
+    wait_for_job_complete,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -50,7 +54,6 @@ MLFLOW_API_PLURAL = "mlflows"
 POSTGRES_POD_LABEL = "app=mlflow-postgres"
 DATABASE_POD_TIMEOUT_SECONDS = 120
 JOB_DELETE_TIMEOUT_SECONDS = 180
-JOB_API_REQUEST_TIMEOUT_SECONDS = 10
 SQL_EXEC_TIMEOUT_SECONDS = 60
 POSTGRES_PORT = 5432
 TRACE_VISIBILITY_TIMEOUT_SECONDS = 60
@@ -318,7 +321,10 @@ def _database_connection(
     core_api: client.CoreV1Api,
     state: dict[str, Any],
 ) -> psycopg2.extensions.connection:
-    connection_parameters = psycopg2.extensions.parse_dsn(backend_uri)
+    try:
+        connection_parameters = psycopg2.extensions.parse_dsn(backend_uri)
+    except (psycopg2.Error, ValueError):
+        raise RuntimeError("Could not parse the harness PostgreSQL URI") from None
     connection_parameters.update(
         {
             # Keep the URI hostname for TLS name verification while routing the
@@ -334,10 +340,10 @@ def _database_connection(
         connection_parameters["sslrootcert"] = _postgres_ca_file(core_api, state)
     try:
         connection = psycopg2.connect(**connection_parameters)
-    except psycopg2.Error as exc:
+    except (psycopg2.Error, ValueError):
         raise RuntimeError(
             "Could not connect to the harness PostgreSQL database"
-        ) from exc
+        ) from None
     connection.autocommit = True
     try:
         with connection.cursor() as cursor:
@@ -345,11 +351,11 @@ def _database_connection(
                 "SELECT set_config('statement_timeout', %s, false)",
                 (f"{SQL_EXEC_TIMEOUT_SECONDS}s",),
             )
-    except psycopg2.Error as exc:
+    except psycopg2.Error:
         connection.close()
         raise RuntimeError(
             "Could not configure the harness PostgreSQL query timeout"
-        ) from exc
+        ) from None
     return connection
 
 
@@ -366,8 +372,8 @@ def _database_query(
             if cursor.description is None:
                 return ""
             rows = cursor.fetchall()
-    except psycopg2.Error as exc:
-        raise RuntimeError("Trace-rollup database query failed") from exc
+    except psycopg2.Error:
+        raise RuntimeError("Trace-rollup database query failed") from None
 
     def format_value(value: Any) -> str:
         if isinstance(value, bool):
@@ -390,7 +396,10 @@ def _mlflow_cr(custom_api: client.CustomObjectsApi) -> dict[str, Any]:
 
 def _rollup_job_is_deleted(batch_api: client.BatchV1Api, name: str) -> bool:
     try:
-        batch_api.read_namespaced_job(
+        read_kubernetes_response(
+            batch_api.api_client,
+            batch_api.read_namespaced_job,
+            "V1Job",
             name=name,
             namespace=Config.MLFLOW_NAMESPACE,
             _request_timeout=JOB_API_REQUEST_TIMEOUT_SECONDS,
@@ -398,7 +407,7 @@ def _rollup_job_is_deleted(batch_api: client.BatchV1Api, name: str) -> bool:
     except ApiException as exc:
         if exc.status == 404:
             return True
-        raise
+        raise ApiException(status=exc.status) from None
     return False
 
 
@@ -466,6 +475,31 @@ def _trace_metric_values(
     return data_points[0]["values"]
 
 
+def _read_backend_uri(core_api: client.CoreV1Api, namespace: str) -> str:
+    try:
+        secret = read_kubernetes_response(
+            core_api.api_client,
+            core_api.read_namespaced_secret,
+            "V1Secret",
+            name=DB_CREDENTIALS_SECRET_NAME,
+            namespace=namespace,
+            _request_timeout=JOB_API_REQUEST_TIMEOUT_SECONDS,
+        )
+    except (ApiException, HTTPError, ValueError):
+        raise RuntimeError("Could not read the harness PostgreSQL Secret") from None
+
+    encoded_uri = (secret.data or {}).get(BACKEND_STORE_URI_SECRET_KEY)
+    if not encoded_uri:
+        pytest.fail(
+            f"Harness Secret {DB_CREDENTIALS_SECRET_NAME!r} has no "
+            f"{BACKEND_STORE_URI_SECRET_KEY!r} key"
+        )
+    try:
+        return base64.b64decode(encoded_uri, validate=True).decode("utf-8")
+    except ValueError:
+        raise RuntimeError("Harness PostgreSQL Secret has an invalid encoded URI") from None
+
+
 def action_prepare_trace_rollups(test_context: TestContext) -> None:
     """Capture the harness backend and verify tracking and CronJob wiring."""
     ClientManager.load_k8s_config()
@@ -481,17 +515,11 @@ def action_prepare_trace_rollups(test_context: TestContext) -> None:
     }
     test_context.trace_rollups_state = state
 
-    secret = core_api.read_namespaced_secret(
-        name=DB_CREDENTIALS_SECRET_NAME, namespace=namespace
-    )
-    encoded_uri = (secret.data or {}).get(BACKEND_STORE_URI_SECRET_KEY)
-    if not encoded_uri:
-        pytest.fail(
-            f"Harness Secret {DB_CREDENTIALS_SECRET_NAME!r} has no "
-            f"{BACKEND_STORE_URI_SECRET_KEY!r} key"
-        )
-    backend_uri = base64.b64decode(encoded_uri).decode("utf-8")
-    parsed_uri = urlparse(backend_uri)
+    backend_uri = _read_backend_uri(core_api, namespace)
+    try:
+        parsed_uri = urlparse(backend_uri)
+    except ValueError:
+        raise RuntimeError("Could not parse the harness PostgreSQL URI") from None
     database = unquote(parsed_uri.path.lstrip("/"))
     if parsed_uri.scheme not in {"postgres", "postgresql"} or not database:
         pytest.fail("Harness backend Secret does not contain a PostgreSQL URI with a database")
@@ -745,7 +773,6 @@ def action_run_trace_rollup_job(test_context: TestContext) -> None:
         state["core_api"],
         job_name,
         namespace,
-        container_name=ROLLUPS_CONTAINER_NAME,
         job_description="SQL trace rollup",
     )
     state["rollup_passes"] += 1
@@ -921,8 +948,8 @@ def _probe_rollup_values(
                         f"Trace-rollup probe rows were not restored on {day}: "
                         f"{restored_rows} != {original_rows}"
                     )
-    except psycopg2.Error as exc:
-        raise RuntimeError("Trace-rollup probe query failed") from exc
+    except psycopg2.Error:
+        raise RuntimeError("Trace-rollup probe query failed") from None
 
 
 def action_query_trace_rollup_metrics(test_context: TestContext) -> None:

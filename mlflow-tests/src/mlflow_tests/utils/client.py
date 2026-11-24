@@ -1,18 +1,33 @@
 """Client creation utilities for Kubernetes and MLflow."""
 
-import os
 import logging
+import os
 import threading
-from typing import Optional
+from collections.abc import Callable
+from typing import Any, Optional
 
 from kubernetes import client, config
-from kubernetes.client import Configuration
 from mlflow.tracking import MlflowClient
 
 logger = logging.getLogger(__name__)
 
 # Module-level lock to synchronize MLflow client creation
 _mlflow_client_lock = threading.Lock()
+
+
+def read_kubernetes_response(
+    api_client: client.ApiClient,
+    read: Callable[..., Any],
+    response_type: str,
+    **kwargs: Any,
+) -> Any:
+    """Deserialize a Kubernetes response without logging its body at DEBUG."""
+    response = read(_preload_content=False, **kwargs)
+    try:
+        return api_client.deserialize(response, response_type)
+    finally:
+        response.close()
+        response.release_conn()
 
 
 class ClientManager:

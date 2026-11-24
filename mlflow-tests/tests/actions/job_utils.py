@@ -7,10 +7,14 @@ import logging
 import pytest
 from kubernetes import client
 from kubernetes.client.rest import ApiException
+from urllib3.exceptions import HTTPError
 
+from mlflow_tests.utils.client import read_kubernetes_response
 from mlflow_tests.utils.wait import WaitTimeoutError, wait_until
 
 logger = logging.getLogger(__name__)
+JOB_API_REQUEST_TIMEOUT_SECONDS = 10
+JOB_DIAGNOSTICS_REQUEST_TIMEOUT_SECONDS = 5
 JOB_WAIT_TIMEOUT_SECONDS = 180
 JOB_WAIT_POLL_INTERVAL_SECONDS = 2
 JOB_WAIT_PROGRESS_INTERVAL_SECONDS = 15
@@ -52,18 +56,20 @@ def job_pod_diagnostics(
     core_api: client.CoreV1Api,
     namespace: str,
     job_name: str,
-    *,
-    container_name: str,
-    tail_lines: int | None = 200,
 ) -> str:
-    """Return pod status, events, and logs for a Job."""
+    """Collect pod phases, exit codes, and event reasons for a Job."""
     lines = [f"Job {job_name} diagnostics in namespace {namespace}:"]
     try:
-        pods = core_api.list_namespaced_pod(
-            namespace, label_selector=f"job-name={job_name}"
+        pods = read_kubernetes_response(
+            core_api.api_client,
+            core_api.list_namespaced_pod,
+            "V1PodList",
+            namespace=namespace,
+            label_selector=f"job-name={job_name}",
+            _request_timeout=JOB_DIAGNOSTICS_REQUEST_TIMEOUT_SECONDS,
         )
-    except ApiException as exc:
-        return f"{lines[0]} failed to list pods: {exc}"
+    except Exception as exc:
+        return f"{lines[0]} failed to list pods ({type(exc).__name__})"
 
     if not pods.items:
         lines.append("No pods found for job-name selector.")
@@ -76,37 +82,28 @@ def job_pod_diagnostics(
             terminated = status.state.terminated if status.state else None
             if waiting is not None:
                 lines.append(
-                    f"  container {status.name} waiting reason={waiting.reason} "
-                    f"message={waiting.message}"
+                    f"  container {status.name} waiting reason={waiting.reason}"
                 )
             if terminated is not None:
                 lines.append(
                     f"  container {status.name} terminated reason={terminated.reason} "
-                    f"exit_code={terminated.exit_code} message={terminated.message}"
+                    f"exit_code={terminated.exit_code}"
                 )
         try:
-            events = core_api.list_namespaced_event(
-                namespace,
+            events = read_kubernetes_response(
+                core_api.api_client,
+                core_api.list_namespaced_event,
+                "CoreV1EventList",
+                namespace=namespace,
                 field_selector=f"involvedObject.name={pod.metadata.name}",
+                _request_timeout=JOB_DIAGNOSTICS_REQUEST_TIMEOUT_SECONDS,
             )
             for event in events.items:
                 lines.append(
-                    f"  event type={event.type} reason={event.reason} message={event.message}"
+                    f"  event type={event.type} reason={event.reason}"
                 )
         except Exception as exc:
-            lines.append(f"  failed to list events: {exc}")
-        try:
-            log_options: dict[str, str | int] = {"container": container_name}
-            if tail_lines is not None:
-                log_options["tail_lines"] = tail_lines
-            logs = core_api.read_namespaced_pod_log(
-                name=pod.metadata.name,
-                namespace=namespace,
-                **log_options,
-            )
-            lines.append(f"  logs:\n{logs}")
-        except ApiException as exc:
-            lines.append(f"  logs unavailable: {exc.reason}")
+            lines.append(f"  failed to list events ({type(exc).__name__})")
     return "\n".join(lines)
 
 
@@ -116,7 +113,6 @@ def wait_for_job_complete(
     job_name: str,
     namespace: str,
     *,
-    container_name: str,
     job_description: str,
 ) -> bool:
     """Wait for completion and include pod diagnostics on failure or timeout."""
@@ -126,19 +122,26 @@ def wait_for_job_complete(
         timeout=JOB_WAIT_TIMEOUT_SECONDS,
         interval=JOB_WAIT_POLL_INTERVAL_SECONDS,
         until=lambda complete: complete,
-        retry_rules={ApiException: lambda exc: exc.status == 404},
+        retry_rules={ApiException: lambda exc: exc.status == 404, HTTPError: None},
         progress_interval=JOB_WAIT_PROGRESS_INTERVAL_SECONDS,
     )
     def wait_for_completion() -> bool:
-        job = batch_api.read_namespaced_job_status(name=job_name, namespace=namespace)
+        try:
+            job = read_kubernetes_response(
+                batch_api.api_client,
+                batch_api.read_namespaced_job_status,
+                "V1Job",
+                name=job_name,
+                namespace=namespace,
+                _request_timeout=JOB_API_REQUEST_TIMEOUT_SECONDS,
+            )
+        except ApiException as exc:
+            raise ApiException(status=exc.status) from None
+        except HTTPError as exc:
+            raise HTTPError(type(exc).__name__) from None
 
         if _condition_status(job, "Failed") == "True":
-            diagnostics = job_pod_diagnostics(
-                core_api,
-                namespace,
-                job_name,
-                container_name=container_name,
-            )
+            diagnostics = job_pod_diagnostics(core_api, namespace, job_name)
             pytest.fail(
                 f"{job_description} Job {job_name} Failed before completion.\n"
                 f"{diagnostics}"
@@ -151,24 +154,14 @@ def wait_for_job_complete(
         logger.info(
             "Completed %s job diagnostics:\n%s",
             job_description.lower(),
-            job_pod_diagnostics(
-                core_api,
-                namespace,
-                job_name,
-                container_name=container_name,
-            ),
+            job_pod_diagnostics(core_api, namespace, job_name),
         )
         return True
 
     try:
         return wait_for_completion()
     except WaitTimeoutError as exc:
-        diagnostics = job_pod_diagnostics(
-            core_api,
-            namespace,
-            job_name,
-            container_name=container_name,
-        )
+        diagnostics = job_pod_diagnostics(core_api, namespace, job_name)
         pytest.fail(
             f"{job_description} Job {job_name} did not Complete within "
             f"{JOB_WAIT_TIMEOUT_SECONDS}s.\n{diagnostics}\n{exc}"

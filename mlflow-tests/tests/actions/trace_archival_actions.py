@@ -43,7 +43,6 @@ from .job_utils import job_from_cronjob, wait_for_job_complete
 logger = logging.getLogger(__name__)
 
 ARCHIVAL_CRONJOB_NAME = "mlflow-trace-archival"
-ARCHIVAL_CONTAINER_NAME = "mlflow-trace-archival"
 ARCHIVAL_PREFIX = "trace-archive"
 ARCHIVAL_TRACE_COUNT = 3
 CRONJOB_WAIT_TIMEOUT_SECONDS = 120
@@ -396,7 +395,6 @@ def action_run_archival_job_from_cronjob(test_context: TestContext) -> None:
         core_api,
         job_name,
         namespace,
-        container_name=ARCHIVAL_CONTAINER_NAME,
         job_description="Trace archival",
     )
 
